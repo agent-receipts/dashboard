@@ -20,6 +20,10 @@ pre-commit:
       glob: "**/*.{go,mod,sum}"
       run: go test ./...
 
+    - name: shellcheck
+      glob: "**/*.sh"
+      run: command -v shellcheck >/dev/null 2>&1 && shellcheck {staged_files} || echo "shellcheck not installed — skipping"
+
 commit-msg:
   commands:
     conventional-commit:
