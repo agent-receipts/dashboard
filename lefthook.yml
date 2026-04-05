@@ -3,7 +3,7 @@
 # Docs: https://lefthook.dev/configuration/
 #
 # Glob patterns determine whether a job runs (based on staged files).
-# The run commands then check the entire module — not just staged files.
+# Go checks run on the entire module; shellcheck runs on staged files only.
 
 pre-commit:
   parallel: true
@@ -22,7 +22,7 @@ pre-commit:
 
     - name: shellcheck
       glob: "**/*.sh"
-      run: command -v shellcheck >/dev/null 2>&1 && shellcheck {staged_files} || echo "shellcheck not installed — skipping"
+      run: if command -v shellcheck >/dev/null 2>&1; then shellcheck {staged_files}; else echo "shellcheck not installed — skipping"; fi
 
 commit-msg:
   commands:
