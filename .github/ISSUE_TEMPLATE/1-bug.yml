@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        > **Security vulnerabilities**: If you believe you have found a security vulnerability, please do **not** report it here. See [SECURITY.md](https://github.com/agent-receipts/dashboard/blob/main/SECURITY.md) for private vulnerability reporting instructions.
+        > **Security vulnerabilities**: If you believe you have found a security vulnerability, please do **not** report it here. Report via [GitHub Security Advisories](https://github.com/agent-receipts/dashboard/security/advisories/new).
 
   - type: dropdown
     id: component
