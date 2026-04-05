@@ -16,6 +16,9 @@ EOF
 
 fail() { echo "error: $1" >&2; exit 1; }
 
+# cd to repo root so the script works from any directory
+cd "$(git rev-parse --show-toplevel)"
+
 # Preflight: ensure required tools are available
 command -v go >/dev/null 2>&1 || fail "go is not installed"
 command -v gh >/dev/null 2>&1 || fail "gh CLI is not installed — see https://cli.github.com"
@@ -26,9 +29,9 @@ gh auth status >/dev/null 2>&1 || fail "gh is not authenticated — run gh auth 
 VERSION="$1"
 TAG="v${VERSION}"
 
-# Validate version format (SemVer 2.0)
-[[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]] || \
-  fail "invalid version '$VERSION' — expected semver (e.g. 0.1.0, 1.0.0-beta.1)"
+# Validate version format (SemVer without build metadata — Go modules don't support +meta)
+[[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]] || \
+  fail "invalid version '$VERSION' — expected semver without build metadata (e.g. 0.1.0, 1.0.0-beta.1)"
 
 # Ensure we're on main and up to date
 BRANCH=$(git branch --show-current)
