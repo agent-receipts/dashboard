@@ -11,6 +11,8 @@ Open a GitHub issue for:
 - UI/UX improvements
 - Documentation gaps
 
+> **Security vulnerabilities**: please report via [GitHub Security Advisories](https://github.com/agent-receipts/dashboard/security/advisories/new), not public issues. See [SECURITY.md](SECURITY.md).
+
 ## Development setup
 
 ```bash
@@ -20,7 +22,7 @@ go build ./cmd/dashboard
 go test ./...
 ```
 
-**Requirements:** Go 1.22+ (no CGO needed — SQLite driver is pure Go).
+**Requirements:** Go 1.26+ (no CGO needed — SQLite driver is pure Go).
 
 ### Commands
 
