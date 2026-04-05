@@ -5,11 +5,11 @@ Lightweight local dashboard for viewing Agent Receipts — cryptographically sig
 ## Project layout
 
 ```
-cmd/dashboard/     # CLI entry point
-internal/server/   # HTTP server, routes, handlers
-internal/store/    # Read-only SQLite access, queries, multi-DB
-internal/verify/   # Hash linkage and chain verification
-web/static/        # Embedded HTML, htmx, CSS (no build step)
+cmd/dashboard/          # CLI entry point
+internal/server/        # HTTP server, routes, handlers
+internal/server/static/ # Embedded HTML, htmx, CSS (no build step)
+internal/store/         # Read-only SQLite access, queries, multi-DB
+internal/verify/        # Hash linkage and chain verification
 ```
 
 ## Quick reference

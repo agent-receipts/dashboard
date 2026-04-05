@@ -91,7 +91,11 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReceiptDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// Reconstruct the full ID with the "urn:" prefix if it was split by the router.
+	// Receipt IDs are always "urn:receipt:<uuid>". The {id...} wildcard
+	// captures everything after /api/receipts/, but some clients may
+	// URL-encode the colon. The JS frontend uses encodeURIComponent(id)
+	// which preserves the "urn:" prefix, so this is a safety fallback
+	// rather than the normal path.
 	if !strings.HasPrefix(id, "urn:") {
 		id = "urn:" + id
 	}

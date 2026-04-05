@@ -1,6 +1,6 @@
 # Agent Receipts Dashboard
 
-Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) SQLite databases. Single Go binary, no external dependencies at runtime.
+Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) SQLite databases. Single Go binary, no backend dependencies. The UI loads htmx and Tailwind CSS from CDNs.
 
 ## Features
 

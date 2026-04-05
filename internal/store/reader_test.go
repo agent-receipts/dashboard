@@ -1,41 +1,11 @@
 package store
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
 )
-
-// seedStore creates an in-memory SDK store and inserts test receipts.
-// Returns the SDK store (for the reader to open) and the receipts inserted.
-func seedStore(t *testing.T) (*sdkstore.Store, []receipt.AgentReceipt) {
-	t.Helper()
-	s, err := sdkstore.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open sdk store: %v", err)
-	}
-
-	receipts := []receipt.AgentReceipt{
-		makeReceipt("urn:receipt:001", "chain-1", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil),
-		makeReceipt("urn:receipt:002", "chain-1", 2, "filesystem.file.modify", receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", strPtr("sha256:abc")),
-		makeReceipt("urn:receipt:003", "chain-1", 3, "communication.email.send", receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:02:00Z", strPtr("sha256:def")),
-		makeReceipt("urn:receipt:004", "chain-2", 1, "filesystem.file.delete", receipt.RiskHigh, receipt.StatusFailure, "2026-04-01T11:00:00Z", nil),
-		makeReceipt("urn:receipt:005", "chain-2", 2, "financial.payment.initiate", receipt.RiskCritical, receipt.StatusPending, "2026-04-01T11:01:00Z", strPtr("sha256:ghi")),
-	}
-
-	for _, r := range receipts {
-		hash, err := receipt.HashReceipt(r)
-		if err != nil {
-			t.Fatalf("hash receipt: %v", err)
-		}
-		if err := s.Insert(r, hash); err != nil {
-			t.Fatalf("insert receipt: %v", err)
-		}
-	}
-	return s, receipts
-}
 
 func makeReceipt(id, chainID string, seq int, actionType string, risk receipt.RiskLevel, status receipt.OutcomeStatus, ts string, prevHash *string) receipt.AgentReceipt {
 	return receipt.AgentReceipt{
@@ -399,14 +369,4 @@ func seedFileDB(t *testing.T) string {
 	}
 	s.Close()
 	return dbPath
-}
-
-// receiptJSON is a helper to marshal a receipt for verification.
-func receiptJSON(t *testing.T, r receipt.AgentReceipt) string {
-	t.Helper()
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return string(b)
 }

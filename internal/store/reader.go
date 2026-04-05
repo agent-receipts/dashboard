@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -73,7 +74,11 @@ func OpenReadOnly(dbPath string) (*Reader, error) {
 		return nil, fmt.Errorf("database not found: %w", err)
 	}
 
-	dsn := "file:" + dbPath + "?mode=ro"
+	dsn := (&url.URL{
+		Scheme:   "file",
+		Opaque:   url.PathEscape(dbPath),
+		RawQuery: "mode=ro",
+	}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)

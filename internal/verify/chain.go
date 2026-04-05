@@ -20,7 +20,7 @@ type ChainLinkResult struct {
 	Valid    bool               `json:"valid"`
 	Length   int                `json:"length"`
 	Receipts []LinkVerification `json:"receipts"`
-	BrokenAt int               `json:"broken_at"` // -1 if valid
+	BrokenAt int                `json:"broken_at"` // -1 if valid
 }
 
 // VerifyChainLinks verifies the hash linkage and sequence ordering of a chain.

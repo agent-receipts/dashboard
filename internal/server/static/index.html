@@ -211,7 +211,7 @@
       const maxCount = Math.max(...(stats.by_risk || []).map(r => r.count), 1);
       document.getElementById('risk-chart').innerHTML = (stats.by_risk || []).map(r => `
         <div class="flex items-center gap-3">
-          <span class="w-16 text-sm badge badge-${r.label}">${r.label}</span>
+          <span class="w-16 text-sm badge ${riskClass(r.label)}">${escapeHtml(r.label)}</span>
           <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
             <div class="h-full rounded-full bg-opacity-60 ${riskBarColor(r.label)}" style="width: ${(r.count / maxCount * 100)}%"></div>
           </div>
@@ -223,7 +223,7 @@
       const maxStatus = Math.max(...(stats.by_status || []).map(r => r.count), 1);
       document.getElementById('status-chart').innerHTML = (stats.by_status || []).map(r => `
         <div class="flex items-center gap-3">
-          <span class="w-16 text-sm badge badge-${r.label}">${r.label}</span>
+          <span class="w-16 text-sm badge ${statusClass(r.label)}">${escapeHtml(r.label)}</span>
           <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
             <div class="h-full rounded-full ${statusBarColor(r.label)}" style="width: ${(r.count / maxStatus * 100)}%"></div>
           </div>
@@ -290,12 +290,12 @@
             </thead>
             <tbody>
               ${receipts.map(r => `
-                <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer" onclick="showReceipt('${escapeHtml(r.id)}')">
+                <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
                   <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
                   <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
-                  <td class="py-2 pr-4"><span class="badge badge-${r.risk_level}">${r.risk_level}</span></td>
-                  <td class="py-2 pr-4"><span class="badge badge-${r.status}">${r.status}</span></td>
-                  <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" onclick="event.stopPropagation(); showChain('${escapeHtml(r.chain_id)}')">${truncate(r.chain_id, 20)}</td>
+                  <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+                  <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
+                  <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${truncate(r.chain_id, 20)}</td>
                   <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
                 </tr>
               `).join('')}
@@ -323,7 +323,7 @@
       document.getElementById('chains-list').innerHTML = `
         <div class="space-y-3">
           ${chains.map(c => `
-            <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:border-[#484f58] cursor-pointer" onclick="showChain('${escapeHtml(c.chain_id)}')">
+            <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:border-[#484f58] cursor-pointer" data-chain-id="${escapeHtml(c.chain_id)}" onclick="showChain(this.dataset.chainId)">
               <div class="flex items-center justify-between mb-2">
                 <span class="font-mono text-sm text-[#58a6ff]">${escapeHtml(c.chain_id)}</span>
                 <span class="text-[#7d8590] text-sm">${c.receipt_count} receipts</span>
@@ -360,11 +360,11 @@
             </div>
             <div>
               <div class="text-[#7d8590] text-xs mb-1">Risk Level</div>
-              <div><span class="badge badge-${subj.action.risk_level}">${subj.action.risk_level}</span></div>
+              <div><span class="badge ${riskClass(subj.action.risk_level)}">${escapeHtml(subj.action.risk_level)}</span></div>
             </div>
             <div>
               <div class="text-[#7d8590] text-xs mb-1">Status</div>
-              <div><span class="badge badge-${subj.outcome.status}">${subj.outcome.status}</span></div>
+              <div><span class="badge ${statusClass(subj.outcome.status)}">${escapeHtml(subj.outcome.status)}</span></div>
             </div>
             <div>
               <div class="text-[#7d8590] text-xs mb-1">Timestamp</div>
@@ -398,7 +398,7 @@
           <div>
             <div class="text-[#7d8590] text-xs mb-1">Chain</div>
             <div class="text-sm">
-              <span class="font-mono text-xs text-[#58a6ff] cursor-pointer" onclick="closeModal(); showChain('${escapeHtml(subj.chain.chain_id)}')">${escapeHtml(subj.chain.chain_id)}</span>
+              <span class="font-mono text-xs text-[#58a6ff] cursor-pointer" data-chain-id="${escapeHtml(subj.chain.chain_id)}" onclick="closeModal(); showChain(this.dataset.chainId)">${escapeHtml(subj.chain.chain_id)}</span>
               &mdash; Sequence #${subj.chain.sequence}
             </div>
           </div>
@@ -455,12 +455,12 @@
             return `
               <div class="relative chain-line pl-6 pb-6 last:pb-0">
                 <div class="chain-dot ${valid ? 'valid' : 'invalid'}"></div>
-                <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#484f58] cursor-pointer" onclick="closeChainModal(); showReceipt('${escapeHtml(r.id)}')">
+                <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#484f58] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="closeChainModal(); showReceipt(this.dataset.receiptId)">
                   <div class="flex items-center justify-between mb-1">
                     <span class="font-mono text-xs">#${r.sequence} ${escapeHtml(r.action_type)}</span>
                     <div class="flex gap-2">
-                      <span class="badge badge-${r.risk_level}">${r.risk_level}</span>
-                      <span class="badge badge-${r.status}">${r.status}</span>
+                      <span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span>
+                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>
                     </div>
                   </div>
                   <div class="text-[#7d8590] text-xs">${formatTime(r.timestamp)}</div>
@@ -506,7 +506,18 @@
 
     function escapeHtml(s) {
       if (!s) return '';
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    const VALID_RISK = new Set(['low', 'medium', 'high', 'critical']);
+    const VALID_STATUS = new Set(['success', 'failure', 'pending']);
+
+    function riskClass(level) {
+      return VALID_RISK.has(level) ? 'badge-' + level : 'badge-low';
+    }
+
+    function statusClass(status) {
+      return VALID_STATUS.has(status) ? 'badge-' + status : 'badge-pending';
     }
 
     // Close modals on Escape
