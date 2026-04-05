@@ -17,7 +17,10 @@ EOF
 fail() { echo "error: $1" >&2; exit 1; }
 
 # cd to repo root so the script works from any directory
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "must be run from within the dashboard repo"
 cd "$(git rev-parse --show-toplevel)"
+
+REMOTE_NAME="${REMOTE:-origin}"
 
 # Preflight: ensure required tools are available
 command -v go >/dev/null 2>&1 || fail "go is not installed"
@@ -36,17 +39,18 @@ TAG="v${VERSION}"
 # Ensure we're on main and up to date
 BRANCH=$(git branch --show-current)
 [[ "$BRANCH" == "main" ]] || fail "must be on main branch (currently on $BRANCH)"
-git fetch origin main --quiet
+git remote get-url "$REMOTE_NAME" >/dev/null 2>&1 || fail "remote '$REMOTE_NAME' not found — set REMOTE=<name> if not using origin"
+git fetch "$REMOTE_NAME" main --quiet
 LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/main)
-if [[ "$LOCAL" != "$REMOTE" ]]; then
-  read -r BEHIND AHEAD < <(git rev-list --left-right --count origin/main...HEAD)
+REMOTE_HEAD=$(git rev-parse "$REMOTE_NAME/main")
+if [[ "$LOCAL" != "$REMOTE_HEAD" ]]; then
+  read -r BEHIND AHEAD < <(git rev-list --left-right --count "$REMOTE_NAME/main"...HEAD)
   if [[ "$BEHIND" -gt 0 && "$AHEAD" -eq 0 ]]; then
-    fail "local main is behind origin/main by $BEHIND commit(s) — run git pull"
+    fail "local main is behind $REMOTE_NAME/main by $BEHIND commit(s) — run git pull"
   elif [[ "$BEHIND" -eq 0 && "$AHEAD" -gt 0 ]]; then
-    fail "local main is ahead of origin/main by $AHEAD commit(s) — push your commits or reset to origin/main"
+    fail "local main is ahead of $REMOTE_NAME/main by $AHEAD commit(s) — push your commits or reset to $REMOTE_NAME/main"
   else
-    fail "local main has diverged from origin/main ($BEHIND behind, $AHEAD ahead) — reconcile with pull/rebase or reset"
+    fail "local main has diverged from $REMOTE_NAME/main ($BEHIND behind, $AHEAD ahead) — reconcile with pull/rebase or reset"
   fi
 fi
 
@@ -54,9 +58,9 @@ fi
 [[ -z "$(git status --porcelain)" ]] || fail "working tree is not clean — commit or stash changes first"
 
 # Check tag doesn't already exist (locally or on remote)
-git fetch origin --tags --quiet
+git fetch "$REMOTE_NAME" --tags --quiet
 git tag -l "$TAG" | grep -q . && fail "tag $TAG already exists"
-git ls-remote --tags origin "refs/tags/$TAG" | grep -q . && fail "tag $TAG already exists on origin"
+git ls-remote --tags "$REMOTE_NAME" "refs/tags/$TAG" | grep -q . && fail "tag $TAG already exists on $REMOTE_NAME"
 
 echo "==> Releasing dashboard v$VERSION (tag: $TAG)"
 echo ""
@@ -65,6 +69,9 @@ echo "--- Running checks"
 go vet ./...
 go build ./cmd/dashboard
 go test ./... -count=1
+
+# Ensure checks did not modify tracked files (e.g. go.sum)
+[[ -z "$(git status --porcelain)" ]] || fail "working tree changed after running checks — review and commit or discard generated changes before releasing"
 
 echo ""
 echo "--- All checks passed"
