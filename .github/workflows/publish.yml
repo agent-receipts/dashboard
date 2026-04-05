@@ -19,6 +19,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Build
         run: go build ./cmd/dashboard
 
@@ -27,4 +30,17 @@ jobs:
 
       - name: Request pkg.go.dev indexing
         run: |
-          curl -fsS "https://proxy.golang.org/github.com/agent-receipts/dashboard/@v/${GITHUB_REF_NAME}.info" || true
+          URL="https://proxy.golang.org/github.com/agent-receipts/dashboard/@v/${GITHUB_REF_NAME}.info"
+          succeeded=false
+          for attempt in 1 2 3; do
+            if curl -fsS "$URL"; then
+              succeeded=true
+              break
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep 2
+            fi
+          done
+          if [[ "$succeeded" != "true" ]]; then
+            echo "::warning::Failed to request pkg.go.dev indexing for dashboard@${GITHUB_REF_NAME} after 3 attempts"
+          fi
