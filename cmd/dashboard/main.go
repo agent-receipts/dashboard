@@ -14,6 +14,7 @@ import (
 
 func main() {
 	dbPath := flag.String("db", "", "path to receipts SQLite database")
+	host := flag.String("host", "127.0.0.1", "address to bind to (use 0.0.0.0 for all interfaces)")
 	port := flag.Int("port", 8080, "HTTP server port")
 	flag.Parse()
 
@@ -29,8 +30,8 @@ func main() {
 	defer reader.Close()
 
 	srv := server.New(reader)
-	addr := fmt.Sprintf(":%d", *port)
-	log.Printf("dashboard listening on http://localhost%s", addr)
+	addr := fmt.Sprintf("%s:%d", *host, *port)
+	log.Printf("dashboard listening on http://%s", addr)
 	log.Printf("reading from %s (read-only)", *dbPath)
 
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
