@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Receipts Dashboard</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            bg: { DEFAULT: '#0d1117', card: '#161b22', hover: '#1c2128' },
+            border: '#30363d',
+            text: { primary: '#e6edf3', secondary: '#7d8590', muted: '#484f58' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+    .risk-low { color: #3fb950; }
+    .risk-medium { color: #d29922; }
+    .risk-high { color: #f85149; }
+    .risk-critical { color: #ff7b72; background: rgba(248,81,73,0.1); padding: 2px 8px; border-radius: 9999px; }
+    .status-success { color: #3fb950; }
+    .status-failure { color: #f85149; }
+    .status-pending { color: #d29922; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
+    .badge-low { background: rgba(63,185,80,0.15); color: #3fb950; }
+    .badge-medium { background: rgba(210,153,34,0.15); color: #d29922; }
+    .badge-high { background: rgba(248,81,73,0.15); color: #f85149; }
+    .badge-critical { background: rgba(255,123,114,0.2); color: #ff7b72; border: 1px solid rgba(255,123,114,0.3); }
+    .badge-success { background: rgba(63,185,80,0.15); color: #3fb950; }
+    .badge-failure { background: rgba(248,81,73,0.15); color: #f85149; }
+    .badge-pending { background: rgba(210,153,34,0.15); color: #d29922; }
+    .verify-pass { color: #3fb950; }
+    .verify-fail { color: #f85149; }
+    .tab { cursor: pointer; padding: 8px 16px; border-bottom: 2px solid transparent; }
+    .tab.active { border-bottom-color: #f78166; color: #e6edf3; }
+    .tab:not(.active) { color: #7d8590; }
+    .tab:hover:not(.active) { color: #e6edf3; border-bottom-color: #30363d; }
+    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 16px; overflow-x: auto; font-size: 0.8rem; }
+    .chain-line { border-left: 2px solid #30363d; }
+    .chain-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #30363d; background: #161b22; position: absolute; left: -6px; top: 8px; }
+    .chain-dot.valid { border-color: #3fb950; background: rgba(63,185,80,0.3); }
+    .chain-dot.invalid { border-color: #f85149; background: rgba(248,81,73,0.3); }
+    select, input[type="text"] {
+      background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+      border-radius: 6px; padding: 6px 10px; font-size: 0.875rem;
+    }
+    select:focus, input[type="text"]:focus { outline: none; border-color: #58a6ff; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-[#30363d] px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f78166" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 12l2 2 4-4"/>
+        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+      </svg>
+      <h1 class="text-lg font-semibold">Agent Receipts</h1>
+      <span class="text-[#7d8590] text-sm">Dashboard</span>
+    </div>
+    <div id="connection-status" class="text-sm text-[#3fb950] flex items-center gap-1">
+      <span class="w-2 h-2 bg-[#3fb950] rounded-full inline-block"></span>
+      Connected
+    </div>
+  </header>
+
+  <!-- Navigation tabs -->
+  <nav class="border-b border-[#30363d] px-6 flex gap-1">
+    <button class="tab active" onclick="showView('overview')" id="tab-overview">Overview</button>
+    <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
+    <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
+  </nav>
+
+  <!-- Main content -->
+  <main class="p-6 max-w-7xl mx-auto">
+
+    <!-- Overview view -->
+    <div id="view-overview">
+      <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <!-- Filled by JS -->
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <h3 class="text-sm font-medium text-[#7d8590] mb-3">Risk Distribution</h3>
+          <div id="risk-chart" class="space-y-2"></div>
+        </div>
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <h3 class="text-sm font-medium text-[#7d8590] mb-3">Status Distribution</h3>
+          <div id="status-chart" class="space-y-2"></div>
+        </div>
+      </div>
+      <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+        <h3 class="text-sm font-medium text-[#7d8590] mb-3">Recent Receipts</h3>
+        <div id="recent-receipts"></div>
+      </div>
+    </div>
+
+    <!-- Receipts view -->
+    <div id="view-receipts" class="hidden">
+      <div class="flex flex-wrap gap-3 mb-4">
+        <select id="filter-risk" onchange="loadReceipts()">
+          <option value="">All risk levels</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="critical">Critical</option>
+        </select>
+        <select id="filter-status" onchange="loadReceipts()">
+          <option value="">All statuses</option>
+          <option value="success">Success</option>
+          <option value="failure">Failure</option>
+          <option value="pending">Pending</option>
+        </select>
+        <input type="text" id="filter-action" placeholder="Action type..." oninput="debounceLoadReceipts()">
+        <input type="text" id="filter-chain" placeholder="Chain ID..." oninput="debounceLoadReceipts()">
+      </div>
+      <div id="receipts-table"></div>
+    </div>
+
+    <!-- Chains view -->
+    <div id="view-chains" class="hidden">
+      <div id="chains-list"></div>
+    </div>
+
+    <!-- Receipt detail modal -->
+    <div id="receipt-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4">
+      <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto">
+        <div class="flex items-center justify-between p-4 border-b border-[#30363d]">
+          <h2 class="text-lg font-semibold" id="modal-title">Receipt Detail</h2>
+          <button onclick="closeModal()" class="text-[#7d8590] hover:text-[#e6edf3]">&times;</button>
+        </div>
+        <div id="modal-content" class="p-4"></div>
+      </div>
+    </div>
+
+    <!-- Chain detail modal -->
+    <div id="chain-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4">
+      <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto">
+        <div class="flex items-center justify-between p-4 border-b border-[#30363d]">
+          <h2 class="text-lg font-semibold" id="chain-modal-title">Chain Detail</h2>
+          <button onclick="closeChainModal()" class="text-[#7d8590] hover:text-[#e6edf3]">&times;</button>
+        </div>
+        <div id="chain-modal-content" class="p-4"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // State
+    let debounceTimer = null;
+
+    // View switching
+    function showView(view) {
+      document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+      document.getElementById('view-' + view).classList.remove('hidden');
+      document.getElementById('tab-' + view).classList.add('active');
+
+      if (view === 'overview') loadOverview();
+      if (view === 'receipts') loadReceipts();
+      if (view === 'chains') loadChains();
+    }
+
+    // Overview
+    async function loadOverview() {
+      try {
+        const stats = await fetchJSON('/api/stats');
+        renderStats(stats);
+        const receipts = await fetchJSON('/api/receipts');
+        renderRecentReceipts(receipts.slice(0, 10));
+      } catch (err) {
+        console.error('load overview:', err);
+      }
+    }
+
+    function renderStats(stats) {
+      const riskCounts = {};
+      (stats.by_risk || []).forEach(r => riskCounts[r.label] = r.count);
+
+      const highRisk = (riskCounts['high'] || 0) + (riskCounts['critical'] || 0);
+
+      document.getElementById('stats-cards').innerHTML = `
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <div class="text-[#7d8590] text-sm mb-1">Total Receipts</div>
+          <div class="text-2xl font-bold">${stats.total}</div>
+        </div>
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <div class="text-[#7d8590] text-sm mb-1">Chains</div>
+          <div class="text-2xl font-bold">${stats.chains}</div>
+        </div>
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <div class="text-[#7d8590] text-sm mb-1">High Risk</div>
+          <div class="text-2xl font-bold ${highRisk > 0 ? 'text-[#f85149]' : ''}">${highRisk}</div>
+        </div>
+        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+          <div class="text-[#7d8590] text-sm mb-1">Risk Levels</div>
+          <div class="text-2xl font-bold">${(stats.by_risk || []).length}</div>
+        </div>
+      `;
+
+      // Risk chart
+      const maxCount = Math.max(...(stats.by_risk || []).map(r => r.count), 1);
+      document.getElementById('risk-chart').innerHTML = (stats.by_risk || []).map(r => `
+        <div class="flex items-center gap-3">
+          <span class="w-16 text-sm badge ${riskClass(r.label)}">${escapeHtml(r.label)}</span>
+          <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
+            <div class="h-full rounded-full bg-opacity-60 ${riskBarColor(r.label)}" style="width: ${(r.count / maxCount * 100)}%"></div>
+          </div>
+          <span class="text-sm text-[#7d8590] w-8 text-right">${r.count}</span>
+        </div>
+      `).join('');
+
+      // Status chart
+      const maxStatus = Math.max(...(stats.by_status || []).map(r => r.count), 1);
+      document.getElementById('status-chart').innerHTML = (stats.by_status || []).map(r => `
+        <div class="flex items-center gap-3">
+          <span class="w-16 text-sm badge ${statusClass(r.label)}">${escapeHtml(r.label)}</span>
+          <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
+            <div class="h-full rounded-full ${statusBarColor(r.label)}" style="width: ${(r.count / maxStatus * 100)}%"></div>
+          </div>
+          <span class="text-sm text-[#7d8590] w-8 text-right">${r.count}</span>
+        </div>
+      `).join('');
+    }
+
+    function riskBarColor(level) {
+      return { low: 'bg-green-600', medium: 'bg-yellow-600', high: 'bg-red-600', critical: 'bg-red-500' }[level] || 'bg-gray-600';
+    }
+
+    function statusBarColor(status) {
+      return { success: 'bg-green-600', failure: 'bg-red-600', pending: 'bg-yellow-600' }[status] || 'bg-gray-600';
+    }
+
+    // Receipts
+    function debounceLoadReceipts() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(loadReceipts, 300);
+    }
+
+    async function loadReceipts() {
+      const params = new URLSearchParams();
+      const risk = document.getElementById('filter-risk').value;
+      const status = document.getElementById('filter-status').value;
+      const action = document.getElementById('filter-action').value;
+      const chain = document.getElementById('filter-chain').value;
+
+      if (risk) params.set('risk_level', risk);
+      if (status) params.set('status', status);
+      if (action) params.set('action_type', action);
+      if (chain) params.set('chain_id', chain);
+
+      try {
+        const receipts = await fetchJSON('/api/receipts?' + params.toString());
+        renderReceiptsTable(receipts, 'receipts-table');
+      } catch (err) {
+        console.error('load receipts:', err);
+      }
+    }
+
+    function renderRecentReceipts(receipts) {
+      renderReceiptsTable(receipts, 'recent-receipts');
+    }
+
+    function renderReceiptsTable(receipts, containerId) {
+      if (!receipts || receipts.length === 0) {
+        document.getElementById(containerId).innerHTML = '<p class="text-[#7d8590] text-sm">No receipts found.</p>';
+        return;
+      }
+      document.getElementById(containerId).innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-[#7d8590] text-left border-b border-[#30363d]">
+                <th class="pb-2 pr-4">Time</th>
+                <th class="pb-2 pr-4">Action</th>
+                <th class="pb-2 pr-4">Risk</th>
+                <th class="pb-2 pr-4">Status</th>
+                <th class="pb-2 pr-4">Chain</th>
+                <th class="pb-2 pr-4">Seq</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${receipts.map(r => `
+                <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+                  <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
+                  <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
+                  <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+                  <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
+                  <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${truncate(r.chain_id, 20)}</td>
+                  <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    // Chains
+    async function loadChains() {
+      try {
+        const chains = await fetchJSON('/api/chains');
+        renderChainsList(chains);
+      } catch (err) {
+        console.error('load chains:', err);
+      }
+    }
+
+    function renderChainsList(chains) {
+      if (!chains || chains.length === 0) {
+        document.getElementById('chains-list').innerHTML = '<p class="text-[#7d8590] text-sm">No chains found.</p>';
+        return;
+      }
+      document.getElementById('chains-list').innerHTML = `
+        <div class="space-y-3">
+          ${chains.map(c => `
+            <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:border-[#484f58] cursor-pointer" data-chain-id="${escapeHtml(c.chain_id)}" onclick="showChain(this.dataset.chainId)">
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-mono text-sm text-[#58a6ff]">${escapeHtml(c.chain_id)}</span>
+                <span class="text-[#7d8590] text-sm">${c.receipt_count} receipts</span>
+              </div>
+              <div class="text-[#7d8590] text-xs">
+                ${formatTime(c.first_timestamp)} &mdash; ${formatTime(c.last_timestamp)}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Receipt detail
+    async function showReceipt(id) {
+      try {
+        const receipt = await fetchJSON('/api/receipts/' + encodeURIComponent(id));
+        document.getElementById('modal-title').textContent = receipt.id;
+        document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt);
+        document.getElementById('receipt-modal').classList.remove('hidden');
+      } catch (err) {
+        console.error('show receipt:', err);
+      }
+    }
+
+    function renderReceiptDetail(r) {
+      const subj = r.credentialSubject;
+      return `
+        <div class="space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Action Type</div>
+              <div class="font-mono text-sm">${escapeHtml(subj.action.type)}</div>
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Risk Level</div>
+              <div><span class="badge ${riskClass(subj.action.risk_level)}">${escapeHtml(subj.action.risk_level)}</span></div>
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Status</div>
+              <div><span class="badge ${statusClass(subj.outcome.status)}">${escapeHtml(subj.outcome.status)}</span></div>
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Timestamp</div>
+              <div class="text-sm">${formatTime(subj.action.timestamp)}</div>
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Issuer</div>
+              <div class="font-mono text-xs">${escapeHtml(r.issuer.id)}</div>
+              ${r.issuer.name ? `<div class="text-[#7d8590] text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Principal</div>
+              <div class="font-mono text-xs">${escapeHtml(subj.principal.id)}</div>
+            </div>
+          </div>
+
+          ${subj.action.target ? `
+          <div>
+            <div class="text-[#7d8590] text-xs mb-1">Target</div>
+            <div class="font-mono text-xs">${escapeHtml(subj.action.target.system)}${subj.action.target.resource ? ' / ' + escapeHtml(subj.action.target.resource) : ''}</div>
+          </div>
+          ` : ''}
+
+          ${subj.intent ? `
+          <div>
+            <div class="text-[#7d8590] text-xs mb-1">Intent</div>
+            ${subj.intent.prompt_preview ? `<div class="text-sm bg-[#0d1117] border border-[#30363d] rounded p-2">${escapeHtml(subj.intent.prompt_preview)}</div>` : ''}
+          </div>
+          ` : ''}
+
+          <div>
+            <div class="text-[#7d8590] text-xs mb-1">Chain</div>
+            <div class="text-sm">
+              <span class="font-mono text-xs text-[#58a6ff] cursor-pointer" data-chain-id="${escapeHtml(subj.chain.chain_id)}" onclick="closeModal(); showChain(this.dataset.chainId)">${escapeHtml(subj.chain.chain_id)}</span>
+              &mdash; Sequence #${subj.chain.sequence}
+            </div>
+          </div>
+
+          <details class="mt-4">
+            <summary class="text-[#7d8590] text-sm cursor-pointer hover:text-[#e6edf3]">Raw JSON</summary>
+            <pre class="mt-2 text-xs">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
+          </details>
+        </div>
+      `;
+    }
+
+    function closeModal() {
+      document.getElementById('receipt-modal').classList.add('hidden');
+    }
+
+    // Chain detail
+    async function showChain(chainId) {
+      try {
+        const [receipts, verification] = await Promise.all([
+          fetchJSON('/api/receipts?chain_id=' + encodeURIComponent(chainId)),
+          fetchJSON('/api/chains/' + encodeURIComponent(chainId) + '/verify'),
+        ]);
+
+        // Sort by sequence ascending for timeline display.
+        receipts.sort((a, b) => a.sequence - b.sequence);
+
+        document.getElementById('chain-modal-title').textContent = chainId;
+        document.getElementById('chain-modal-content').innerHTML = renderChainDetail(chainId, receipts, verification);
+        document.getElementById('chain-modal').classList.remove('hidden');
+      } catch (err) {
+        console.error('show chain:', err);
+      }
+    }
+
+    function renderChainDetail(chainId, receipts, verification) {
+      const verifyStatus = verification.valid
+        ? '<span class="verify-pass font-medium">Chain Valid</span>'
+        : `<span class="verify-fail font-medium">Chain Broken at #${verification.broken_at}</span>`;
+
+      const verifyMap = {};
+      (verification.receipts || []).forEach(v => { verifyMap[v.receipt_id] = v; });
+
+      return `
+        <div class="mb-4 flex items-center gap-3">
+          <span class="text-sm">${verifyStatus}</span>
+          <span class="text-[#7d8590] text-sm">${verification.length} receipts</span>
+        </div>
+
+        <div class="relative ml-4">
+          ${receipts.map((r, i) => {
+            const v = verifyMap[r.id] || {};
+            const valid = v.hash_link_valid !== false && v.sequence_valid !== false;
+            return `
+              <div class="relative chain-line pl-6 pb-6 last:pb-0">
+                <div class="chain-dot ${valid ? 'valid' : 'invalid'}"></div>
+                <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#484f58] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="closeChainModal(); showReceipt(this.dataset.receiptId)">
+                  <div class="flex items-center justify-between mb-1">
+                    <span class="font-mono text-xs">#${r.sequence} ${escapeHtml(r.action_type)}</span>
+                    <div class="flex gap-2">
+                      <span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span>
+                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>
+                    </div>
+                  </div>
+                  <div class="text-[#7d8590] text-xs">${formatTime(r.timestamp)}</div>
+                  ${!valid ? `
+                    <div class="mt-1 text-xs text-[#f85149]">
+                      ${v.hash_link_valid === false ? 'Hash link broken' : ''}
+                      ${v.sequence_valid === false ? 'Sequence gap' : ''}
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function closeChainModal() {
+      document.getElementById('chain-modal').classList.add('hidden');
+    }
+
+    // Utilities
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
+    function formatTime(ts) {
+      if (!ts) return '';
+      try {
+        const d = new Date(ts);
+        return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch {
+        return ts;
+      }
+    }
+
+    function truncate(s, len) {
+      if (!s) return '';
+      return s.length > len ? s.slice(0, len) + '...' : s;
+    }
+
+    function escapeHtml(s) {
+      if (!s) return '';
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    const VALID_RISK = new Set(['low', 'medium', 'high', 'critical']);
+    const VALID_STATUS = new Set(['success', 'failure', 'pending']);
+
+    function riskClass(level) {
+      return VALID_RISK.has(level) ? 'badge-' + level : 'badge-low';
+    }
+
+    function statusClass(status) {
+      return VALID_STATUS.has(status) ? 'badge-' + status : 'badge-pending';
+    }
+
+    // Close modals on Escape
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closeModal(); closeChainModal(); }
+    });
+
+    // Close modals on backdrop click
+    document.getElementById('receipt-modal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+    document.getElementById('chain-modal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeChainModal();
+    });
+
+    // Boot
+    loadOverview();
+  </script>
+</body>
+</html>
