@@ -29,6 +29,7 @@ internal/verify/        # Hash linkage and chain verification
 - All web assets embedded via `//go:embed` — single binary distribution
 - The dashboard opens SQLite databases **read-only** — it must never write to receipt stores
 - Run `go vet` and `go test ./...` before committing
+- Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`, etc.)
 
 ## Dependencies
 

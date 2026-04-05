@@ -1,0 +1,26 @@
+# Lefthook — pre-commit and commit-msg hooks
+# Install: brew install lefthook && lefthook install
+# Docs: https://lefthook.dev/configuration/
+#
+# Glob patterns determine whether a job runs (based on staged files).
+# The run commands then check the entire module — not just staged files.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: go-vet
+      glob: "**/*.{go,mod,sum}"
+      run: go vet ./...
+
+    - name: go-fmt
+      glob: "**/*.{go,mod,sum}"
+      run: test -z "$(gofmt -l .)" || (gofmt -d . && exit 1)
+
+    - name: go-test
+      glob: "**/*.{go,mod,sum}"
+      run: go test ./...
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: convco check --from-stdin < "{1}"
