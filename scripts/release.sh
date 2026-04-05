@@ -16,6 +16,11 @@ EOF
 
 fail() { echo "error: $1" >&2; exit 1; }
 
+# Preflight: ensure required tools are available
+command -v go >/dev/null 2>&1 || fail "go is not installed"
+command -v gh >/dev/null 2>&1 || fail "gh CLI is not installed — see https://cli.github.com"
+gh auth status >/dev/null 2>&1 || fail "gh is not authenticated — run gh auth login"
+
 [[ $# -eq 1 ]] || usage
 
 VERSION="$1"
@@ -31,7 +36,16 @@ BRANCH=$(git branch --show-current)
 git fetch origin main --quiet
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
-[[ "$LOCAL" == "$REMOTE" ]] || fail "local main is not up to date with origin — run git pull"
+if [[ "$LOCAL" != "$REMOTE" ]]; then
+  read -r BEHIND AHEAD < <(git rev-list --left-right --count origin/main...HEAD)
+  if [[ "$BEHIND" -gt 0 && "$AHEAD" -eq 0 ]]; then
+    fail "local main is behind origin/main by $BEHIND commit(s) — run git pull"
+  elif [[ "$BEHIND" -eq 0 && "$AHEAD" -gt 0 ]]; then
+    fail "local main is ahead of origin/main by $AHEAD commit(s) — push your commits or reset to origin/main"
+  else
+    fail "local main has diverged from origin/main ($BEHIND behind, $AHEAD ahead) — reconcile with pull/rebase or reset"
+  fi
+fi
 
 # Ensure working tree is clean
 [[ -z "$(git status --porcelain)" ]] || fail "working tree is not clean — commit or stash changes first"
@@ -47,7 +61,7 @@ echo ""
 echo "--- Running checks"
 go vet ./...
 go build ./cmd/dashboard
-go test ./...
+go test ./... -count=1
 
 echo ""
 echo "--- All checks passed"
