@@ -4,7 +4,7 @@ applyTo: "**"
 
 # Review guidelines
 
-This is the Agent Receipts dashboard — a read-only web UI for viewing receipt SQLite databases. Single Go binary, no external runtime dependencies.
+This is the Agent Receipts dashboard — a read-only web UI for viewing receipt SQLite databases. Single Go binary. The embedded UI loads htmx and Tailwind CSS from CDNs.
 
 ## Security
 
@@ -24,7 +24,7 @@ This is the Agent Receipts dashboard — a read-only web UI for viewing receipt 
 
 ## Embedded assets
 
-- All web assets (HTML, CSS, JS) are embedded via `//go:embed`. The binary must be self-contained. Flag any runtime file reads for serving static assets.
+- Local static assets (HTML, CSS, JS files) are embedded via `//go:embed`. Flag any runtime file reads for serving local static assets. Note: the embedded HTML loads htmx and Tailwind CSS from external CDNs — this is expected and should not be flagged.
 
 ## SDK usage
 
