@@ -1,0 +1,30 @@
+name: Publish Go Module
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./cmd/dashboard
+
+      - name: Test
+        run: go test ./...
+
+      - name: Request pkg.go.dev indexing
+        run: |
+          curl -fsS "https://proxy.golang.org/github.com/agent-receipts/dashboard/@v/${GITHUB_REF_NAME}.info" || true
