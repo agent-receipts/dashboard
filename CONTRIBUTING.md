@@ -57,6 +57,27 @@ Or via Make:
 - Test files colocated as `*_test.go` alongside source
 - The dashboard is **read-only** — it must never write to receipt SQLite databases
 
+## Commit messages
+
+This project follows [Conventional Commits](https://www.conventionalcommits.org/). Every commit message must start with a type:
+
+```
+feat: add new feature
+fix: correct a bug
+docs: update documentation
+chore: maintenance task
+refactor: restructure without behavior change
+test: add or update tests
+ci: change CI/CD configuration
+```
+
+The `commit-msg` hook enforces this via [convco](https://convco.github.io/). Install hooks with:
+
+```bash
+brew install lefthook convco
+lefthook install
+```
+
 ## Project structure
 
 ```
@@ -100,6 +121,7 @@ Before opening a PR, verify:
 - [ ] No real keys or secrets in the diff — use test fixtures only
 - [ ] New functionality includes tests
 - [ ] AGENTS.md updated if you changed project structure
+- [ ] Commit message follows [Conventional Commits](https://www.conventionalcommits.org/) format
 
 ## License
 
