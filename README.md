@@ -2,6 +2,8 @@
 
 Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) SQLite databases. Single Go binary, no backend dependencies. The UI loads htmx and Tailwind CSS from CDNs.
 
+![Dashboard overview showing stats, risk distribution, and recent receipts](docs/screenshot.png)
+
 ## Features
 
 - Read-only viewer for receipt databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
