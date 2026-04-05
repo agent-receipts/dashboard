@@ -70,8 +70,8 @@ go vet ./...
 go build ./cmd/dashboard
 go test ./... -count=1
 
-# Ensure checks did not modify tracked files (e.g. go.sum)
-[[ -z "$(git status --porcelain)" ]] || fail "working tree changed after running checks — review and commit or discard generated changes before releasing"
+# Ensure checks did not leave any working tree changes (e.g. go.sum updates, generated outputs)
+[[ -z "$(git status --porcelain)" ]] || fail "working tree changed after running checks — review and commit or discard changes before releasing"
 
 echo ""
 echo "--- All checks passed"
@@ -84,7 +84,9 @@ read -rp "Proceed? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
 REPO_URL=$(gh repo view --json url -q '.url')
-gh release create "$TAG" --title "v$VERSION" --generate-notes
+release_args=("$TAG" --title "v$VERSION" --generate-notes)
+[[ "$VERSION" == *-* ]] && release_args+=(--prerelease)
+gh release create "${release_args[@]}"
 echo ""
 echo "==> Released dashboard v$VERSION"
 echo "    ${REPO_URL}/releases/tag/$TAG"
