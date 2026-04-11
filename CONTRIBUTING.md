@@ -31,7 +31,7 @@ go test ./...
 | `go build ./cmd/dashboard` | Build the binary |
 | `go test ./... -count=1` | Run all tests (no cache) |
 | `go vet ./...` | Static analysis |
-| `go run ./cmd/dashboard --db path/to/receipts.db` | Run locally |
+| `go run ./cmd/dashboard -db path/to/receipts.db` | Run locally |
 
 Or via Make:
 

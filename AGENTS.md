@@ -16,7 +16,7 @@ internal/verify/        # Hash linkage and chain verification
 
 | Task | Command |
 |------|---------|
-| Run | `go run ./cmd/dashboard --db path/to/receipts.db` |
+| Run | `go run ./cmd/dashboard -db path/to/receipts.db` |
 | Build | `go build -o dashboard ./cmd/dashboard` |
 | Test | `go test ./...` |
 | Lint | `go vet ./...` |
