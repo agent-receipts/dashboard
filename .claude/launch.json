@@ -4,7 +4,7 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "go",
-      "runtimeArgs": ["run", "./cmd/dashboard", "--db", "/tmp/test-receipts.db"],
+      "runtimeArgs": ["run", "./cmd/dashboard", "-db", "/tmp/test-receipts.db"],
       "port": 8080
     }
   ]

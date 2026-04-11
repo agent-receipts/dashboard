@@ -22,8 +22,8 @@ make test                  # test via Makefile
 ## Running
 
 ```sh
-./dashboard --db path/to/receipts.db           # open a receipt database
-./dashboard --db path/to/receipts.db --port 9090  # custom port
+./dashboard -db path/to/receipts.db           # open a receipt database
+./dashboard -db path/to/receipts.db -port 9090  # custom port
 ```
 
 ## Project structure

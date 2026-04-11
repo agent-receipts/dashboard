@@ -19,7 +19,7 @@ func main() {
 	flag.Parse()
 
 	if *dbPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: dashboard --db <path/to/receipts.db>")
+		fmt.Fprintln(os.Stderr, "usage: dashboard -db <path/to/receipts.db>")
 		os.Exit(1)
 	}
 
