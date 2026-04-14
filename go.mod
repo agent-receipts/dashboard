@@ -3,7 +3,7 @@ module github.com/agent-receipts/dashboard
 go 1.26.1
 
 require (
-	github.com/agent-receipts/ar/sdk/go v0.1.0
+	github.com/agent-receipts/ar/sdk/go v0.3.0
 	modernc.org/sqlite v1.48.2
 )
 
