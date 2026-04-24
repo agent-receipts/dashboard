@@ -41,9 +41,9 @@ Both modes coexist:
 
 ## Rationale
 
-- **Supply chain:** Electron pulls in Node plus hundreds of transitive npm packages (past incidents: `event-stream`, `ua-parser-js`, `node-ipc`). Wails' dependency footprint is a Go module tree plus a small frontend bundler — auditable in `go.sum`.
-- **OS webview security:** Instead of shipping a pinned Chromium, Wails delegates rendering to the OS webview (WebKit on macOS/Linux, WebView2 on Windows). Security patches arrive through OS updates rather than requiring a separate Chromium patch cadence.
-- **Go-first ethos:** The codebase is pure Go today. Wails keeps backend logic in Go with no Node runtime required at build or runtime.
+- **Supply chain:** Electron pulls in Node plus hundreds of transitive npm packages (past incidents: `event-stream`, `ua-parser-js`, `node-ipc`). Wails' Go deps are auditable in `go.sum`; any frontend tooling (e.g. Tailwind CLI) is tracked in a lockfile (`package-lock.json` / `pnpm-lock.yaml`) — still far smaller than Electron's tree.
+- **OS webview security:** Instead of shipping a pinned Chromium, Wails delegates rendering to the OS webview — WKWebView on macOS, WebView2 on Windows, WebKitGTK on Linux. Security patches arrive through OS updates rather than requiring a separate Chromium patch cadence.
+- **Go-first ethos:** The codebase is pure Go today. Wails keeps backend logic and the runtime entirely in Go — no Node at runtime. Build-time tooling depends on the chosen frontend pipeline (e.g. Tailwind CLI requires Node).
 - **Binary size:** ~15–30 MB (platform-dependent) vs ~100 MB for Electron.
 - **go-webview** was ruled out because it provides no built-in menus or native dialogs — features needed for a polished file-picker experience. Neither Wails nor go-webview ship a first-party auto-updater; that's acceptable for now.
 
