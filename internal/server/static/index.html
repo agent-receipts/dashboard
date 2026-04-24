@@ -281,6 +281,8 @@
             <thead>
               <tr class="text-[#7d8590] text-left border-b border-[#30363d]">
                 <th class="pb-2 pr-4">Time</th>
+                <th class="pb-2 pr-4">Server</th>
+                <th class="pb-2 pr-4">Tool</th>
                 <th class="pb-2 pr-4">Action</th>
                 <th class="pb-2 pr-4">Risk</th>
                 <th class="pb-2 pr-4">Status</th>
@@ -292,6 +294,8 @@
               ${receipts.map(r => `
                 <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
                   <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
+                  <td class="py-2 pr-4 font-mono text-xs text-[#7d8590]">${r.server ? escapeHtml(r.server) : '<span class="text-[#484f58]">—</span>'}</td>
+                  <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
                   <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
                   <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
                   <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
@@ -355,6 +359,14 @@
         <div class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
             <div>
+              <div class="text-[#7d8590] text-xs mb-1">Server</div>
+              <div class="font-mono text-sm">${subj.action.target ? escapeHtml(subj.action.target.system) : '<span class="text-[#484f58]">—</span>'}</div>
+            </div>
+            <div>
+              <div class="text-[#7d8590] text-xs mb-1">Tool</div>
+              <div class="font-mono text-sm">${subj.action.tool_name ? escapeHtml(subj.action.tool_name) : '<span class="text-[#484f58]">—</span>'}</div>
+            </div>
+            <div>
               <div class="text-[#7d8590] text-xs mb-1">Action Type</div>
               <div class="font-mono text-sm">${escapeHtml(subj.action.type)}</div>
             </div>
@@ -370,6 +382,16 @@
               <div class="text-[#7d8590] text-xs mb-1">Timestamp</div>
               <div class="text-sm">${formatTime(subj.action.timestamp)}</div>
             </div>
+          </div>
+
+          ${subj.action.target && subj.action.target.resource ? `
+          <div>
+            <div class="text-[#7d8590] text-xs mb-1">Resource</div>
+            <div class="font-mono text-xs">${escapeHtml(subj.action.target.resource)}</div>
+          </div>
+          ` : ''}
+
+          <div class="grid grid-cols-2 gap-4">
             <div>
               <div class="text-[#7d8590] text-xs mb-1">Issuer</div>
               <div class="font-mono text-xs">${escapeHtml(r.issuer.id)}</div>
@@ -380,13 +402,6 @@
               <div class="font-mono text-xs">${escapeHtml(subj.principal.id)}</div>
             </div>
           </div>
-
-          ${subj.action.target ? `
-          <div>
-            <div class="text-[#7d8590] text-xs mb-1">Target</div>
-            <div class="font-mono text-xs">${escapeHtml(subj.action.target.system)}${subj.action.target.resource ? ' / ' + escapeHtml(subj.action.target.resource) : ''}</div>
-          </div>
-          ` : ''}
 
           ${subj.intent ? `
           <div>
