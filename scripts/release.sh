@@ -76,17 +76,19 @@ go test ./... -count=1
 echo ""
 echo "--- All checks passed"
 echo ""
-echo "Will create release:"
+echo "Will push tag:"
 echo "  Tag:    $TAG"
-echo "  Title:  v$VERSION"
+echo ""
+echo "The Release workflow (.github/workflows/release.yml) will build binaries,"
+echo "publish the Homebrew formula, and create the GitHub release."
 echo ""
 read -rp "Proceed? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
 REPO_URL=$(gh repo view --json url -q '.url')
-release_args=("$TAG" --title "v$VERSION" --generate-notes)
-[[ "$VERSION" == *-* ]] && release_args+=(--prerelease)
-gh release create "${release_args[@]}"
+git tag -a "$TAG" -m "dashboard $TAG"
+git push "$REMOTE_NAME" "$TAG"
 echo ""
-echo "==> Released dashboard v$VERSION"
-echo "    ${REPO_URL}/releases/tag/$TAG"
+echo "==> Pushed tag $TAG"
+echo "    Follow the release workflow: ${REPO_URL}/actions/workflows/release.yml"
+echo "    Release page: ${REPO_URL}/releases/tag/$TAG"

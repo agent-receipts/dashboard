@@ -14,6 +14,16 @@ Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-r
 
 ## Install
 
+Homebrew (macOS / Linux):
+
+```sh
+brew install agent-receipts/tap/dashboard
+```
+
+Pre-built binaries for darwin/linux (amd64, arm64) are attached to each [GitHub release](https://github.com/agent-receipts/dashboard/releases).
+
+With a Go toolchain:
+
 ```sh
 go install github.com/agent-receipts/dashboard/cmd/dashboard@latest
 ```
