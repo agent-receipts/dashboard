@@ -22,10 +22,9 @@ cd "$(git rev-parse --show-toplevel)"
 
 REMOTE_NAME="${REMOTE:-origin}"
 
-# Preflight: ensure required tools are available
+# Preflight: ensure required tools are available. The release workflow
+# handles the GitHub Release itself, so this script only needs git + go.
 command -v go >/dev/null 2>&1 || fail "go is not installed"
-command -v gh >/dev/null 2>&1 || fail "gh CLI is not installed — see https://cli.github.com"
-gh auth status >/dev/null 2>&1 || fail "gh is not authenticated — run gh auth login"
 
 [[ $# -eq 1 ]] || usage
 
@@ -85,7 +84,13 @@ echo ""
 read -rp "Proceed? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
-REPO_URL=$(gh repo view --json url -q '.url')
+# Derive the GitHub web URL from the remote so this script doesn't need
+# the `gh` CLI. Handles both HTTPS and SSH remote formats.
+REMOTE_URL=$(git remote get-url "$REMOTE_NAME")
+REPO_URL=$(echo "$REMOTE_URL" | sed -E \
+  -e 's|^git@github\.com:|https://github.com/|' \
+  -e 's|\.git$||')
+
 git tag -a "$TAG" -m "dashboard $TAG"
 git push "$REMOTE_NAME" "$TAG"
 echo ""

@@ -45,12 +45,27 @@ jobs:
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+      # Idempotent: if the release already exists (e.g. workflow re-run
+      # after a transient tap-push failure), upload assets to the
+      # existing release instead of failing on duplicate-create.
       - name: Create GitHub release with binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "dashboard ${GITHUB_REF_NAME}" \
-            --generate-notes \
-            dist/*.tar.gz \
-            dist/checksums.txt
+          prerelease_flag=""
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" --clobber \
+              dist/*.tar.gz \
+              dist/checksums.txt
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "dashboard ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              ${prerelease_flag} \
+              dist/*.tar.gz \
+              dist/checksums.txt
+          fi

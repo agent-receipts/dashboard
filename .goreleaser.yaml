@@ -70,7 +70,9 @@ brews:
     # `brew outdated` and `brew livecheck` use this to detect new releases.
     # Dashboard tags as plain `vX.Y.Z`, so `:github_latest` would work, but
     # `:github_releases` with a regex keeps the strategy consistent with
-    # the other agent-receipts formulas and tolerates prereleases.
+    # the other agent-receipts formulas. The regex matches stable tags
+    # only — prereleases like `v1.0.0-beta.1` are intentionally skipped
+    # so Homebrew users don't get bumped onto unstable versions.
     custom_block: |
       livecheck do
         url "https://github.com/agent-receipts/dashboard"
