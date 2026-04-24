@@ -1,0 +1,81 @@
+version: 2
+
+project_name: dashboard
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: dashboard
+    main: ./cmd/dashboard
+    binary: dashboard
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version=v{{.Version}}
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+# GitHub release is created outside GoReleaser so the workflow can upload
+# the same dist/ artifacts to the release as were hashed into the Homebrew
+# formula. Re-running GoReleaser would regenerate tarballs with different
+# SHA256s and break `brew install`.
+release:
+  disable: true
+
+brews:
+  - name: dashboard
+    repository:
+      owner: agent-receipts
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      # Push the formula to a feature branch, then open a PR against
+      # main. Without an explicit branch, GoReleaser pushes to the
+      # default branch (main) and tries to open a main→main PR, which
+      # the GitHub API rejects — so the formula sneaks onto main and
+      # skips the `brew audit` gate.
+      branch: "bump-{{.ProjectName}}-{{.Version}}"
+      pull_request:
+        enabled: true
+        base:
+          branch: main
+    directory: Formula
+    url_template: "https://github.com/agent-receipts/dashboard/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
+    homepage: "https://github.com/agent-receipts/dashboard"
+    description: "Local web UI for browsing Agent Receipts SQLite databases"
+    license: "Apache-2.0"
+    commit_author:
+      name: agent-receipts-bot
+      email: bot@agentreceipts.ai
+    commit_msg_template: "chore(dashboard): bump to v{{ .Version }}"
+    install: |
+      bin.install "dashboard"
+    test: |
+      system "#{bin}/dashboard", "--version"
+    # `brew outdated` and `brew livecheck` use this to detect new releases.
+    # Dashboard tags as plain `vX.Y.Z`, so `:github_latest` would work, but
+    # `:github_releases` with a regex keeps the strategy consistent with
+    # the other agent-receipts formulas. The regex matches stable tags
+    # only — prereleases like `v1.0.0-beta.1` are intentionally skipped
+    # so Homebrew users don't get bumped onto unstable versions.
+    custom_block: |
+      livecheck do
+        url "https://github.com/agent-receipts/dashboard"
+        strategy :github_releases
+        regex(/^v?(\d+(?:\.\d+)+)$/i)
+      end

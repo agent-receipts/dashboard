@@ -22,10 +22,9 @@ cd "$(git rev-parse --show-toplevel)"
 
 REMOTE_NAME="${REMOTE:-origin}"
 
-# Preflight: ensure required tools are available
+# Preflight: ensure required tools are available. The release workflow
+# handles the GitHub Release itself, so this script only needs git + go.
 command -v go >/dev/null 2>&1 || fail "go is not installed"
-command -v gh >/dev/null 2>&1 || fail "gh CLI is not installed — see https://cli.github.com"
-gh auth status >/dev/null 2>&1 || fail "gh is not authenticated — run gh auth login"
 
 [[ $# -eq 1 ]] || usage
 
@@ -76,17 +75,27 @@ go test ./... -count=1
 echo ""
 echo "--- All checks passed"
 echo ""
-echo "Will create release:"
+echo "Will push tag:"
 echo "  Tag:    $TAG"
-echo "  Title:  v$VERSION"
+echo ""
+echo "The Release workflow (.github/workflows/release.yml) will build binaries,"
+echo "publish the Homebrew formula, and create the GitHub release."
 echo ""
 read -rp "Proceed? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
 
-REPO_URL=$(gh repo view --json url -q '.url')
-release_args=("$TAG" --title "v$VERSION" --generate-notes)
-[[ "$VERSION" == *-* ]] && release_args+=(--prerelease)
-gh release create "${release_args[@]}"
+# Derive the GitHub web URL from the remote so this script doesn't need
+# the `gh` CLI. Handles GitHub HTTPS remotes and common GitHub SSH forms
+# (SCP-style `git@github.com:` and URL-style `ssh://git@github.com/`).
+REMOTE_URL=$(git remote get-url "$REMOTE_NAME")
+REPO_URL=$(echo "$REMOTE_URL" | sed -E \
+  -e 's|^git@github\.com:|https://github.com/|' \
+  -e 's|^ssh://git@github\.com/|https://github.com/|' \
+  -e 's|\.git$||')
+
+git tag -a "$TAG" -m "dashboard $TAG"
+git push "$REMOTE_NAME" "$TAG"
 echo ""
-echo "==> Released dashboard v$VERSION"
-echo "    ${REPO_URL}/releases/tag/$TAG"
+echo "==> Pushed tag $TAG"
+echo "    Follow the release workflow: ${REPO_URL}/actions/workflows/release.yml"
+echo "    Release page: ${REPO_URL}/releases/tag/$TAG"

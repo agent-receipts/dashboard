@@ -8,26 +8,13 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  # Nudges proxy.golang.org to fetch the new version so it shows up on
+  # pkg.go.dev without waiting for the next scheduled crawl. Build and
+  # test validation happens in release.yml before the release is cut.
+  ping-pkg-go-dev:
     if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version-file: go.mod
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build ./cmd/dashboard
-
-      - name: Test
-        run: go test ./...
-
       - name: Request pkg.go.dev indexing
         run: |
           URL="https://proxy.golang.org/github.com/agent-receipts/dashboard/@v/${GITHUB_REF_NAME}.info"
