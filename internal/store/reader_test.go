@@ -37,6 +37,15 @@ func makeReceipt(id, chainID string, seq int, actionType string, risk receipt.Ri
 	}
 }
 
+func makeReceiptWithTool(id, chainID string, seq int, actionType, toolName, server string, risk receipt.RiskLevel, status receipt.OutcomeStatus, ts string) receipt.AgentReceipt {
+	ar := makeReceipt(id, chainID, seq, actionType, risk, status, ts, nil)
+	ar.CredentialSubject.Action.ToolName = toolName
+	if server != "" {
+		ar.CredentialSubject.Action.Target = &receipt.ActionTarget{System: server}
+	}
+	return ar
+}
+
 func strPtr(s string) *string { return &s }
 
 // The reader must be constructable from an existing SDK store's DB.
@@ -224,6 +233,61 @@ func TestReader_ListReceipts_Limit(t *testing.T) {
 	}
 	if len(rows) != 2 {
 		t.Errorf("got %d rows, want 2", len(rows))
+	}
+}
+
+func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
+	dbPath := t.TempDir() + "/tool-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	withTool := makeReceiptWithTool("urn:receipt:t1", "chain-tool", 1,
+		"tool.call", "read_file", "filesystem", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z")
+	withoutTarget := makeReceiptWithTool("urn:receipt:t2", "chain-tool", 2,
+		"tool.call", "list_dir", "", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z")
+
+	for _, r := range []receipt.AgentReceipt{withTool, withoutTarget} {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	// rows are newest-first, so t2 is index 0 and t1 is index 1.
+	rowT2 := rows[0]
+	rowT1 := rows[1]
+
+	if rowT1.ToolName != "read_file" {
+		t.Errorf("tool_name: got %q, want %q", rowT1.ToolName, "read_file")
+	}
+	if rowT1.Server != "filesystem" {
+		t.Errorf("server: got %q, want %q", rowT1.Server, "filesystem")
+	}
+	if rowT2.ToolName != "list_dir" {
+		t.Errorf("tool_name: got %q, want %q", rowT2.ToolName, "list_dir")
+	}
+	if rowT2.Server != "" {
+		t.Errorf("server: got %q, want empty (nil target)", rowT2.Server)
 	}
 }
 

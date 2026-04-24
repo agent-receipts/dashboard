@@ -25,6 +25,8 @@ type ReceiptRow struct {
 	ChainID             string `json:"chain_id"`
 	Sequence            int    `json:"sequence"`
 	ActionType          string `json:"action_type"`
+	ToolName            string `json:"tool_name"`
+	Server              string `json:"server"`
 	RiskLevel           string `json:"risk_level"`
 	Status              string `json:"status"`
 	Timestamp           string `json:"timestamp"`
@@ -158,7 +160,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, chain_id, sequence, action_type, risk_level, status,
+		`SELECT id, chain_id, sequence, action_type,
+		        COALESCE(tool_name, ''),
+		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.system'), ''),
+		        risk_level, status,
 		        timestamp, issuer_id, COALESCE(principal_id, ''),
 		        receipt_hash, COALESCE(previous_receipt_hash, '')
 		 FROM receipts %s ORDER BY timestamp DESC LIMIT ?`,
@@ -177,6 +182,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		var row ReceiptRow
 		if err := rows.Scan(
 			&row.ID, &row.ChainID, &row.Sequence, &row.ActionType,
+			&row.ToolName, &row.Server,
 			&row.RiskLevel, &row.Status, &row.Timestamp, &row.IssuerID,
 			&row.PrincipalID, &row.ReceiptHash, &row.PreviousReceiptHash,
 		); err != nil {
