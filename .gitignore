@@ -1,6 +1,10 @@
 # Binary
 /dashboard
 
+# Claude Code
+.claude/worktrees/
+.claude/settings.local.json
+
 # IDE
 .idea/
 .vscode/
