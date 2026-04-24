@@ -247,8 +247,10 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 		"tool.call", "read_file", "filesystem", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z")
 	withoutTarget := makeReceiptWithTool("urn:receipt:t2", "chain-tool", 2,
 		"tool.call", "list_dir", "", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z")
+	withoutTool := makeReceiptWithTool("urn:receipt:t3", "chain-tool", 3,
+		"tool.call", "", "jira", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z")
 
-	for _, r := range []receipt.AgentReceipt{withTool, withoutTarget} {
+	for _, r := range []receipt.AgentReceipt{withTool, withoutTarget, withoutTool} {
 		hash, err := receipt.HashReceipt(r)
 		if err != nil {
 			t.Fatalf("hash: %v", err)
@@ -269,13 +271,14 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want 2", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
 	}
 
-	// rows are newest-first, so t2 is index 0 and t1 is index 1.
-	rowT2 := rows[0]
-	rowT1 := rows[1]
+	// rows are newest-first: t3 (index 0), t2 (index 1), t1 (index 2).
+	rowT3 := rows[0]
+	rowT2 := rows[1]
+	rowT1 := rows[2]
 
 	if rowT1.ToolName != "read_file" {
 		t.Errorf("tool_name: got %q, want %q", rowT1.ToolName, "read_file")
@@ -288,6 +291,12 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 	}
 	if rowT2.Server != "" {
 		t.Errorf("server: got %q, want empty (nil target)", rowT2.Server)
+	}
+	if rowT3.ToolName != "" {
+		t.Errorf("tool_name: got %q, want empty", rowT3.ToolName)
+	}
+	if rowT3.Server != "jira" {
+		t.Errorf("server: got %q, want %q", rowT3.Server, "jira")
 	}
 }
 
