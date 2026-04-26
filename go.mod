@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/agent-receipts/ar/sdk/go v0.5.0
-	modernc.org/sqlite v1.49.1
+	modernc.org/sqlite v1.50.0
 )
 
 require (
