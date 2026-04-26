@@ -12,13 +12,23 @@ internal/store/         # Read-only SQLite access, queries, multi-DB
 internal/verify/        # Hash linkage and chain verification
 ```
 
+## Toolchain
+
+- **Language:** Go 1.26+
+- **SQLite:** modernc.org/sqlite (pure Go, no CGO)
+- **Frontend:** Single embedded HTML file with htmx + Tailwind CDN (no build step)
+- **Testing:** `go test`
+
 ## Quick reference
 
 | Task | Command |
 |------|---------|
 | Run | `go run ./cmd/dashboard -db path/to/receipts.db` |
+| Run (custom port) | `go run ./cmd/dashboard -db path/to/receipts.db -port 9090` |
 | Build | `go build -o dashboard ./cmd/dashboard` |
+| Build (make) | `make build` |
 | Test | `go test ./...` |
+| Test (make) | `make test` |
 | Lint | `go vet ./...` |
 
 ## Conventions
@@ -28,7 +38,9 @@ internal/verify/        # Hash linkage and chain verification
 - Pure Go SQLite (`modernc.org/sqlite`) — no CGO dependency
 - All web assets embedded via `//go:embed` — single binary distribution
 - The dashboard opens SQLite databases **read-only** — it must never write to receipt stores
-- Run `go vet` and `go test ./...` before committing
+- Run `go vet ./...` and `go test ./...` before committing
+- Tests sit alongside source files as `*_test.go`
+- Tests use the SDK's `store.Open()` to create seeded test databases, then open them read-only
 - Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`, etc.)
 
 ## Dependencies
