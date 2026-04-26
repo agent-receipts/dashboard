@@ -14,7 +14,7 @@ internal/verify/        # Hash linkage and chain verification
 
 ## Toolchain
 
-- **Language:** Go 1.22+
+- **Language:** Go 1.26+
 - **SQLite:** modernc.org/sqlite (pure Go, no CGO)
 - **Frontend:** Single embedded HTML file with htmx + Tailwind CDN (no build step)
 - **Testing:** `go test`
@@ -24,7 +24,7 @@ internal/verify/        # Hash linkage and chain verification
 | Task | Command |
 |------|---------|
 | Run | `go run ./cmd/dashboard -db path/to/receipts.db` |
-| Run (custom port) | `./dashboard -db path/to/receipts.db -port 9090` |
+| Run (custom port) | `go run ./cmd/dashboard -db path/to/receipts.db -port 9090` |
 | Build | `go build -o dashboard ./cmd/dashboard` |
 | Build (make) | `make build` |
 | Test | `go test ./...` |
