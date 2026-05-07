@@ -62,7 +62,11 @@ func main() {
 	flag.Parse()
 
 	if *dbPath == "" {
-		fmt.Fprintln(os.Stderr, "dashboard: cannot resolve home directory; pass -db <path/to/receipts.db>")
+		if defaultDB == "" {
+			fmt.Fprintln(os.Stderr, "dashboard: cannot resolve home directory; pass -db <path/to/receipts.db>")
+		} else {
+			fmt.Fprintln(os.Stderr, "dashboard: -db cannot be empty")
+		}
 		os.Exit(1)
 	}
 
