@@ -116,7 +116,7 @@ go vet ./...               # lint
 |---------|-------------|
 | [ar](https://github.com/agent-receipts/ar) | Agent Receipts Go SDK — receipt types, signing, and verification |
 | [mcp-proxy](https://github.com/agent-receipts/mcp-proxy) | MCP proxy — records agent activity as receipts transparently |
-| [openclaw](https://github.com/agent-receipts/openclaw) | VS Code extension for browsing receipts in your editor |
+| [openclaw](https://github.com/agent-receipts/openclaw) | Open-source autonomous personal AI agent |
 | [spec](https://github.com/agent-receipts/spec) | Agent Receipts protocol specification |
 
 ## Contributing
