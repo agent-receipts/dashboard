@@ -2,11 +2,11 @@
 
 # Agent Receipts Dashboard
 
-Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
+Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-receipts/ar) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
 
 [![CI](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/agent-receipts/dashboard)](https://github.com/agent-receipts/dashboard/releases/latest)
-[![Go](https://img.shields.io/badge/go-1.26%2B-blue)](https://golang.org)
+[![Go](https://img.shields.io/badge/go-1.26%2B-blue)](https://go.dev)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 </div>
@@ -31,7 +31,7 @@ dashboard
 **Pre-built binary** — download from [Releases](https://github.com/agent-receipts/dashboard/releases/latest), make it executable, then run:
 
 ```sh
-dashboard
+./dashboard
 ```
 
 **Go install:**
