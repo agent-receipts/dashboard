@@ -2,7 +2,7 @@
 
 # Agent Receipts Dashboard
 
-Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) audit trails. Single Go binary, no runtime dependencies.
+Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
 
 [![CI](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/agent-receipts/dashboard)](https://github.com/agent-receipts/dashboard/releases/latest)
