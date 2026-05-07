@@ -31,7 +31,8 @@ go test ./...
 | `go build ./cmd/dashboard` | Build the binary |
 | `go test ./... -count=1` | Run all tests (no cache) |
 | `go vet ./...` | Static analysis |
-| `go run ./cmd/dashboard -db path/to/receipts.db` | Run locally |
+| `go run ./cmd/dashboard` | Run locally (reads `~/.agent-receipts/receipts.db` by default) |
+| `go run ./cmd/dashboard -db path/to/receipts.db` | Run locally against a specific db |
 
 Or via Make:
 
@@ -40,7 +41,8 @@ Or via Make:
 | `make build` | Build the binary |
 | `make test` | Run tests |
 | `make lint` | Run `go vet` |
-| `make run DB=path/to/receipts.db` | Build and run |
+| `make run` | Build and run (reads `~/.agent-receipts/receipts.db` by default) |
+| `make run DB=path/to/receipts.db` | Build and run against a specific db |
 
 ## Development process
 

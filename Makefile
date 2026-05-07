@@ -10,7 +10,7 @@ lint:
 	go vet ./...
 
 run: build
-	./dashboard -db $(DB)
+	./dashboard $(if $(DB),-db "$(DB)")
 
 clean:
 	rm -f dashboard

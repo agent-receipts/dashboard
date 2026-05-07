@@ -23,8 +23,9 @@ internal/verify/        # Hash linkage and chain verification
 
 | Task | Command |
 |------|---------|
-| Run | `go run ./cmd/dashboard -db path/to/receipts.db` |
-| Run (custom port) | `go run ./cmd/dashboard -db path/to/receipts.db -port 9090` |
+| Run (default `~/.agent-receipts/receipts.db`) | `go run ./cmd/dashboard` |
+| Run (custom db) | `go run ./cmd/dashboard -db path/to/receipts.db` |
+| Run (custom port) | `go run ./cmd/dashboard -port 9090` |
 | Build | `go build -o dashboard ./cmd/dashboard` |
 | Build (make) | `make build` |
 | Test | `go test ./...` |
