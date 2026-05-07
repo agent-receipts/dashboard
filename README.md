@@ -1,69 +1,129 @@
+<div align="center">
+
 # Agent Receipts Dashboard
 
-Lightweight local web UI for browsing [Agent Receipt](https://github.com/agent-receipts/ar) SQLite databases. Single Go binary, no backend dependencies. The UI loads htmx and Tailwind CSS from CDNs.
+Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-receipts/ar) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
+
+[![CI](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/agent-receipts/dashboard)](https://github.com/agent-receipts/dashboard/releases/latest)
+[![Go](https://img.shields.io/badge/go-1.26%2B-blue)](https://go.dev)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
+</div>
 
 ![Dashboard overview showing stats, risk distribution, and recent receipts](docs/screenshot.png)
 
-## Features
+## What is this?
 
-- Read-only viewer for receipt databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
-- Filter receipts by action type, risk level, status, time range, and chain ID
-- Chain verification — validates hash linkage and sequence ordering
-- Receipt detail view with raw JSON
-- Dark theme with risk-level color coding
+[Agent Receipts](https://github.com/agent-receipts/ar) is a protocol for cryptographically signed, tamper-evident audit trails produced by AI agents. Every action an agent takes — file writes, API calls, shell commands — is recorded as a receipt: signed, chained, and verifiable.
 
-## Install
+The dashboard is a read-only local viewer for those receipt databases. Point it at any SQLite database written by an Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy, then browse, filter, and verify your agent's activity in your browser.
 
-Homebrew (macOS / Linux):
+## Quick start
+
+**Homebrew** (macOS / Linux):
 
 ```sh
 brew install agent-receipts/tap/dashboard
+dashboard
 ```
 
-Pre-built binaries for darwin/linux (amd64, arm64) are attached to each [GitHub release](https://github.com/agent-receipts/dashboard/releases).
+**Pre-built binary** — download from [Releases](https://github.com/agent-receipts/dashboard/releases/latest), make it executable, then run:
 
-With a Go toolchain:
+```sh
+./dashboard
+```
+
+**Go install:**
 
 ```sh
 go install github.com/agent-receipts/dashboard/cmd/dashboard@latest
+dashboard
 ```
 
-Or build from source:
+**Build from source:**
 
 ```sh
 git clone https://github.com/agent-receipts/dashboard.git
 cd dashboard
 make build
+./dashboard
 ```
 
-## Usage
+Opens http://localhost:8080 and reads `~/.agent-receipts/receipts.db` by default — the same path used by the SDKs and MCP proxy.
+
+## CLI reference
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-db` | `~/.agent-receipts/receipts.db` | Path to receipts SQLite database |
+| `-port` | `8080` | HTTP server port |
+| `-host` | `127.0.0.1` | Address to bind (use `0.0.0.0` for all interfaces) |
 
 ```sh
-# Reads ~/.agent-receipts/receipts.db by default (matches mcp-proxy / SDK convention)
+# Default — reads ~/.agent-receipts/receipts.db
 dashboard
 
-# Point at a different receipt database
-dashboard -db ./receipts.db
+# Custom database
+dashboard -db ./my-receipts.db
 
-# Custom port
-dashboard -port 9090
+# Custom port and bind address
+dashboard -host 0.0.0.0 -port 9090
 ```
 
-Then open http://localhost:8080 in your browser.
+## Features
 
-## How it works
+- **Read-only** — opens the SQLite database in read-only mode and never modifies your data
+- **Universal** — reads databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
+- **Filter** — narrow receipts by action type, risk level, status, time range, and chain ID
+- **Chain verification** — validates hash linkage and sequence ordering for any chain
+- **Detail view** — inspect any receipt with its full raw JSON payload
+- **Dark theme** — risk-level color coding for at-a-glance triage
 
-The dashboard opens your SQLite receipt database in **read-only** mode and serves a web UI at localhost. It never modifies your data.
+## Project structure
 
-All three Agent Receipts SDKs and the MCP proxy use an identical SQLite schema for receipt storage. The dashboard reads from any of them.
+| Path | Description |
+|------|-------------|
+| `cmd/dashboard/` | CLI entry point and flag parsing |
+| `internal/server/` | HTTP server, routes, and handlers |
+| `internal/server/static/` | Embedded HTML with htmx + Tailwind (no build step) |
+| `internal/store/` | Read-only SQLite access, queries, and filters |
+| `internal/verify/` | Hash linkage and chain verification |
 
 ## Development
 
+**Requirements:** Go 1.26+ (no CGO — SQLite driver is pure Go).
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Build the binary |
+| `make test` | Run all tests |
+| `make lint` | Run `go vet` |
+| `make run` | Build and run (default database) |
+| `make run DB=path/to/receipts.db` | Build and run against a specific database |
+
+Or with the Go toolchain directly:
+
 ```sh
-go test ./...    # run tests
-go vet ./...     # lint
-make run DB=./test.db  # build and run
+go build ./cmd/dashboard   # build
+go test ./...              # test
+go vet ./...               # lint
 ```
+
+## Ecosystem
+
+| Project | Description |
+|---------|-------------|
+| [ar](https://github.com/agent-receipts/ar) | Agent Receipts Go SDK — receipt types, signing, and verification |
+| [mcp-proxy](https://github.com/agent-receipts/ar/tree/main/mcp-proxy) | MCP proxy — records agent activity as receipts transparently |
+| [openclaw](https://github.com/agent-receipts/openclaw) | Open-source autonomous personal AI agent |
+| [spec](https://github.com/agent-receipts/ar/tree/main/spec) | Agent Receipts protocol specification |
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+For security vulnerabilities, use [GitHub Security Advisories](https://github.com/agent-receipts/dashboard/security/advisories/new) rather than public issues. See [SECURITY.md](SECURITY.md).
 
 ## License
 
