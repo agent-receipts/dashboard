@@ -39,11 +39,14 @@ make build
 ## Usage
 
 ```sh
-# Point at a receipt database
+# Reads ~/.agent-receipts/receipts.db by default (matches mcp-proxy / SDK convention)
+dashboard
+
+# Point at a different receipt database
 dashboard -db ./receipts.db
 
 # Custom port
-dashboard -db ./receipts.db -port 9090
+dashboard -port 9090
 ```
 
 Then open http://localhost:8080 in your browser.
