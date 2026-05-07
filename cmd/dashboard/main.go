@@ -61,6 +61,13 @@ func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
 	flag.Parse()
 
+	dbExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "db" {
+			dbExplicit = true
+		}
+	})
+
 	if *dbPath == "" {
 		if defaultDB == "" {
 			fmt.Fprintln(os.Stderr, "dashboard: cannot resolve home directory; pass -db <path/to/receipts.db>")
@@ -72,7 +79,7 @@ func main() {
 
 	reader, err := store.OpenReadOnly(*dbPath)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && *dbPath == defaultDB {
+		if errors.Is(err, fs.ErrNotExist) && !dbExplicit {
 			log.Fatalf("no receipts database at default path %s\n\nPass -db <path/to/receipts.db>, or run mcp-proxy / an Agent Receipts SDK to create one.", defaultDB)
 		}
 		log.Fatalf("open database: %v", err)
