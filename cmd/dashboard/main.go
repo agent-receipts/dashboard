@@ -34,16 +34,28 @@ func resolveVersion() string {
 	return "dev"
 }
 
-// defaultDBPath returns the conventional `~/.agent-receipts/receipts.db`
-// shared by mcp-proxy and the daemon. Returns "" if the home directory
-// cannot be resolved to an absolute path; main surfaces a clear error in
-// that case.
-func defaultDBPath() string {
+// xdgDataHome returns the XDG data home directory. It honours $XDG_DATA_HOME
+// when set to an absolute path, and falls back to ~/.local/share.
+func xdgDataHome() string {
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" && filepath.IsAbs(dataHome) {
+		return dataHome
+	}
 	home, err := userHomeDir()
 	if err != nil || home == "" || !filepath.IsAbs(home) {
 		return ""
 	}
-	return filepath.Join(home, ".agent-receipts", "receipts.db")
+	return filepath.Join(home, ".local", "share")
+}
+
+// defaultDBPath returns the conventional ~/.local/share/agent-receipts/receipts.db
+// shared by mcp-proxy, daemon, and hook. Returns "" if the data home directory
+// cannot be resolved; main surfaces a clear error in that case.
+func defaultDBPath() string {
+	dh := xdgDataHome()
+	if dh == "" {
+		return ""
+	}
+	return filepath.Join(dh, "agent-receipts", "receipts.db")
 }
 
 func main() {
