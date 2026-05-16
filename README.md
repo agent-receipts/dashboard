@@ -50,18 +50,18 @@ make build
 ./dashboard
 ```
 
-Opens http://localhost:8080 and reads `~/.agent-receipts/receipts.db` by default — the same path used by the SDKs and MCP proxy.
+Opens http://localhost:8080 and reads `~/.local/share/agent-receipts/receipts.db` by default — the same path used by the SDKs and MCP proxy.
 
 ## CLI reference
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-db` | `~/.agent-receipts/receipts.db` | Path to receipts SQLite database |
+| `-db` | `~/.local/share/agent-receipts/receipts.db` | Path to receipts SQLite database |
 | `-port` | `8080` | HTTP server port |
 | `-host` | `127.0.0.1` | Address to bind (use `0.0.0.0` for all interfaces) |
 
 ```sh
-# Default — reads ~/.agent-receipts/receipts.db
+# Reads ~/.local/share/agent-receipts/receipts.db by default
 dashboard
 
 # Custom database
