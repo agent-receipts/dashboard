@@ -218,6 +218,39 @@ func TestReader_ListReceipts_FilterByTimeRange(t *testing.T) {
 	}
 }
 
+func TestReader_ListReceipts_FilterBySince(t *testing.T) {
+	dbPath := seedFileDB(t)
+	r, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	// Since is exclusive: a watermark equal to a row's timestamp must not
+	// re-emit that row (otherwise live polling would surface duplicates).
+	rows, err := r.ListReceipts(Filter{Since: strPtr("2026-04-01T10:01:00Z")})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+	for _, row := range rows {
+		if row.Timestamp <= "2026-04-01T10:01:00Z" {
+			t.Errorf("row %s has timestamp %q, want strictly greater than watermark", row.ID, row.Timestamp)
+		}
+	}
+
+	// A watermark at or beyond the newest row returns nothing.
+	rows, err = r.ListReceipts(Filter{Since: strPtr("2026-04-01T11:01:00Z")})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d rows, want 0", len(rows))
+	}
+}
+
 func TestReader_ListReceipts_Limit(t *testing.T) {
 	dbPath := seedFileDB(t)
 	r, err := OpenReadOnly(dbPath)

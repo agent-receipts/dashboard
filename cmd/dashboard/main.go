@@ -11,10 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"time"
 
 	"github.com/agent-receipts/dashboard/internal/server"
 	"github.com/agent-receipts/dashboard/internal/store"
 )
+
+// pollIntervalEnv is the environment variable used to override the default
+// live-polling cadence. Parsed as a Go time.Duration.
+const pollIntervalEnv = "AR_DASHBOARD_POLL_INTERVAL"
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z".
 // Falls back to the module version from Go's build info (set automatically
@@ -47,6 +52,23 @@ func xdgDataHome() string {
 	return filepath.Join(home, ".local", "share")
 }
 
+// resolvePollInterval returns the polling cadence from the environment if set,
+// otherwise the server default. An empty env var is treated as unset.
+func resolvePollInterval() (time.Duration, error) {
+	v := os.Getenv(pollIntervalEnv)
+	if v == "" {
+		return server.DefaultPollInterval, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be positive, got %s", d)
+	}
+	return d, nil
+}
+
 // defaultDBPath returns the conventional ~/.local/share/agent-receipts/receipts.db
 // shared by mcp-proxy, daemon, and hook. Returns "" if the data home directory
 // cannot be resolved; main surfaces a clear error in that case.
@@ -68,10 +90,19 @@ func main() {
 	}
 
 	defaultDB := defaultDBPath()
+	defaultPoll, err := resolvePollInterval()
+	if err != nil {
+		log.Fatalf("invalid %s: %v", pollIntervalEnv, err)
+	}
 	dbPath := flag.String("db", defaultDB, "path to receipts SQLite database")
 	host := flag.String("host", "127.0.0.1", "address to bind to (use 0.0.0.0 for all interfaces)")
 	port := flag.Int("port", 8080, "HTTP server port")
+	pollInterval := flag.Duration("poll-interval", defaultPoll, "interval between live receipt polls (e.g. 5s)")
 	flag.Parse()
+
+	if *pollInterval <= 0 {
+		log.Fatalf("poll-interval must be positive, got %s", *pollInterval)
+	}
 
 	dbExplicit := false
 	flag.Visit(func(f *flag.Flag) {
@@ -98,10 +129,11 @@ func main() {
 	}
 	defer reader.Close()
 
-	srv := server.New(reader)
+	srv := server.New(reader, server.Config{PollInterval: *pollInterval})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)
 	log.Printf("reading from %s (read-only)", *dbPath)
+	log.Printf("polling for new receipts every %s", *pollInterval)
 
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatalf("server: %v", err)

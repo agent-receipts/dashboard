@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
@@ -73,7 +74,7 @@ func setupServer(t *testing.T) *Server {
 		t.Fatalf("open reader: %v", err)
 	}
 	t.Cleanup(func() { reader.Close() })
-	return New(reader)
+	return New(reader, Config{})
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -148,6 +149,70 @@ func TestReceiptsEndpoint_FilterByRisk(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Errorf("got %d high-risk rows, want 1", len(rows))
+	}
+}
+
+func TestReceiptsEndpoint_FilterBySince(t *testing.T) {
+	srv := setupServer(t)
+	req := httptest.NewRequest("GET", "/api/receipts?since=2026-04-01T10:01:00Z", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// since is exclusive: only the receipt strictly newer than the watermark.
+	if len(rows) != 1 {
+		t.Errorf("got %d rows, want 1", len(rows))
+	}
+	if len(rows) > 0 && rows[0].ID != "urn:receipt:003" {
+		t.Errorf("got ID %q, want urn:receipt:003", rows[0].ID)
+	}
+}
+
+func TestConfigEndpoint(t *testing.T) {
+	dbPath := seedTestDB(t)
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+
+	cases := []struct {
+		name   string
+		cfg    Config
+		wantMs int64
+	}{
+		{"zero falls back to default", Config{}, DefaultPollInterval.Milliseconds()},
+		{"explicit interval is echoed", Config{PollInterval: 2500 * time.Millisecond}, 2500},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(reader, tc.cfg)
+			req := httptest.NewRequest("GET", "/api/config", nil)
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("got status %d, want 200", w.Code)
+			}
+			var got struct {
+				PollIntervalMs int64 `json:"poll_interval_ms"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got.PollIntervalMs != tc.wantMs {
+				t.Errorf("poll_interval_ms = %d, want %d", got.PollIntervalMs, tc.wantMs)
+			}
+		})
 	}
 }
 

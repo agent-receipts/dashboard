@@ -4,6 +4,9 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/agent-receipts/dashboard/internal/server"
 )
 
 func TestDefaultDBPath(t *testing.T) {
@@ -44,6 +47,41 @@ func TestDefaultDBPath(t *testing.T) {
 			userHomeDir = func() (string, error) { return tc.home, tc.homeErr }
 			if got := defaultDBPath(); got != tc.want {
 				t.Errorf("defaultDBPath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolvePollInterval(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"unset uses server default", "", server.DefaultPollInterval, false},
+		{"valid duration is honoured", "2s", 2 * time.Second, false},
+		{"sub-second duration is honoured", "250ms", 250 * time.Millisecond, false},
+		{"unparseable rejected", "five seconds", 0, true},
+		{"zero rejected", "0s", 0, true},
+		{"negative rejected", "-1s", 0, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(pollIntervalEnv, tc.env)
+			got, err := resolvePollInterval()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %s", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %s, want %s", got, tc.want)
 			}
 		})
 	}

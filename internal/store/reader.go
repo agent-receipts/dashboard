@@ -66,6 +66,7 @@ type Filter struct {
 	Status     *string
 	After      *string // ISO 8601 timestamp, inclusive
 	Before     *string // ISO 8601 timestamp, inclusive
+	Since      *string // ISO 8601 timestamp, exclusive — watermark for live polling
 	Limit      *int
 }
 
@@ -147,6 +148,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	if f.Before != nil {
 		conds = append(conds, "timestamp <= ?")
 		args = append(args, *f.Before)
+	}
+	if f.Since != nil {
+		conds = append(conds, "timestamp > ?")
+		args = append(args, *f.Since)
 	}
 
 	where := ""
