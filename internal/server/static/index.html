@@ -349,7 +349,7 @@
           <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
           <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
-          <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${truncate(r.chain_id, 20)}</td>
+          <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${escapeHtml(truncate(r.chain_id, 20))}</td>
           <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
         </tr>
       `;
@@ -675,10 +675,12 @@
       // Overview keeps the recent list bounded and its stats in sync.
       if (poller.activeView === 'overview') {
         while (tbody.rows.length > RECENT_LIMIT) {
-          const dropped = tbody.rows[tbody.rows.length - 1];
-          const id = dropped.dataset.receiptId;
-          if (id) poller.knownIds.delete(id);
-          dropped.remove();
+          // Trim from the DOM only — leave the id in knownIds. Removing it
+          // would re-flash boundary-timestamp rows on the next inclusive
+          // `since` poll. knownIds growth is bounded by traffic volume; the
+          // overview's only callers are the initial fetch (≤ store limit)
+          // and live polls (≤ store limit per call).
+          tbody.rows[tbody.rows.length - 1].remove();
         }
         refreshOverviewStats();
       }

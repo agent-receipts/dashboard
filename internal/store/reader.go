@@ -167,6 +167,17 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		limit = *f.Limit
 	}
 
+	// When Since is set we are acting as a chronological tail: order ASC so a
+	// burst larger than the LIMIT is drained correctly across successive polls
+	// (the client advances the watermark to the newest returned row, and the
+	// next call picks up from there). DESC + LIMIT would silently skip the
+	// middle of an overflow. The id tie-break keeps the order deterministic
+	// across rows that share a timestamp.
+	orderBy := "timestamp DESC"
+	if f.Since != nil {
+		orderBy = "timestamp ASC, id ASC"
+	}
+
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -174,8 +185,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        risk_level, status,
 		        timestamp, issuer_id, COALESCE(principal_id, ''),
 		        receipt_hash, COALESCE(previous_receipt_hash, '')
-		 FROM receipts %s ORDER BY timestamp DESC LIMIT ?`,
-		where,
+		 FROM receipts %s ORDER BY %s LIMIT ?`,
+		where, orderBy,
 	)
 	args = append(args, limit)
 

@@ -260,6 +260,57 @@ func TestReader_ListReceipts_FilterBySince(t *testing.T) {
 	}
 }
 
+func TestReader_ListReceipts_Since_DrainsBurstAcrossPolls(t *testing.T) {
+	// A burst larger than the LIMIT must not leak rows: with `Since` set the
+	// query orders ASC, so two successive polls (advancing the watermark)
+	// recover every row instead of dropping the middle of the range.
+	dbPath := seedFileDB(t)
+	r, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	since := "2026-04-01T10:00:00Z"
+	limit := 3
+
+	first, err := r.ListReceipts(Filter{Since: &since, Limit: &limit})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first) != 3 {
+		t.Fatalf("first page got %d rows, want 3", len(first))
+	}
+	// ASC ordering so the oldest rows come first.
+	for i := 1; i < len(first); i++ {
+		if first[i-1].Timestamp > first[i].Timestamp {
+			t.Errorf("row %d (%s) older than row %d (%s); want ASC order",
+				i, first[i].Timestamp, i-1, first[i-1].Timestamp)
+		}
+	}
+
+	// Advance the watermark to the newest returned row and poll again.
+	watermark := first[len(first)-1].Timestamp
+	second, err := r.ListReceipts(Filter{Since: &watermark, Limit: &limit})
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	// Merge by id (the inclusive boundary may re-emit one row; the client
+	// dedups, which we mirror here) and confirm we recovered every row in
+	// the burst — not the middle-of-range silent drop that DESC + LIMIT
+	// would have produced.
+	seen := map[string]bool{}
+	for _, row := range first {
+		seen[row.ID] = true
+	}
+	for _, row := range second {
+		seen[row.ID] = true
+	}
+	if len(seen) != 5 {
+		t.Errorf("paginated drain saw %d distinct rows, want 5", len(seen))
+	}
+}
+
 func TestReader_ListReceipts_Limit(t *testing.T) {
 	dbPath := seedFileDB(t)
 	r, err := OpenReadOnly(dbPath)
