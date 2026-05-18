@@ -186,6 +186,7 @@
 
     const poller = {
       intervalMs: POLL_FALLBACK_MS,
+      serverTime: null,        // ISO timestamp returned by /api/config, used as empty-store baseline
       timer: null,
       activeView: null,        // 'overview' | 'receipts' | null
       containerId: null,       // tbody container id for the active view
@@ -193,6 +194,10 @@
       watermark: null,         // ISO timestamp of newest row currently displayed
       knownIds: new Set(),     // dedup across polls
       emptyCount: 0,
+      // generation invalidates in-flight requests after a view/filter change.
+      // Both loadOverview/loadReceipts and pollOnce capture it before awaiting
+      // and bail on mismatch so stale responses can't pollute the new view.
+      generation: 0,
     };
 
     // View switching
@@ -210,15 +215,28 @@
 
     // Overview
     async function loadOverview() {
+      const gen = ++poller.generation;
       try {
         const stats = await fetchJSON('/api/stats');
+        if (gen !== poller.generation) return;
         renderStats(stats);
         const receipts = await fetchJSON('/api/receipts');
+        if (gen !== poller.generation) return;
         const recent = receipts.slice(0, RECENT_LIMIT);
         renderRecentReceipts(recent);
         startPolling('overview', 'recent-receipts', recent, () => ({}));
       } catch (err) {
         console.error('load overview:', err);
+      }
+    }
+
+    async function refreshOverviewStats() {
+      try {
+        const stats = await fetchJSON('/api/stats');
+        if (poller.activeView !== 'overview') return;
+        renderStats(stats);
+      } catch (err) {
+        console.warn('refresh stats:', err);
       }
     }
 
@@ -304,8 +322,10 @@
       const params = new URLSearchParams(filters);
 
       stopPolling();
+      const gen = ++poller.generation;
       try {
         const receipts = await fetchJSON('/api/receipts?' + params.toString());
+        if (gen !== poller.generation) return;
         renderReceiptsTable(receipts, 'receipts-table');
         startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
       } catch (err) {
@@ -556,6 +576,7 @@
     // Live polling
     function startPolling(view, containerId, initialRows, filtersFn) {
       stopPolling();
+      poller.generation++;
       poller.activeView = view;
       poller.containerId = containerId;
       poller.filtersFn = filtersFn;
@@ -564,9 +585,9 @@
         (max, r) => (r.timestamp && r.timestamp > max) ? r.timestamp : max,
         '',
       );
-      // Fall back to "now" when there's no baseline so an empty store still
-      // picks up the first real receipt that arrives after page load.
-      poller.watermark = maxSeen || new Date().toISOString();
+      // Prefer the server clock when there's no baseline so an empty store
+      // still picks up new receipts even if the browser clock is skewed.
+      poller.watermark = maxSeen || poller.serverTime || new Date().toISOString();
       poller.emptyCount = 0;
       schedulePoll(poller.intervalMs);
     }
@@ -596,19 +617,23 @@
     async function pollOnce() {
       if (!poller.activeView) return;
       if (document.visibilityState !== 'visible') return; // resumed by visibilitychange
+      const gen = poller.generation;
       const params = new URLSearchParams(poller.filtersFn ? poller.filtersFn() : {});
       params.set('since', poller.watermark);
       let rows;
       try {
         rows = await fetchJSON('/api/receipts?' + params.toString());
       } catch (err) {
+        if (gen !== poller.generation) return;
         console.error('poll:', err);
         poller.emptyCount++;
         schedulePoll(nextPollDelay());
         return;
       }
 
-      // The view or filters may have changed while the request was in flight.
+      // The view or filters may have changed while the request was in flight;
+      // a stale response must not pollute the freshly-rendered table.
+      if (gen !== poller.generation) return;
       if (!poller.activeView) return;
 
       const fresh = (rows || []).filter(r => !poller.knownIds.has(r.id));
@@ -628,6 +653,7 @@
         renderReceiptsTable(fresh, poller.containerId);
         fresh.forEach(r => poller.knownIds.add(r.id));
         bumpWatermark(fresh);
+        if (poller.activeView === 'overview') refreshOverviewStats();
         showLiveToast(fresh.length);
         return;
       }
@@ -639,7 +665,7 @@
       sorted.forEach(r => poller.knownIds.add(r.id));
       bumpWatermark(sorted);
 
-      // Overview keeps the recent list bounded.
+      // Overview keeps the recent list bounded and its stats in sync.
       if (poller.activeView === 'overview') {
         while (tbody.rows.length > RECENT_LIMIT) {
           const dropped = tbody.rows[tbody.rows.length - 1];
@@ -647,6 +673,7 @@
           if (id) poller.knownIds.delete(id);
           dropped.remove();
         }
+        refreshOverviewStats();
       }
 
       showLiveToast(fresh.length);
@@ -683,8 +710,12 @@
     async function loadPollConfig() {
       try {
         const cfg = await fetchJSON('/api/config');
-        if (cfg && Number.isFinite(cfg.poll_interval_ms) && cfg.poll_interval_ms > 0) {
+        if (!cfg) return;
+        if (Number.isFinite(cfg.poll_interval_ms) && cfg.poll_interval_ms > 0) {
           poller.intervalMs = cfg.poll_interval_ms;
+        }
+        if (typeof cfg.server_time === 'string' && cfg.server_time) {
+          poller.serverTime = cfg.server_time;
         }
       } catch (err) {
         console.warn('config:', err);

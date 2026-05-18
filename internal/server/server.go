@@ -64,8 +64,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	// server_time gives the frontend an authoritative watermark for live polling
+	// when the store is empty at load — relying on the client's wall clock would
+	// silently drop receipts whenever the two clocks disagree.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"poll_interval_ms": s.cfg.PollInterval.Milliseconds(),
+		"server_time":      time.Now().UTC().Format(time.RFC3339),
 	})
 }
 

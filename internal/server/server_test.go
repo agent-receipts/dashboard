@@ -167,12 +167,15 @@ func TestReceiptsEndpoint_FilterBySince(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// since is exclusive: only the receipt strictly newer than the watermark.
-	if len(rows) != 1 {
-		t.Errorf("got %d rows, want 1", len(rows))
+	// since is inclusive: the row at the boundary plus everything newer.
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
 	}
-	if len(rows) > 0 && rows[0].ID != "urn:receipt:003" {
-		t.Errorf("got ID %q, want urn:receipt:003", rows[0].ID)
+	gotIDs := map[string]bool{rows[0].ID: true, rows[1].ID: true}
+	for _, want := range []string{"urn:receipt:002", "urn:receipt:003"} {
+		if !gotIDs[want] {
+			t.Errorf("missing %s in response", want)
+		}
 	}
 }
 
@@ -204,13 +207,17 @@ func TestConfigEndpoint(t *testing.T) {
 				t.Fatalf("got status %d, want 200", w.Code)
 			}
 			var got struct {
-				PollIntervalMs int64 `json:"poll_interval_ms"`
+				PollIntervalMs int64  `json:"poll_interval_ms"`
+				ServerTime     string `json:"server_time"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
 			if got.PollIntervalMs != tc.wantMs {
 				t.Errorf("poll_interval_ms = %d, want %d", got.PollIntervalMs, tc.wantMs)
+			}
+			if _, err := time.Parse(time.RFC3339, got.ServerTime); err != nil {
+				t.Errorf("server_time %q is not RFC3339: %v", got.ServerTime, err)
 			}
 		})
 	}

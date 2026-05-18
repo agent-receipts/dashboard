@@ -66,7 +66,7 @@ type Filter struct {
 	Status     *string
 	After      *string // ISO 8601 timestamp, inclusive
 	Before     *string // ISO 8601 timestamp, inclusive
-	Since      *string // ISO 8601 timestamp, exclusive — watermark for live polling
+	Since      *string // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
 	Limit      *int
 }
 
@@ -150,7 +150,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		args = append(args, *f.Before)
 	}
 	if f.Since != nil {
-		conds = append(conds, "timestamp > ?")
+		// Inclusive so receipts that share a second with the watermark aren't
+		// silently lost when timestamps lack sub-second precision; the client
+		// dedups by id.
+		conds = append(conds, "timestamp >= ?")
 		args = append(args, *f.Since)
 	}
 

@@ -226,23 +226,32 @@ func TestReader_ListReceipts_FilterBySince(t *testing.T) {
 	}
 	defer r.Close()
 
-	// Since is exclusive: a watermark equal to a row's timestamp must not
-	// re-emit that row (otherwise live polling would surface duplicates).
+	// Since is inclusive: a row whose timestamp equals the watermark must be
+	// returned so callers don't silently lose receipts that share a second
+	// with the boundary (timestamps may have only second precision). The
+	// client dedups against the rows it already shows.
 	rows, err := r.ListReceipts(Filter{Since: strPtr("2026-04-01T10:01:00Z")})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("got %d rows, want 3", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("got %d rows, want 4", len(rows))
 	}
+	var sawBoundary bool
 	for _, row := range rows {
-		if row.Timestamp <= "2026-04-01T10:01:00Z" {
-			t.Errorf("row %s has timestamp %q, want strictly greater than watermark", row.ID, row.Timestamp)
+		if row.Timestamp < "2026-04-01T10:01:00Z" {
+			t.Errorf("row %s has timestamp %q, want >= watermark", row.ID, row.Timestamp)
+		}
+		if row.ID == "urn:receipt:002" {
+			sawBoundary = true
 		}
 	}
+	if !sawBoundary {
+		t.Error("inclusive watermark must re-emit the row at the boundary")
+	}
 
-	// A watermark at or beyond the newest row returns nothing.
-	rows, err = r.ListReceipts(Filter{Since: strPtr("2026-04-01T11:01:00Z")})
+	// A watermark strictly newer than every row returns nothing.
+	rows, err = r.ListReceipts(Filter{Since: strPtr("2027-01-01T00:00:00Z")})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
