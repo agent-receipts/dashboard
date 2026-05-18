@@ -53,6 +53,22 @@
       border-radius: 6px; padding: 6px 10px; font-size: 0.875rem;
     }
     select:focus, input[type="text"]:focus { outline: none; border-color: #58a6ff; }
+
+    @keyframes row-flash {
+      0% { background-color: rgba(88,166,255,0.25); }
+      100% { background-color: transparent; }
+    }
+    tr.row-new { animation: row-flash 2.5s ease-out; }
+
+    #live-toast {
+      position: fixed; bottom: 20px; right: 20px; z-index: 60;
+      background: #161b22; border: 1px solid #30363d; border-left: 3px solid #58a6ff;
+      color: #e6edf3; font-size: 0.875rem; padding: 8px 14px; border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      opacity: 0; transform: translateY(10px); pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    #live-toast.show { opacity: 1; transform: translateY(0); }
   </style>
 </head>
 <body class="min-h-screen">
@@ -131,6 +147,9 @@
       <div id="chains-list"></div>
     </div>
 
+    <!-- Live polling toast -->
+    <div id="live-toast" role="status" aria-live="polite"></div>
+
     <!-- Receipt detail modal -->
     <div id="receipt-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4">
       <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto">
@@ -158,6 +177,29 @@
     // State
     let debounceTimer = null;
 
+    // Live polling state. The poller tails /api/receipts using `since=<timestamp>`
+    // and prepends fresh rows into whichever view is currently visible.
+    const POLL_FALLBACK_MS = 5000;
+    const POLL_BACKOFF_AFTER_EMPTY = 3;
+    const POLL_MAX_INTERVAL_MS = 30000;
+    const RECENT_LIMIT = 10;
+
+    const poller = {
+      intervalMs: POLL_FALLBACK_MS,
+      serverTime: null,        // ISO timestamp returned by /api/config, used as empty-store baseline
+      timer: null,
+      activeView: null,        // 'overview' | 'receipts' | null
+      containerId: null,       // tbody container id for the active view
+      filtersFn: null,         // () => object of query params (filters)
+      watermark: null,         // ISO timestamp of newest row currently displayed
+      knownIds: new Set(),     // dedup across polls
+      emptyCount: 0,
+      // generation invalidates in-flight requests after a view/filter change.
+      // Both loadOverview/loadReceipts and pollOnce capture it before awaiting
+      // and bail on mismatch so stale responses can't pollute the new view.
+      generation: 0,
+    };
+
     // View switching
     function showView(view) {
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
@@ -165,6 +207,7 @@
       document.getElementById('view-' + view).classList.remove('hidden');
       document.getElementById('tab-' + view).classList.add('active');
 
+      stopPolling();
       if (view === 'overview') loadOverview();
       if (view === 'receipts') loadReceipts();
       if (view === 'chains') loadChains();
@@ -172,13 +215,30 @@
 
     // Overview
     async function loadOverview() {
+      const gen = ++poller.generation;
       try {
         const stats = await fetchJSON('/api/stats');
+        if (gen !== poller.generation) return;
         renderStats(stats);
         const receipts = await fetchJSON('/api/receipts');
-        renderRecentReceipts(receipts.slice(0, 10));
+        if (gen !== poller.generation) return;
+        renderRecentReceipts(receipts.slice(0, RECENT_LIMIT));
+        // Seed polling from the full fetch, not the displayed slice, so the
+        // next poll doesn't surface receipts that share the watermark
+        // second but fell below RECENT_LIMIT in tie-ordering.
+        startPolling('overview', 'recent-receipts', receipts, () => ({}));
       } catch (err) {
         console.error('load overview:', err);
+      }
+    }
+
+    async function refreshOverviewStats() {
+      try {
+        const stats = await fetchJSON('/api/stats');
+        if (poller.activeView !== 'overview') return;
+        renderStats(stats);
+      } catch (err) {
+        console.warn('refresh stats:', err);
       }
     }
 
@@ -246,21 +306,30 @@
       debounceTimer = setTimeout(loadReceipts, 300);
     }
 
-    async function loadReceipts() {
-      const params = new URLSearchParams();
+    function currentReceiptFilters() {
+      const filters = {};
       const risk = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
       const chain = document.getElementById('filter-chain').value;
+      if (risk) filters.risk_level = risk;
+      if (status) filters.status = status;
+      if (action) filters.action_type = action;
+      if (chain) filters.chain_id = chain;
+      return filters;
+    }
 
-      if (risk) params.set('risk_level', risk);
-      if (status) params.set('status', status);
-      if (action) params.set('action_type', action);
-      if (chain) params.set('chain_id', chain);
+    async function loadReceipts() {
+      const filters = currentReceiptFilters();
+      const params = new URLSearchParams(filters);
 
+      stopPolling();
+      const gen = ++poller.generation;
       try {
         const receipts = await fetchJSON('/api/receipts?' + params.toString());
+        if (gen !== poller.generation) return;
         renderReceiptsTable(receipts, 'receipts-table');
+        startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
       } catch (err) {
         console.error('load receipts:', err);
       }
@@ -268,6 +337,26 @@
 
     function renderRecentReceipts(receipts) {
       renderReceiptsTable(receipts, 'recent-receipts');
+    }
+
+    function receiptRowHTML(r, opts) {
+      const flash = opts && opts.flash ? ' row-new' : '';
+      return `
+        <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer${flash}" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+          <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
+          <td class="py-2 pr-4 font-mono text-xs text-[#7d8590]">${r.server ? escapeHtml(r.server) : '<span class="text-[#484f58]">—</span>'}</td>
+          <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
+          <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
+          <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+          <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
+          <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${escapeHtml(truncate(r.chain_id, 20))}</td>
+          <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
+        </tr>
+      `;
+    }
+
+    function tbodyIdFor(containerId) {
+      return 'tbody-' + containerId;
     }
 
     function renderReceiptsTable(receipts, containerId) {
@@ -290,19 +379,8 @@
                 <th class="pb-2 pr-4">Seq</th>
               </tr>
             </thead>
-            <tbody>
-              ${receipts.map(r => `
-                <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
-                  <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
-                  <td class="py-2 pr-4 font-mono text-xs text-[#7d8590]">${r.server ? escapeHtml(r.server) : '<span class="text-[#484f58]">—</span>'}</td>
-                  <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
-                  <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
-                  <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
-                  <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
-                  <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${truncate(r.chain_id, 20)}</td>
-                  <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
-                </tr>
-              `).join('')}
+            <tbody id="${tbodyIdFor(containerId)}">
+              ${receipts.map(r => receiptRowHTML(r)).join('')}
             </tbody>
           </table>
         </div>
@@ -497,6 +575,162 @@
       document.getElementById('chain-modal').classList.add('hidden');
     }
 
+    // Live polling
+    function startPolling(view, containerId, initialRows, filtersFn) {
+      stopPolling();
+      poller.generation++;
+      poller.activeView = view;
+      poller.containerId = containerId;
+      poller.filtersFn = filtersFn;
+      poller.knownIds = new Set((initialRows || []).map(r => r.id));
+      const maxSeen = (initialRows || []).reduce(
+        (max, r) => (r.timestamp && r.timestamp > max) ? r.timestamp : max,
+        '',
+      );
+      // Prefer the server clock when there's no baseline so an empty store
+      // still picks up new receipts even if the browser clock is skewed.
+      poller.watermark = maxSeen || poller.serverTime || new Date().toISOString();
+      poller.emptyCount = 0;
+      schedulePoll(poller.intervalMs);
+    }
+
+    function stopPolling() {
+      if (poller.timer) {
+        clearTimeout(poller.timer);
+        poller.timer = null;
+      }
+      poller.activeView = null;
+      poller.containerId = null;
+      poller.filtersFn = null;
+    }
+
+    function schedulePoll(delay) {
+      if (poller.timer) clearTimeout(poller.timer);
+      poller.timer = setTimeout(pollOnce, delay);
+    }
+
+    function nextPollDelay() {
+      if (poller.emptyCount < POLL_BACKOFF_AFTER_EMPTY) return poller.intervalMs;
+      // Exponential backoff once the stream goes quiet, capped at POLL_MAX_INTERVAL_MS.
+      const factor = Math.pow(2, poller.emptyCount - POLL_BACKOFF_AFTER_EMPTY + 1);
+      return Math.min(poller.intervalMs * factor, POLL_MAX_INTERVAL_MS);
+    }
+
+    async function pollOnce() {
+      if (!poller.activeView) return;
+      if (document.visibilityState !== 'visible') return; // resumed by visibilitychange
+      const gen = poller.generation;
+      const params = new URLSearchParams(poller.filtersFn ? poller.filtersFn() : {});
+      params.set('since', poller.watermark);
+      let rows;
+      try {
+        rows = await fetchJSON('/api/receipts?' + params.toString());
+      } catch (err) {
+        if (gen !== poller.generation) return;
+        console.error('poll:', err);
+        poller.emptyCount++;
+        schedulePoll(nextPollDelay());
+        return;
+      }
+
+      // The view or filters may have changed while the request was in flight;
+      // a stale response must not pollute the freshly-rendered table.
+      if (gen !== poller.generation) return;
+      if (!poller.activeView) return;
+
+      const fresh = (rows || []).filter(r => !poller.knownIds.has(r.id));
+      if (fresh.length === 0) {
+        poller.emptyCount++;
+      } else {
+        prependFreshRows(fresh);
+        poller.emptyCount = 0;
+      }
+      schedulePoll(nextPollDelay());
+    }
+
+    function prependFreshRows(fresh) {
+      const tbody = document.getElementById(tbodyIdFor(poller.containerId));
+      // Sort newest-first so the prepended block keeps the table's descending order.
+      const sorted = fresh.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+
+      if (!tbody) {
+        // Container was re-rendered as the empty state; rebuild it. The
+        // overview is still capped at RECENT_LIMIT visible rows, but every
+        // fresh id goes into knownIds so the next poll won't re-flash the
+        // ones we didn't display.
+        const toRender = poller.activeView === 'overview' ? sorted.slice(0, RECENT_LIMIT) : sorted;
+        renderReceiptsTable(toRender, poller.containerId);
+        fresh.forEach(r => poller.knownIds.add(r.id));
+        bumpWatermark(fresh);
+        if (poller.activeView === 'overview') refreshOverviewStats();
+        showLiveToast(fresh.length);
+        return;
+      }
+
+      const html = sorted.map(r => receiptRowHTML(r, { flash: true })).join('');
+      tbody.insertAdjacentHTML('afterbegin', html);
+      sorted.forEach(r => poller.knownIds.add(r.id));
+      bumpWatermark(sorted);
+
+      // Overview keeps the recent list bounded and its stats in sync.
+      if (poller.activeView === 'overview') {
+        while (tbody.rows.length > RECENT_LIMIT) {
+          // Trim from the DOM only — leave the id in knownIds. Removing it
+          // would re-flash boundary-timestamp rows on the next inclusive
+          // `since` poll. knownIds growth is bounded by traffic volume; the
+          // overview's only callers are the initial fetch (≤ store limit)
+          // and live polls (≤ store limit per call).
+          tbody.rows[tbody.rows.length - 1].remove();
+        }
+        refreshOverviewStats();
+      }
+
+      showLiveToast(fresh.length);
+    }
+
+    function bumpWatermark(rows) {
+      poller.watermark = rows.reduce(
+        (max, r) => (r.timestamp && r.timestamp > max) ? r.timestamp : max,
+        poller.watermark || '',
+      );
+    }
+
+    let liveToastTimer = null;
+    function showLiveToast(count) {
+      const el = document.getElementById('live-toast');
+      if (!el) return;
+      el.textContent = count === 1 ? '1 new receipt' : `${count} new receipts`;
+      el.classList.add('show');
+      if (liveToastTimer) clearTimeout(liveToastTimer);
+      liveToastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (!poller.activeView) return;
+      if (document.visibilityState === 'visible') {
+        poller.emptyCount = 0;
+        schedulePoll(0); // catch up immediately
+      } else if (poller.timer) {
+        clearTimeout(poller.timer);
+        poller.timer = null;
+      }
+    });
+
+    async function loadPollConfig() {
+      try {
+        const cfg = await fetchJSON('/api/config');
+        if (!cfg) return;
+        if (Number.isFinite(cfg.poll_interval_ms) && cfg.poll_interval_ms > 0) {
+          poller.intervalMs = cfg.poll_interval_ms;
+        }
+        if (typeof cfg.server_time === 'string' && cfg.server_time) {
+          poller.serverTime = cfg.server_time;
+        }
+      } catch (err) {
+        console.warn('config:', err);
+      }
+    }
+
     // Utilities
     async function fetchJSON(url) {
       const res = await fetch(url);
@@ -549,7 +783,7 @@
     });
 
     // Boot
-    loadOverview();
+    loadPollConfig().then(loadOverview);
   </script>
 </body>
 </html>

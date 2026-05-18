@@ -7,10 +7,20 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/agent-receipts/dashboard/internal/store"
 	"github.com/agent-receipts/dashboard/internal/verify"
 )
+
+// DefaultPollInterval is the polling cadence used when none is configured.
+const DefaultPollInterval = 5 * time.Second
+
+// Config controls server behaviour exposed to the frontend.
+type Config struct {
+	// PollInterval is how often the dashboard polls /api/receipts for new rows.
+	PollInterval time.Duration
+}
 
 //go:embed static
 var staticFS embed.FS
@@ -18,11 +28,16 @@ var staticFS embed.FS
 // Server is the dashboard HTTP server.
 type Server struct {
 	reader *store.Reader
+	cfg    Config
 }
 
-// New creates a new Server backed by the given reader.
-func New(reader *store.Reader) *Server {
-	return &Server{reader: reader}
+// New creates a new Server backed by the given reader. A zero PollInterval
+// in cfg falls back to DefaultPollInterval.
+func New(reader *store.Reader, cfg Config) *Server {
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = DefaultPollInterval
+	}
+	return &Server{reader: reader, cfg: cfg}
 }
 
 // Handler returns the HTTP handler with all routes registered.
@@ -31,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 
 	// API endpoints (JSON).
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
@@ -45,6 +61,16 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	// server_time gives the frontend an authoritative watermark for live polling
+	// when the store is empty at load — relying on the client's wall clock would
+	// silently drop receipts whenever the two clocks disagree.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"poll_interval_ms": s.cfg.PollInterval.Milliseconds(),
+		"server_time":      time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +104,9 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("before"); v != "" {
 		f.Before = &v
+	}
+	if v := q.Get("since"); v != "" {
+		f.Since = &v
 	}
 
 	rows, err := s.reader.ListReceipts(f)

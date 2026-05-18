@@ -59,6 +59,7 @@ Opens http://localhost:8080 and reads `~/.local/share/agent-receipts/receipts.db
 | `-db` | `~/.local/share/agent-receipts/receipts.db` | Path to receipts SQLite database |
 | `-port` | `8080` | HTTP server port |
 | `-host` | `127.0.0.1` | Address to bind (use `0.0.0.0` for all interfaces) |
+| `-poll-interval` | `5s` | How often the UI polls for new receipts. Also honoured via `AR_DASHBOARD_POLL_INTERVAL`. |
 
 ```sh
 # Reads ~/.local/share/agent-receipts/receipts.db by default
@@ -69,10 +70,14 @@ dashboard -db ./my-receipts.db
 
 # Custom port and bind address
 dashboard -host 0.0.0.0 -port 9090
+
+# Slower live polling (env var also works: AR_DASHBOARD_POLL_INTERVAL=10s)
+dashboard -poll-interval 10s
 ```
 
 ## Features
 
+- **Live updates** — new receipts stream into the list without a manual refresh; polling pauses when the tab is hidden
 - **Read-only** — opens the SQLite database in read-only mode and never modifies your data
 - **Universal** — reads databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
 - **Filter** — narrow receipts by action type, risk level, status, time range, and chain ID
