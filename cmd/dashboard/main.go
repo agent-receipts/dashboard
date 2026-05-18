@@ -69,6 +69,26 @@ func resolvePollInterval() (time.Duration, error) {
 	return d, nil
 }
 
+// choosePollInterval applies the flag > env > default precedence. When the
+// flag was set explicitly its value wins outright, so a malformed env var
+// can't lock a user out of an otherwise valid configuration.
+func choosePollInterval(flagValue time.Duration, flagSet bool, fromEnv func() (time.Duration, error)) (time.Duration, error) {
+	if flagSet {
+		if flagValue <= 0 {
+			return 0, fmt.Errorf("poll-interval must be positive, got %s", flagValue)
+		}
+		return flagValue, nil
+	}
+	d, err := fromEnv()
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", pollIntervalEnv, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("poll-interval must be positive, got %s", d)
+	}
+	return d, nil
+}
+
 // defaultDBPath returns the conventional ~/.local/share/agent-receipts/receipts.db
 // shared by mcp-proxy, daemon, and hook. Returns "" if the data home directory
 // cannot be resolved; main surfaces a clear error in that case.
@@ -90,26 +110,27 @@ func main() {
 	}
 
 	defaultDB := defaultDBPath()
-	defaultPoll, err := resolvePollInterval()
-	if err != nil {
-		log.Fatalf("invalid %s: %v", pollIntervalEnv, err)
-	}
 	dbPath := flag.String("db", defaultDB, "path to receipts SQLite database")
 	host := flag.String("host", "127.0.0.1", "address to bind to (use 0.0.0.0 for all interfaces)")
 	port := flag.Int("port", 8080, "HTTP server port")
-	pollInterval := flag.Duration("poll-interval", defaultPoll, "interval between live receipt polls (e.g. 5s)")
+	pollInterval := flag.Duration("poll-interval", server.DefaultPollInterval, "interval between live receipt polls (e.g. 5s)")
 	flag.Parse()
 
-	if *pollInterval <= 0 {
-		log.Fatalf("poll-interval must be positive, got %s", *pollInterval)
-	}
-
+	pollFlagSet := false
 	dbExplicit := false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "db" {
+		switch f.Name {
+		case "poll-interval":
+			pollFlagSet = true
+		case "db":
 			dbExplicit = true
 		}
 	})
+	chosen, err := choosePollInterval(*pollInterval, pollFlagSet, resolvePollInterval)
+	if err != nil {
+		log.Fatal(err)
+	}
+	*pollInterval = chosen
 
 	if *dbPath == "" {
 		if defaultDB == "" {

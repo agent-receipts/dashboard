@@ -52,6 +52,75 @@ func TestDefaultDBPath(t *testing.T) {
 	}
 }
 
+func TestChoosePollInterval(t *testing.T) {
+	envErr := errors.New("boom")
+	good := func(d time.Duration) func() (time.Duration, error) {
+		return func() (time.Duration, error) { return d, nil }
+	}
+	bad := func() (time.Duration, error) { return 0, envErr }
+
+	cases := []struct {
+		name      string
+		flagValue time.Duration
+		flagSet   bool
+		fromEnv   func() (time.Duration, error)
+		want      time.Duration
+		wantErr   bool
+	}{
+		{
+			name:      "flag wins over env even when env is broken",
+			flagValue: 7 * time.Second,
+			flagSet:   true,
+			fromEnv:   bad,
+			want:      7 * time.Second,
+		},
+		{
+			name:      "flag wins over env when both are valid",
+			flagValue: 7 * time.Second,
+			flagSet:   true,
+			fromEnv:   good(2 * time.Second),
+			want:      7 * time.Second,
+		},
+		{
+			name:      "non-positive flag is rejected",
+			flagValue: 0,
+			flagSet:   true,
+			fromEnv:   good(2 * time.Second),
+			wantErr:   true,
+		},
+		{
+			name:    "env is used when flag was not set",
+			flagSet: false,
+			fromEnv: good(3 * time.Second),
+			want:    3 * time.Second,
+		},
+		{
+			name:    "env error surfaces when flag was not set",
+			flagSet: false,
+			fromEnv: bad,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := choosePollInterval(tc.flagValue, tc.flagSet, tc.fromEnv)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %s", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolvePollInterval(t *testing.T) {
 	cases := []struct {
 		name    string

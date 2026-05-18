@@ -222,9 +222,11 @@
         renderStats(stats);
         const receipts = await fetchJSON('/api/receipts');
         if (gen !== poller.generation) return;
-        const recent = receipts.slice(0, RECENT_LIMIT);
-        renderRecentReceipts(recent);
-        startPolling('overview', 'recent-receipts', recent, () => ({}));
+        renderRecentReceipts(receipts.slice(0, RECENT_LIMIT));
+        // Seed polling from the full fetch, not the displayed slice, so the
+        // next poll doesn't surface receipts that share the watermark
+        // second but fell below RECENT_LIMIT in tie-ordering.
+        startPolling('overview', 'recent-receipts', receipts, () => ({}));
       } catch (err) {
         console.error('load overview:', err);
       }
@@ -648,9 +650,16 @@
 
     function prependFreshRows(fresh) {
       const tbody = document.getElementById(tbodyIdFor(poller.containerId));
+      // Sort newest-first so the prepended block keeps the table's descending order.
+      const sorted = fresh.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+
       if (!tbody) {
-        // Container was re-rendered as the empty state; rebuild it.
-        renderReceiptsTable(fresh, poller.containerId);
+        // Container was re-rendered as the empty state; rebuild it. The
+        // overview is still capped at RECENT_LIMIT visible rows, but every
+        // fresh id goes into knownIds so the next poll won't re-flash the
+        // ones we didn't display.
+        const toRender = poller.activeView === 'overview' ? sorted.slice(0, RECENT_LIMIT) : sorted;
+        renderReceiptsTable(toRender, poller.containerId);
         fresh.forEach(r => poller.knownIds.add(r.id));
         bumpWatermark(fresh);
         if (poller.activeView === 'overview') refreshOverviewStats();
@@ -658,8 +667,6 @@
         return;
       }
 
-      // Sort newest-first so the prepended block keeps the table's descending order.
-      const sorted = fresh.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
       const html = sorted.map(r => receiptRowHTML(r, { flash: true })).join('');
       tbody.insertAdjacentHTML('afterbegin', html);
       sorted.forEach(r => poller.knownIds.add(r.id));
