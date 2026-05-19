@@ -409,7 +409,8 @@
         parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
       }
       const tooltipContent = parts.length > 0 ? parts.join('') : '<span class="text-[#7d8590] text-xs">Additional disclosure fields present — see detail view</span>';
-      return `<button type="button" class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="View parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${tooltipContent}</span></button>`;
+      const tooltipId = `disclosure-tooltip-${r.id}`;
+      return `<button type="button" class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="View parameters disclosure" aria-describedby="${tooltipId}">&#128203;<span class="disclosure-tooltip" id="${tooltipId}" role="tooltip">${tooltipContent}</span></button>`;
     }
 
     function tbodyIdFor(containerId) {
@@ -594,8 +595,9 @@
       `;
     }
 
-    // Threshold above which a disclosure block collapses behind a toggle. Kept
-    // in lockstep with the CSS max-height on .disclosure-block (~9 lines).
+    // Threshold above which a disclosure block collapses behind a toggle.
+    // Approximate: JS uses character count, CSS uses height, so they won't
+    // perfectly align across all fonts and screen sizes.
     const DISCLOSURE_COLLAPSE_CHARS = 400;
     function disclosureBlockHTML(label, value) {
       const long = value.length > DISCLOSURE_COLLAPSE_CHARS;
