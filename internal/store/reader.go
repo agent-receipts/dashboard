@@ -34,7 +34,22 @@ type ReceiptRow struct {
 	PrincipalID         string `json:"principal_id"`
 	ReceiptHash         string `json:"receipt_hash"`
 	PreviousReceiptHash string `json:"previous_receipt_hash"`
+	// ParametersInputPreview and ParametersOutputPreview are short, operator-
+	// disclosed snippets of the call's input/output (ADR-0012). They power the
+	// list-view hover tooltip; the full disclosure map is fetched via the
+	// detail endpoint. Truncated to disclosurePreviewMaxLen characters in SQL so a
+	// large disclosure doesn't bloat list responses.
+	ParametersInputPreview  string `json:"parameters_input_preview,omitempty"`
+	ParametersOutputPreview string `json:"parameters_output_preview,omitempty"`
+	// HasParametersDisclosure is true if the receipt has any parameters_disclosure
+	// data, regardless of which keys are present. Allows list UI to show the
+	// disclosure indicator even when only non-primary keys exist.
+	HasParametersDisclosure bool `json:"has_parameters_disclosure"`
 }
+
+// disclosurePreviewMaxLen bounds the size of input/output previews returned
+// in list rows. The modal still shows the full value via the detail endpoint.
+const disclosurePreviewMaxLen = 200
 
 // ChainSummary holds aggregate information about a receipt chain.
 type ChainSummary struct {
@@ -184,10 +199,16 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.system'), ''),
 		        risk_level, status,
 		        timestamp, issuer_id, COALESCE(principal_id, ''),
-		        receipt_hash, COALESCE(previous_receipt_hash, '')
+		        receipt_hash, COALESCE(previous_receipt_hash, ''),
+		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.input'), 1, ?), ''),
+		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 1, ?), ''),
+		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure'), 'null') NOT IN ('null', '{}')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
+	// substr args come before the WHERE-clause args in the SELECT list, so
+	// prepend them.
+	args = append([]any{disclosurePreviewMaxLen, disclosurePreviewMaxLen}, args...)
 	args = append(args, limit)
 
 	rows, err := r.db.Query(query, args...)
@@ -204,6 +225,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.ToolName, &row.Server,
 			&row.RiskLevel, &row.Status, &row.Timestamp, &row.IssuerID,
 			&row.PrincipalID, &row.ReceiptHash, &row.PreviousReceiptHash,
+			&row.ParametersInputPreview, &row.ParametersOutputPreview,
+			&row.HasParametersDisclosure,
 		); err != nil {
 			return nil, err
 		}
