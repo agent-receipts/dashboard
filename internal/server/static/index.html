@@ -75,8 +75,10 @@
     .disclosure-indicator {
       position: relative; display: inline-block; margin-left: 6px;
       color: #7d8590; cursor: help; font-size: 0.85rem;
+      background: none; border: none; padding: 0;
     }
     .disclosure-indicator:hover { color: #58a6ff; }
+    .disclosure-indicator:focus { outline: 2px solid #58a6ff; outline-offset: 2px; }
     .disclosure-tooltip {
       visibility: hidden; opacity: 0;
       position: absolute; left: 0; top: calc(100% + 6px); z-index: 70;
@@ -100,10 +102,12 @@
       max-height: 9em; overflow: hidden; position: relative;
     }
     .disclosure-block.expanded { max-height: none; }
-    .disclosure-block .toggle {
+    .toggle {
       color: #58a6ff; cursor: pointer; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 0.75rem; margin-top: 6px; display: inline-block;
+      font-size: 0.75rem; margin-top: 6px; display: inline-block; background: none; border: none;
+      padding: 0; text-decoration: underline;
     }
+    .toggle:focus { outline: 2px solid #58a6ff; outline-offset: 2px; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -394,9 +398,9 @@
     // carry parameters_disclosure. Click is swallowed so it doesn't double-fire
     // the row click; hover reveals input/output snippets from the list payload.
     function disclosureIndicatorHTML(r) {
+      if (!r.has_parameters_disclosure) return '';
       const input = r.parameters_input_preview || '';
       const output = r.parameters_output_preview || '';
-      if (!input && !output) return '';
       const parts = [];
       if (input) {
         parts.push(`<span class="label">Input</span><span class="value">${escapeHtml(input)}</span>`);
@@ -404,7 +408,7 @@
       if (output) {
         parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
       }
-      return `<span class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="Has parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${parts.join('')}</span></span>`;
+      return `<button type="button" class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="View parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${parts.join('')}</span></button>`;
     }
 
     function tbodyIdFor(containerId) {

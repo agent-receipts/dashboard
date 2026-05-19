@@ -41,6 +41,10 @@ type ReceiptRow struct {
 	// large disclosure doesn't bloat list responses.
 	ParametersInputPreview  string `json:"parameters_input_preview,omitempty"`
 	ParametersOutputPreview string `json:"parameters_output_preview,omitempty"`
+	// HasParametersDisclosure is true if the receipt has any parameters_disclosure
+	// data, regardless of which keys are present. Allows list UI to show the
+	// disclosure indicator even when only non-primary keys exist.
+	HasParametersDisclosure bool `json:"has_parameters_disclosure"`
 }
 
 // disclosurePreviewMaxLen bounds the size of input/output previews returned
@@ -197,7 +201,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        timestamp, issuer_id, COALESCE(principal_id, ''),
 		        receipt_hash, COALESCE(previous_receipt_hash, ''),
 		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.input'), 1, ?), ''),
-		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 1, ?), '')
+		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 1, ?), ''),
+		        json_type(receipt_json, '$.credentialSubject.action.parameters_disclosure') IS NOT NULL
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
@@ -221,6 +226,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.RiskLevel, &row.Status, &row.Timestamp, &row.IssuerID,
 			&row.PrincipalID, &row.ReceiptHash, &row.PreviousReceiptHash,
 			&row.ParametersInputPreview, &row.ParametersOutputPreview,
+			&row.HasParametersDisclosure,
 		); err != nil {
 			return nil, err
 		}
