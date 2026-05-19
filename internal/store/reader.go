@@ -202,7 +202,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        receipt_hash, COALESCE(previous_receipt_hash, ''),
 		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.input'), 1, ?), ''),
 		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 1, ?), ''),
-		        json_type(receipt_json, '$.credentialSubject.action.parameters_disclosure') IS NOT NULL
+		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure'), 'null') NOT IN ('null', '{}')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
