@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -390,6 +391,77 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 	}
 	if rowT3.Server != "jira" {
 		t.Errorf("server: got %q, want %q", rowT3.Server, "jira")
+	}
+}
+
+func TestReader_ListReceipts_ParametersDisclosurePreview(t *testing.T) {
+	dbPath := t.TempDir() + "/disclosure-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	withDisclosure := makeReceipt("urn:receipt:d1", "chain-d", 1,
+		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	withDisclosure.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"input":  "read /etc/passwd",
+		"output": "root:x:0:0:root:/root:/bin/bash",
+	}
+
+	// A receipt with a disclosure value longer than the preview cap so we can
+	// confirm SQL truncates rather than streaming the whole thing.
+	long := strings.Repeat("A", 500)
+	withLong := makeReceipt("urn:receipt:d2", "chain-d", 2,
+		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	withLong.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"input": long,
+	}
+
+	withoutDisclosure := makeReceipt("urn:receipt:d3", "chain-d", 3,
+		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+
+	for _, r := range []receipt.AgentReceipt{withDisclosure, withLong, withoutDisclosure} {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	// newest-first: d3, d2, d1.
+	if rows[0].ParametersInputPreview != "" || rows[0].ParametersOutputPreview != "" {
+		t.Errorf("d3 (no disclosure) got input=%q output=%q, want empty",
+			rows[0].ParametersInputPreview, rows[0].ParametersOutputPreview)
+	}
+	if got := len(rows[1].ParametersInputPreview); got != disclosurePreviewMaxLen {
+		t.Errorf("d2 input preview length = %d, want %d (truncated)", got, disclosurePreviewMaxLen)
+	}
+	if rows[1].ParametersOutputPreview != "" {
+		t.Errorf("d2 output preview = %q, want empty", rows[1].ParametersOutputPreview)
+	}
+	if rows[2].ParametersInputPreview != "read /etc/passwd" {
+		t.Errorf("d1 input preview = %q, want %q", rows[2].ParametersInputPreview, "read /etc/passwd")
+	}
+	if rows[2].ParametersOutputPreview != "root:x:0:0:root:/root:/bin/bash" {
+		t.Errorf("d1 output preview = %q, want %q",
+			rows[2].ParametersOutputPreview, "root:x:0:0:root:/root:/bin/bash")
 	}
 }
 

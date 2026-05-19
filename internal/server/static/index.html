@@ -69,6 +69,41 @@
       transition: opacity 0.2s ease, transform 0.2s ease;
     }
     #live-toast.show { opacity: 1; transform: translateY(0); }
+
+    /* Parameters-disclosure hover preview on the receipts table. The full
+       value lives in the detail modal; the tooltip is a quick triage hint. */
+    .disclosure-indicator {
+      position: relative; display: inline-block; margin-left: 6px;
+      color: #7d8590; cursor: help; font-size: 0.85rem;
+    }
+    .disclosure-indicator:hover { color: #58a6ff; }
+    .disclosure-tooltip {
+      visibility: hidden; opacity: 0;
+      position: absolute; left: 0; top: calc(100% + 6px); z-index: 70;
+      width: max-content; max-width: 480px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      padding: 8px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem; color: #e6edf3; white-space: pre-wrap;
+      word-break: break-word; pointer-events: none;
+      transition: opacity 0.1s ease;
+    }
+    .disclosure-indicator:hover .disclosure-tooltip,
+    .disclosure-indicator:focus .disclosure-tooltip { visibility: visible; opacity: 1; }
+    .disclosure-tooltip .label { color: #7d8590; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .disclosure-tooltip .value { display: block; margin-top: 2px; margin-bottom: 6px; }
+    .disclosure-tooltip .value:last-child { margin-bottom: 0; }
+    .disclosure-block {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;
+      max-height: 9em; overflow: hidden; position: relative;
+    }
+    .disclosure-block.expanded { max-height: none; }
+    .disclosure-block .toggle {
+      color: #58a6ff; cursor: pointer; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 0.75rem; margin-top: 6px; display: inline-block;
+    }
   </style>
 </head>
 <body class="min-h-screen">
@@ -346,13 +381,30 @@
           <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
           <td class="py-2 pr-4 font-mono text-xs text-[#7d8590]">${r.server ? escapeHtml(r.server) : '<span class="text-[#484f58]">—</span>'}</td>
           <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
-          <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}</td>
+          <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}${disclosureIndicatorHTML(r)}</td>
           <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
           <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${escapeHtml(truncate(r.chain_id, 20))}</td>
           <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
         </tr>
       `;
+    }
+
+    // disclosureIndicatorHTML renders the 📋 hover-preview marker on rows that
+    // carry parameters_disclosure. Click is swallowed so it doesn't double-fire
+    // the row click; hover reveals input/output snippets from the list payload.
+    function disclosureIndicatorHTML(r) {
+      const input = r.parameters_input_preview || '';
+      const output = r.parameters_output_preview || '';
+      if (!input && !output) return '';
+      const parts = [];
+      if (input) {
+        parts.push(`<span class="label">Input</span><span class="value">${escapeHtml(input)}</span>`);
+      }
+      if (output) {
+        parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
+      }
+      return `<span class="disclosure-indicator" tabindex="0" onclick="event.stopPropagation()" aria-label="Has parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${parts.join('')}</span></span>`;
     }
 
     function tbodyIdFor(containerId) {
@@ -488,6 +540,8 @@
           </div>
           ` : ''}
 
+          ${parametersDisclosureHTML(subj.action.parameters_disclosure)}
+
           <div>
             <div class="text-[#7d8590] text-xs mb-1">Chain</div>
             <div class="text-sm">
@@ -502,6 +556,57 @@
           </details>
         </div>
       `;
+    }
+
+    // parametersDisclosureHTML renders the operator-disclosed parameter map
+    // (ADR-0012). Input/output get top billing because that's the common
+    // shape; any other keys fall through to a generic key/value list. Long
+    // values collapse with a "show more" toggle so big payloads don't blow
+    // out the modal.
+    const DISCLOSURE_PRIMARY_KEYS = ['input', 'output'];
+    function parametersDisclosureHTML(disclosure) {
+      if (!disclosure || typeof disclosure !== 'object') return '';
+      const keys = Object.keys(disclosure);
+      if (keys.length === 0) return '';
+
+      const primary = DISCLOSURE_PRIMARY_KEYS
+        .filter(k => disclosure[k] != null && String(disclosure[k]) !== '')
+        .map(k => disclosureBlockHTML(k.charAt(0).toUpperCase() + k.slice(1), String(disclosure[k])));
+      const others = keys
+        .filter(k => !DISCLOSURE_PRIMARY_KEYS.includes(k))
+        .map(k => disclosureBlockHTML(k, String(disclosure[k])));
+
+      if (primary.length === 0 && others.length === 0) return '';
+
+      return `
+        <div>
+          <div class="text-[#7d8590] text-xs mb-1">Parameters Disclosure</div>
+          <div class="space-y-3">
+            ${primary.join('')}
+            ${others.join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Threshold above which a disclosure block collapses behind a toggle. Kept
+    // in lockstep with the CSS max-height on .disclosure-block (~9 lines).
+    const DISCLOSURE_COLLAPSE_CHARS = 400;
+    function disclosureBlockHTML(label, value) {
+      const long = value.length > DISCLOSURE_COLLAPSE_CHARS;
+      return `
+        <div>
+          <div class="text-[#7d8590] text-xs mb-1 font-mono">${escapeHtml(label)}</div>
+          <div class="disclosure-block${long ? '' : ' expanded'}">${escapeHtml(value)}</div>
+          ${long ? `<span class="toggle" onclick="toggleDisclosure(this)">Show more</span>` : ''}
+        </div>
+      `;
+    }
+
+    function toggleDisclosure(el) {
+      const block = el.previousElementSibling;
+      const expanded = block.classList.toggle('expanded');
+      el.textContent = expanded ? 'Show less' : 'Show more';
     }
 
     function closeModal() {
