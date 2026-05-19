@@ -404,7 +404,7 @@
       if (output) {
         parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
       }
-      return `<span class="disclosure-indicator" tabindex="0" onclick="event.stopPropagation()" aria-label="Has parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${parts.join('')}</span></span>`;
+      return `<span class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="Has parameters disclosure">&#128203;<span class="disclosure-tooltip" role="tooltip">${parts.join('')}</span></span>`;
     }
 
     function tbodyIdFor(containerId) {
@@ -597,8 +597,8 @@
       return `
         <div>
           <div class="text-[#7d8590] text-xs mb-1 font-mono">${escapeHtml(label)}</div>
-          <div class="disclosure-block${long ? '' : ' expanded'}">${escapeHtml(value)}</div>
-          ${long ? `<span class="toggle" onclick="toggleDisclosure(this)">Show more</span>` : ''}
+          <div class="disclosure-block${long ? '' : ' expanded'}" id="disclosure-${Math.random().toString(36).substr(2, 9)}">${escapeHtml(value)}</div>
+          ${long ? `<button type="button" class="toggle" onclick="toggleDisclosure(this)" aria-expanded="false">Show more</button>` : ''}
         </div>
       `;
     }
@@ -607,6 +607,7 @@
       const block = el.previousElementSibling;
       const expanded = block.classList.toggle('expanded');
       el.textContent = expanded ? 'Show less' : 'Show more';
+      el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
     function closeModal() {

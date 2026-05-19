@@ -37,7 +37,7 @@ type ReceiptRow struct {
 	// ParametersInputPreview and ParametersOutputPreview are short, operator-
 	// disclosed snippets of the call's input/output (ADR-0012). They power the
 	// list-view hover tooltip; the full disclosure map is fetched via the
-	// detail endpoint. Truncated to disclosurePreviewMaxLen bytes in SQL so a
+	// detail endpoint. Truncated to disclosurePreviewMaxLen characters in SQL so a
 	// large disclosure doesn't bloat list responses.
 	ParametersInputPreview  string `json:"parameters_input_preview,omitempty"`
 	ParametersOutputPreview string `json:"parameters_output_preview,omitempty"`
