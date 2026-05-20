@@ -91,7 +91,9 @@
       transition: opacity 0.1s ease;
     }
     .disclosure-indicator:hover .disclosure-tooltip,
-    .disclosure-indicator:focus .disclosure-tooltip { visibility: visible; opacity: 1; }
+    .disclosure-indicator:focus .disclosure-tooltip,
+    .mismatch-indicator:hover .disclosure-tooltip,
+    .mismatch-indicator:focus .disclosure-tooltip { visibility: visible; opacity: 1; }
     .disclosure-tooltip .label { color: #7d8590; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
     .disclosure-tooltip .value { display: block; margin-top: 2px; margin-bottom: 6px; }
     .disclosure-tooltip .value:last-child { margin-bottom: 0; }
@@ -108,6 +110,24 @@
       padding: 0; text-decoration: underline;
     }
     .toggle:focus { outline: 2px solid #58a6ff; outline-offset: 2px; }
+
+    /* Status/output mismatch indicator. Surfaces receipts whose outcome was
+       stamped success while the MCP tool payload reports isError:true. Shares
+       the disclosure-tooltip styles for hover/focus reveal — see issue #50. */
+    .mismatch-indicator {
+      position: relative; display: inline-block; margin-left: 6px;
+      color: #d29922; cursor: help; font-size: 0.85rem;
+      background: none; border: none; padding: 0; vertical-align: middle;
+    }
+    .mismatch-indicator:hover { color: #f0b429; }
+    .mismatch-indicator:focus { outline: 2px solid #d29922; outline-offset: 2px; }
+    .mismatch-indicator .disclosure-tooltip { color: #e6edf3; }
+    .mismatch-banner {
+      background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.35);
+      border-left: 3px solid #d29922; border-radius: 6px;
+      padding: 8px 12px; font-size: 0.8rem; color: #e6edf3;
+    }
+    .mismatch-banner .label { color: #d29922; font-weight: 600; margin-right: 6px; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -387,11 +407,22 @@
           <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
           <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}${disclosureIndicatorHTML(r)}</td>
           <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
-          <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span></td>
+          <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
           <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${escapeHtml(truncate(r.chain_id, 20))}</td>
           <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
         </tr>
       `;
+    }
+
+    // mismatchIndicatorHTML renders the ⚠️ marker next to a status badge when
+    // the row's status disagrees with its disclosed output payload (issue #50).
+    // The hint is opt-in cosmetics — the underlying receipt and hash are
+    // untouched. Click is swallowed so it doesn't double-fire the row click.
+    function mismatchIndicatorHTML(r) {
+      if (!r.output_status_mismatch) return '';
+      const safeId = (r.id || '').replace(/[^A-Za-z0-9_-]/g, '_');
+      const tooltipId = `mismatch-tooltip-${safeId}`;
+      return `<button type="button" class="mismatch-indicator" onclick="event.stopPropagation()" aria-label="Status/output mismatch" aria-describedby="${tooltipId}">&#9888;<span class="disclosure-tooltip" id="${tooltipId}" role="tooltip"><span class="label">Status/output mismatch</span><span class="value">Outcome recorded as success, but the disclosed tool output reports isError: true.</span></span></button>`;
     }
 
     // disclosureIndicatorHTML renders the 📋 hover-preview marker on rows that
@@ -491,10 +522,35 @@
       }
     }
 
+    // outputStatusMismatchFromReceipt mirrors the SQL detection in reader.go:
+    // status=success while parameters_disclosure.output is a JSON object with
+    // isError: true. Computed client-side for the detail modal because the
+    // modal payload is the full receipt, not the indexed list row.
+    function outputStatusMismatchFromReceipt(r) {
+      const subj = r && r.credentialSubject;
+      if (!subj || !subj.outcome || subj.outcome.status !== 'success') return false;
+      const disclosure = subj.action && subj.action.parameters_disclosure;
+      if (!disclosure || typeof disclosure.output !== 'string') return false;
+      try {
+        const parsed = JSON.parse(disclosure.output);
+        return parsed !== null && typeof parsed === 'object' && parsed.isError === true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     function renderReceiptDetail(r) {
       const subj = r.credentialSubject;
+      const mismatch = outputStatusMismatchFromReceipt(r);
       return `
         <div class="space-y-4">
+          ${mismatch ? `
+          <div class="mismatch-banner">
+            <span class="label">&#9888; Status/output mismatch</span>
+            Outcome recorded as <code>success</code>, but the disclosed tool output reports <code>isError: true</code>. This is a display hint only — the receipt and its hash are unchanged. See issue #50.
+          </div>
+          ` : ''}
+
           <div class="grid grid-cols-2 gap-4">
             <div>
               <div class="text-[#7d8590] text-xs mb-1">Server</div>
@@ -666,9 +722,9 @@
                 <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#484f58] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="closeChainModal(); showReceipt(this.dataset.receiptId)">
                   <div class="flex items-center justify-between mb-1">
                     <span class="font-mono text-xs">#${r.sequence} ${escapeHtml(r.action_type)}</span>
-                    <div class="flex gap-2">
+                    <div class="flex gap-2 items-center">
                       <span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span>
-                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>
+                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}
                     </div>
                   </div>
                   <div class="text-[#7d8590] text-xs">${formatTime(r.timestamp)}</div>

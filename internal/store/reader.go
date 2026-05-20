@@ -45,6 +45,13 @@ type ReceiptRow struct {
 	// data, regardless of which keys are present. Allows list UI to show the
 	// disclosure indicator even when only non-primary keys exist.
 	HasParametersDisclosure bool `json:"has_parameters_disclosure"`
+	// OutputStatusMismatch is true when outcome.status is "success" but
+	// parameters_disclosure.output parses as a JSON object with isError: true.
+	// MCP tool emitters historically stamp the outcome before inspecting the
+	// response payload, so older receipts in existing stores carry a misleading
+	// status (see issue #50). This is a read-only display hint; the dashboard
+	// never rewrites the receipt or its hash.
+	OutputStatusMismatch bool `json:"output_status_mismatch"`
 }
 
 // disclosurePreviewMaxLen bounds the size of input/output previews returned
@@ -193,6 +200,13 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		orderBy = "timestamp ASC, id ASC"
 	}
 
+	// output_status_mismatch flags receipts whose outcome.status is "success"
+	// while their parameters_disclosure.output parses as a JSON object with
+	// isError: true. parameters_disclosure values are JSON-encoded strings
+	// (per ADR-0012), so we extract twice: once to get the string, once to
+	// reach into it. The CASE gate ensures the inner json_extract only runs
+	// on text that json_valid has cleared — SQL AND does not short-circuit,
+	// and json_extract on non-JSON text raises a "malformed JSON" error.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -202,7 +216,13 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        receipt_hash, COALESCE(previous_receipt_hash, ''),
 		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.input'), 1, ?), ''),
 		        COALESCE(substr(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 1, ?), ''),
-		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure'), 'null') NOT IN ('null', '{}')
+		        COALESCE(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure'), 'null') NOT IN ('null', '{}'),
+		        CASE
+		          WHEN status = 'success'
+		           AND json_valid(IFNULL(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 'null')) = 1
+		          THEN IFNULL(json_extract(IFNULL(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 'null'), '$.isError'), 0) = 1
+		          ELSE 0
+		        END
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
@@ -227,6 +247,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.PrincipalID, &row.ReceiptHash, &row.PreviousReceiptHash,
 			&row.ParametersInputPreview, &row.ParametersOutputPreview,
 			&row.HasParametersDisclosure,
+			&row.OutputStatusMismatch,
 		); err != nil {
 			return nil, err
 		}

@@ -493,6 +493,102 @@ func TestReader_ListReceipts_ParametersDisclosurePreview(t *testing.T) {
 	}
 }
 
+func TestReader_ListReceipts_OutputStatusMismatch(t *testing.T) {
+	dbPath := t.TempDir() + "/mismatch-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// status=success + output JSON with isError:true → mismatch.
+	mismatch := makeReceipt("urn:receipt:m1", "chain-m", 1,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	mismatch.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"output": `{"content":[{"text":"401 Bad credentials","type":"text"}],"isError":true}`,
+	}
+
+	// status=success + output JSON with isError:false → consistent, no mismatch.
+	clean := makeReceipt("urn:receipt:m2", "chain-m", 2,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	clean.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"output": `{"content":[{"text":"ok"}],"isError":false}`,
+	}
+
+	// status=success + output JSON without isError key → no mismatch.
+	noFlag := makeReceipt("urn:receipt:m3", "chain-m", 3,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+	noFlag.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"output": `{"content":[{"text":"ok"}]}`,
+	}
+
+	// status=failure + output JSON with isError:true → consistent, no mismatch.
+	expectedFail := makeReceipt("urn:receipt:m4", "chain-m", 4,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:03:00Z", nil)
+	expectedFail.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"output": `{"isError":true}`,
+	}
+
+	// status=success + plain (non-JSON) string output → no mismatch.
+	plain := makeReceipt("urn:receipt:m5", "chain-m", 5,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:04:00Z", nil)
+	plain.CredentialSubject.Action.ParametersDisclosure = map[string]string{
+		"output": "plain text body, not JSON",
+	}
+
+	// status=success + no disclosure at all → no mismatch.
+	bare := makeReceipt("urn:receipt:m6", "chain-m", 6,
+		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:05:00Z", nil)
+
+	for _, r := range []receipt.AgentReceipt{mismatch, clean, noFlag, expectedFail, plain, bare} {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	byID := map[string]ReceiptRow{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"urn:receipt:m1", true},
+		{"urn:receipt:m2", false},
+		{"urn:receipt:m3", false},
+		{"urn:receipt:m4", false},
+		{"urn:receipt:m5", false},
+		{"urn:receipt:m6", false},
+	}
+	for _, tc := range cases {
+		row, ok := byID[tc.id]
+		if !ok {
+			t.Errorf("%s missing from results", tc.id)
+			continue
+		}
+		if row.OutputStatusMismatch != tc.want {
+			t.Errorf("%s: OutputStatusMismatch=%v, want %v", tc.id, row.OutputStatusMismatch, tc.want)
+		}
+	}
+}
+
 func TestReader_GetChain(t *testing.T) {
 	dbPath := seedFileDB(t)
 	r, err := OpenReadOnly(dbPath)
