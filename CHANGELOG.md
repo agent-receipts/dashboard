@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Output status mismatch detection — flags receipts where the declared output hash does not match the computed value (#52)
 - Dashboard UI polish: context header showing active database, keyboard navigation between receipts, and loading skeletons (#53)
 - JSON export buttons in the receipt detail and chain detail modals — download individual receipts as `receipt-{id}.json` or entire chains as `chain-{chainId}.json` (#7)
+- Structured rendering of Intent and Authorization fields in the receipt detail modal: conversation/reasoning hashes (truncated with full hash on hover), truncated-preview indicator, and a new Authorization section showing scopes as badges, granted/expires timestamps, and grant ref (#6)
 
 ## [0.1.6] - 2026-05-19
 
