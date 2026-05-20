@@ -185,6 +185,7 @@
     .bar-success  { background: rgba(63,185,80,0.6); }
     .bar-failure  { background: rgba(248,81,73,0.6); }
     .bar-pending  { background: rgba(210,153,34,0.6); }
+    .bar-action   { background: rgba(88,166,255,0.6); }
 
     /* ---------- Form controls ---------- */
     .form-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -874,7 +875,7 @@
       document.getElementById('action-chart').innerHTML = (stats.by_action || []).map(r => `
         <div class="bar-row">
           <span class="bar-label"><span class="badge">${escapeHtml(r.label)}</span></span>
-          <div class="bar-track"><div class="bar-fill" style="width: ${(r.count / maxAction * 100)}%"></div></div>
+          <div class="bar-track"><div class="bar-fill bar-action" style="width: ${(r.count / maxAction * 100)}%"></div></div>
           <span class="bar-count">${r.count}</span>
         </div>
       `).join('') || '<div class="muted text-sm">No data</div>';
