@@ -174,9 +174,12 @@
     .badge-medium   { background: rgba(210,153,34,0.15); color: var(--risk-medium); }
     .badge-high     { background: rgba(248,81,73,0.15);  color: var(--risk-high); }
     .badge-critical { background: rgba(255,123,114,0.2); color: var(--risk-critical); border: 1px solid rgba(255,123,114,0.3); }
-    .badge-success  { background: rgba(63,185,80,0.15);  color: var(--status-success); }
-    .badge-failure  { background: rgba(248,81,73,0.15);  color: var(--status-failure); }
-    .badge-pending  { background: rgba(210,153,34,0.15); color: var(--status-pending); }
+    .badge-success      { background: rgba(63,185,80,0.15);   color: var(--status-success); }
+    .badge-failure      { background: rgba(248,81,73,0.15);   color: var(--status-failure); }
+    .badge-pending      { background: rgba(210,153,34,0.15);  color: var(--status-pending); }
+    .badge-reversible   { background: rgba(63,185,80,0.15);   color: var(--status-success); }
+    .badge-irreversible { background: rgba(248,81,73,0.15);   color: var(--status-failure); }
+    .badge-unknown      { background: rgba(125,133,144,0.15); color: var(--muted); }
 
     .bar-low      { background: rgba(63,185,80,0.6); }
     .bar-medium   { background: rgba(210,153,34,0.6); }
@@ -447,6 +450,13 @@
       padding: 8px 12px; font-size: 0.8rem; color: var(--text);
     }
     .mismatch-banner .label { color: var(--risk-medium); font-weight: 600; margin-right: 6px; }
+    .outcome-error-banner {
+      background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.35);
+      border-left: 3px solid var(--status-failure); border-radius: var(--radius);
+      padding: 8px 12px; font-size: 0.8rem; color: var(--text);
+      font-family: var(--font-mono); word-break: break-word;
+    }
+    .outcome-error-banner .label { color: var(--status-failure); font-weight: 600; margin-right: 6px; font-family: var(--font-sans); }
 
     /* ---------- Keyboard shortcut help ---------- */
     .kbd {
@@ -1211,6 +1221,8 @@
 
           ${parametersDisclosureHTML(subj.action.parameters_disclosure)}
 
+          ${outcomeDetailsHTML(subj.outcome)}
+
           <div>
             <div class="muted text-xs mb-1">Chain</div>
             <div class="text-sm">
@@ -1236,6 +1248,62 @@
           <div class="${cls}">${valueHTML}</div>
         </div>
       `;
+    }
+
+    // ---------- Outcome details (modal body) ----------
+    function outcomeDetailsHTML(outcome) {
+      if (!outcome) return '';
+      const rev = outcome.reversible;
+      const hasError = outcome.error && outcome.error.length > 0;
+      const hasStateChange = outcome.state_change &&
+        (outcome.state_change.before_hash || outcome.state_change.after_hash);
+      const hasReversalDetail = rev != null || outcome.reversal_method ||
+        (outcome.reversal_window_seconds != null && outcome.reversal_window_seconds > 0);
+      if (!hasReversalDetail && !hasError && !hasStateChange) return '';
+
+      const revParts = [];
+      if (rev === true) {
+        revParts.push(`<span class="badge badge-reversible">Reversible</span>`);
+      } else if (rev === false) {
+        revParts.push(`<span class="badge badge-irreversible">Irreversible</span>`);
+      } else {
+        revParts.push(`<span class="badge badge-unknown">Reversibility unknown</span>`);
+      }
+      if (outcome.reversal_method) {
+        revParts.push(`<span class="muted text-xs">via</span> <code class="font-mono text-xs" style="background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:1px 6px;">${escapeHtml(outcome.reversal_method)}</code>`);
+      }
+      if (outcome.reversal_window_seconds != null && outcome.reversal_window_seconds > 0) {
+        revParts.push(`<span class="muted text-xs">${escapeHtml(formatDuration(outcome.reversal_window_seconds))} window</span>`);
+      }
+
+      const rows = [];
+      rows.push(`<div class="flex items-center gap-2 flex-wrap">${revParts.join(' ')}</div>`);
+      if (hasError) {
+        rows.push(`<div class="outcome-error-banner"><span class="label">Error</span>${escapeHtml(outcome.error)}</div>`);
+      }
+      if (hasStateChange) {
+        const sc = outcome.state_change;
+        const hashParts = [];
+        if (sc.before_hash) hashParts.push(kvBlock('Before', `<span class="font-mono text-xs" title="${escapeAttr(sc.before_hash)}">${escapeHtml(truncateHash(sc.before_hash))}</span>`));
+        if (sc.after_hash)  hashParts.push(kvBlock('After',  `<span class="font-mono text-xs" title="${escapeAttr(sc.after_hash)}">${escapeHtml(truncateHash(sc.after_hash))}</span>`));
+        rows.push(`<div class="grid grid-cols-2 gap-4">${hashParts.join('')}</div>`);
+      }
+      return `<div><div class="muted text-xs mb-2">Outcome</div><div class="space-y-2">${rows.join('')}</div></div>`;
+    }
+
+    function truncateHash(h) {
+      if (!h) return '';
+      return h.length > 12 ? h.slice(0, 12) + '…' : h;
+    }
+
+    function formatDuration(seconds) {
+      if (seconds < 60) return `${seconds}s`;
+      const m = Math.floor(seconds / 60);
+      if (m < 60) return `${m} minute${m !== 1 ? 's' : ''}`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h} hour${h !== 1 ? 's' : ''}`;
+      const d = Math.floor(h / 24);
+      return `${d} day${d !== 1 ? 's' : ''}`;
     }
 
     // ---------- Parameters disclosure (modal body) ----------
