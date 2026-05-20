@@ -43,6 +43,7 @@ internal/verify/        # Hash linkage and chain verification
 - Tests sit alongside source files as `*_test.go`
 - Tests use the SDK's `store.Open()` to create seeded test databases, then open them read-only
 - Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`, etc.)
+- Every PR that adds, changes, fixes, or removes user-facing behaviour must include a `CHANGELOG.md` entry under `[Unreleased]`
 
 ## Dependencies
 
@@ -99,6 +100,7 @@ Before marking work as complete:
 4. Mention any opportunistic papercut fixes made along the way.
 5. Call out TODOs, follow-up work, or uncertainties.
 6. If opening a PR, verify the description accurately reflects the changes.
+7. Add a `CHANGELOG.md` entry under `[Unreleased]` for any user-facing change.
 
 ## Agent safety rules
 
