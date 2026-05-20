@@ -684,11 +684,60 @@ func TestReader_Stats(t *testing.T) {
 	if len(stats.ByStatus) == 0 {
 		t.Error("empty by_status")
 	}
+	if len(stats.ByAction) == 0 {
+		t.Error("empty by_action")
+	}
 	// LatestTimestamp must match the newest seeded receipt; the header
 	// "Updated Nm ago" indicator depends on this value being accurate.
 	const wantLatest = "2026-04-01T11:01:00Z"
 	if stats.LatestTimestamp != wantLatest {
 		t.Errorf("got latest %q, want %q", stats.LatestTimestamp, wantLatest)
+	}
+}
+
+func TestReader_Stats_ByAction(t *testing.T) {
+	dbPath := t.TempDir() + "/by-action-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceipt("urn:receipt:a1", "chain-a", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil),
+		makeReceipt("urn:receipt:a2", "chain-a", 2, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil),
+		makeReceipt("urn:receipt:a3", "chain-a", 3, "system.command.execute", receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil),
+	}
+	for _, r := range recs {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	stats, err := reader.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+
+	counts := map[string]int{}
+	for _, gc := range stats.ByAction {
+		counts[gc.Label] = gc.Count
+	}
+	if counts["filesystem.file.read"] != 2 {
+		t.Errorf("filesystem.file.read: got %d, want 2", counts["filesystem.file.read"])
+	}
+	if counts["system.command.execute"] != 1 {
+		t.Errorf("system.command.execute: got %d, want 1", counts["system.command.execute"])
 	}
 }
 

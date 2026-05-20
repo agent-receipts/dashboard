@@ -72,6 +72,7 @@ type Stats struct {
 	Chains   int          `json:"chains"`
 	ByRisk   []GroupCount `json:"by_risk"`
 	ByStatus []GroupCount `json:"by_status"`
+	ByAction []GroupCount `json:"by_action"`
 	// LatestTimestamp is the ISO 8601 timestamp of the most recent receipt
 	// in the store. Omitted from the JSON response (and left as the zero
 	// value) when the store is empty. Used in the header to show when the
@@ -189,7 +190,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	limit := 1000
+	limit := 10000
 	if f.Limit != nil {
 		limit = *f.Limit
 	}
@@ -341,6 +342,10 @@ func (r *Reader) Stats() (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	st.ByAction, err = r.groupBy("action_type")
+	if err != nil {
+		return Stats{}, err
+	}
 
 	return st, nil
 }
@@ -357,8 +362,9 @@ func (r *Reader) execWrite(query string, args ...any) error {
 }
 
 var allowedGroupByColumns = map[string]bool{
-	"risk_level": true,
-	"status":     true,
+	"risk_level":  true,
+	"status":      true,
+	"action_type": true,
 }
 
 func (r *Reader) groupBy(column string) ([]GroupCount, error) {

@@ -188,6 +188,7 @@
     .bar-success  { background: rgba(63,185,80,0.6); }
     .bar-failure  { background: rgba(248,81,73,0.6); }
     .bar-pending  { background: rgba(210,153,34,0.6); }
+    .bar-action   { background: rgba(88,166,255,0.6); }
 
     /* ---------- Form controls ---------- */
     .form-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -555,7 +556,7 @@
     <div id="view-overview">
       <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"></div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="card p-4">
           <h3 class="text-sm font-medium muted mb-3">Risk distribution</h3>
           <div id="risk-chart" class="space-y-2"></div>
@@ -563,6 +564,10 @@
         <div class="card p-4">
           <h3 class="text-sm font-medium muted mb-3">Status distribution</h3>
           <div id="status-chart" class="space-y-2"></div>
+        </div>
+        <div class="card p-4">
+          <h3 class="text-sm font-medium muted mb-3">Action distribution</h3>
+          <div id="action-chart" class="space-y-2"></div>
         </div>
       </div>
 
@@ -875,6 +880,15 @@
           <span class="bar-count">${r.count}</span>
         </div>
       `).join('') || '<div class="muted text-sm">No data</div>';
+
+      const maxAction = Math.max(...(stats.by_action || []).map(r => r.count), 1);
+      document.getElementById('action-chart').innerHTML = (stats.by_action || []).map(r => `
+        <div class="bar-row">
+          <span class="bar-label"><span class="badge">${escapeHtml(r.label)}</span></span>
+          <div class="bar-track"><div class="bar-fill bar-action" style="width: ${(r.count / maxAction * 100)}%"></div></div>
+          <span class="bar-count">${r.count}</span>
+        </div>
+      `).join('') || '<div class="muted text-sm">No data</div>';
     }
 
     function statCardHTML(opts) {
@@ -909,6 +923,7 @@
       `).join('');
       document.getElementById('risk-chart').innerHTML = skeletonBars(4);
       document.getElementById('status-chart').innerHTML = skeletonBars(3);
+      document.getElementById('action-chart').innerHTML = skeletonBars(4);
     }
 
     function renderRecentSkeleton() {

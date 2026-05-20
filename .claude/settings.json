@@ -1,0 +1,16 @@
+{
+  "allowedTools": [
+    "Edit",
+    "Write",
+    "Read",
+    "Bash(go *)",
+    "Bash(git *)",
+    "Bash(gh *)",
+    "Bash(find *)",
+    "Bash(grep *)",
+    "Bash(ls *)",
+    "Bash(cat *)",
+    "Bash(make *)",
+    "Bash(mkdir *)"
+  ]
+}
