@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Overview "Recent receipts" now fetches only 20 rows from the server instead of the full store (up to 10,000 after #55), reducing unnecessary bandwidth and memory usage (#58)
+- Overview "Recent receipts" now fetches only `RECENT_LIMIT` (10) rows from the server instead of the full store (up to 10,000 after #55), reducing unnecessary bandwidth and memory usage. The `/api/receipts` endpoint now honours a `?limit=N` query parameter (capped at 10,000) (#58)
 
 ### Added
 
