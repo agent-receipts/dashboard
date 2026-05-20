@@ -7,16 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Overview "Recent receipts" now fetches only `RECENT_LIMIT` (10) rows from the server instead of the full store (up to 10,000 after #55), reducing unnecessary bandwidth and memory usage. The `/api/receipts` endpoint now honours a `?limit=N` query parameter (capped at 10,000) (#58)
+## [0.2.0] - 2026-05-20
 
 ### Added
 
-- Output status mismatch detection — flags receipts where the declared output hash does not match the computed value (#52)
+- **Ed25519 signature verification** — `/api/chains/{id}/verify` now accepts a `?public_key=` (PEM-encoded) parameter; per-receipt `signature_valid` is returned and shown as Sig ✓/✗ badges in the chain modal (#5)
+- **By-action stats breakdown** — `/api/stats` now includes `by_action` grouped by action type, rendered as an "Action distribution" bar chart alongside Risk and Status (#4)
+- **Structured Outcome section** in receipt detail: reversibility badge (Reversible/Irreversible/Unknown), reversal method, reversal window, error banner, and before/after state-change hashes (#13)
+- **Structured Intent and Authorization sections** in receipt detail: conversation/reasoning hashes with tooltips, truncated-preview indicator, scopes as badges, granted/expires timestamps with expiry indicator, and grant ref (#6)
+- **JSON export** — download individual receipts as `receipt-{id}.json` or full chains as `chain-{chainId}.json` directly from the detail modals (#7)
+- Output status mismatch detection — flags receipts where `outcome.status` is `success` but the disclosed tool output reports `isError: true` (#52)
 - Dashboard UI polish: context header showing active database, keyboard navigation between receipts, and loading skeletons (#53)
-- JSON export buttons in the receipt detail and chain detail modals — download individual receipts as `receipt-{id}.json` or entire chains as `chain-{chainId}.json` (#7)
-- Structured rendering of Intent and Authorization fields in the receipt detail modal: conversation/reasoning hashes (truncated with full hash on hover), truncated-preview indicator, and a new Authorization section showing scopes as badges, granted/expires timestamps, and grant ref (#6)
+- `?limit=N` query parameter on `/api/receipts` (capped at 10,000) (#58)
+
+### Changed
+
+- Default `ListReceipts` limit raised from 1,000 to 10,000 to match the ar SDK default (#11)
+
+### Fixed
+
+- Overview "Recent receipts" fetches only `RECENT_LIMIT` rows instead of the full store, reducing unnecessary bandwidth on every page load (#58)
 
 ## [0.1.6] - 2026-05-19
 
