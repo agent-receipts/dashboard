@@ -179,8 +179,14 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 	publicKeyPEM := r.URL.Query().Get("public_key")
 
 	if publicKeyPEM != "" {
+		const maxPEMLen = 4096
+		if len(publicKeyPEM) > maxPEMLen {
+			writeError(w, http.StatusBadRequest, "public_key must be a PEM-encoded Ed25519 public key")
+			return
+		}
 		if err := validateEd25519PEM(publicKeyPEM); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid public_key: "+err.Error())
+			log.Printf("chain verify: invalid public_key: %v", err)
+			writeError(w, http.StatusBadRequest, "public_key must be a PEM-encoded Ed25519 public key")
 			return
 		}
 	}

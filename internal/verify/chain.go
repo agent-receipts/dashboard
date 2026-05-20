@@ -4,6 +4,8 @@
 package verify
 
 import (
+	"log"
+
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 )
 
@@ -68,7 +70,10 @@ func VerifyChainLinks(receipts []receipt.AgentReceipt, publicKeyPEM string) Chai
 		}
 
 		if publicKeyPEM != "" {
-			ok, _ := receipt.Verify(r, publicKeyPEM)
+			ok, err := receipt.Verify(r, publicKeyPEM)
+			if err != nil {
+				log.Printf("signature verify error for receipt %s: %v", r.ID, err)
+			}
 			lv.SignatureValid = &ok
 		}
 
