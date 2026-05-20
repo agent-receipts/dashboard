@@ -1186,7 +1186,7 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     }
 
     function downloadReceiptJSON() {
@@ -1196,10 +1196,17 @@
       downloadJSON(currentReceipt, `receipt-${suffix}.json`);
     }
 
-    function downloadChainJSON() {
+    async function downloadChainJSON() {
       if (!currentChainReceipts || !currentChainId) return;
-      const suffix = currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId;
-      downloadJSON(currentChainReceipts, `chain-${suffix}.json`);
+      try {
+        const full = await Promise.all(
+          currentChainReceipts.map(r => fetchJSON('/api/receipts/' + encodeURIComponent(r.id)))
+        );
+        const suffix = currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId;
+        downloadJSON(full, `chain-${suffix}.json`);
+      } catch (err) {
+        showError('Failed to export chain: ' + err.message);
+      }
     }
 
     // ---------- Receipt detail ----------
