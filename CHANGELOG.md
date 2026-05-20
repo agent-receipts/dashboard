@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-20
+
+### Fixed
+
+- Action distribution chart capped to top 5 types to keep the overview compact; remaining types shown as "+N more"
+
 ## [0.2.0] - 2026-05-20
 
 ### Added
