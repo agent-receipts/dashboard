@@ -4,6 +4,8 @@
 package verify
 
 import (
+	"log"
+
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 )
 
@@ -13,6 +15,9 @@ type LinkVerification struct {
 	ReceiptID     string `json:"receipt_id"`
 	HashLinkValid bool   `json:"hash_link_valid"`
 	SequenceValid bool   `json:"sequence_valid"`
+	// SignatureValid is nil when no public key was provided (not checked),
+	// true when the Ed25519 signature is valid, false when invalid.
+	SignatureValid *bool `json:"signature_valid,omitempty"`
 }
 
 // ChainLinkResult holds the verification result for an entire chain.
@@ -24,8 +29,10 @@ type ChainLinkResult struct {
 }
 
 // VerifyChainLinks verifies the hash linkage and sequence ordering of a chain.
-// It does NOT verify signatures (no public key required).
-func VerifyChainLinks(receipts []receipt.AgentReceipt) ChainLinkResult {
+// When publicKeyPEM is non-empty, each receipt's Ed25519 signature is also
+// verified using the ar SDK; SignatureValid will be set per receipt.
+// When publicKeyPEM is empty, signature checks are skipped (SignatureValid is nil).
+func VerifyChainLinks(receipts []receipt.AgentReceipt, publicKeyPEM string) ChainLinkResult {
 	if len(receipts) == 0 {
 		return ChainLinkResult{Valid: true, Length: 0, BrokenAt: -1}
 	}
@@ -55,12 +62,22 @@ func VerifyChainLinks(receipts []receipt.AgentReceipt) ChainLinkResult {
 			seqValid = chain.Sequence == receipts[i-1].CredentialSubject.Chain.Sequence+1
 		}
 
-		results = append(results, LinkVerification{
+		lv := LinkVerification{
 			Index:         i,
 			ReceiptID:     r.ID,
 			HashLinkValid: hashValid,
 			SequenceValid: seqValid,
-		})
+		}
+
+		if publicKeyPEM != "" {
+			ok, err := receipt.Verify(r, publicKeyPEM)
+			if err != nil {
+				log.Printf("signature verify error for receipt %s: %v", r.ID, err)
+			}
+			lv.SignatureValid = &ok
+		}
+
+		results = append(results, lv)
 
 		if brokenAt == -1 && (!hashValid || !seqValid) {
 			brokenAt = i

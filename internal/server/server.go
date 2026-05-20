@@ -2,8 +2,12 @@
 package server
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
 	"embed"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -172,6 +176,20 @@ func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 	chainID := r.PathValue("chainID")
+	publicKeyPEM := r.URL.Query().Get("public_key")
+
+	if publicKeyPEM != "" {
+		const maxPEMLen = 4096
+		if len(publicKeyPEM) > maxPEMLen {
+			writeError(w, http.StatusBadRequest, "public_key must be a PEM-encoded Ed25519 public key")
+			return
+		}
+		if err := validateEd25519PEM(publicKeyPEM); err != nil {
+			log.Printf("chain verify: invalid public_key: %v", err)
+			writeError(w, http.StatusBadRequest, "public_key must be a PEM-encoded Ed25519 public key")
+			return
+		}
+	}
 
 	receipts, err := s.reader.GetChain(chainID)
 	if err != nil {
@@ -180,8 +198,23 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := verify.VerifyChainLinks(receipts)
+	result := verify.VerifyChainLinks(receipts, publicKeyPEM)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func validateEd25519PEM(pemStr string) error {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return fmt.Errorf("not a valid PEM block")
+	}
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse public key: %w", err)
+	}
+	if _, ok := key.(ed25519.PublicKey); !ok {
+		return fmt.Errorf("not an Ed25519 public key")
+	}
+	return nil
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

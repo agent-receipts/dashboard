@@ -39,7 +39,7 @@ func makeReceipt(id, chainID string, seq int, prevHash *string) receipt.AgentRec
 func strPtr(s string) *string { return &s }
 
 func TestVerifyChainLinks_Empty(t *testing.T) {
-	result := VerifyChainLinks(nil)
+	result := VerifyChainLinks(nil, "")
 	if !result.Valid {
 		t.Error("empty chain should be valid")
 	}
@@ -50,7 +50,7 @@ func TestVerifyChainLinks_Empty(t *testing.T) {
 
 func TestVerifyChainLinks_SingleReceipt(t *testing.T) {
 	r := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	result := VerifyChainLinks([]receipt.AgentReceipt{r})
+	result := VerifyChainLinks([]receipt.AgentReceipt{r}, "")
 	if !result.Valid {
 		t.Errorf("single receipt should be valid, broken at %d", result.BrokenAt)
 	}
@@ -81,7 +81,7 @@ func TestVerifyChainLinks_ValidChain(t *testing.T) {
 	}
 	r3 := makeReceipt("urn:receipt:003", "chain-1", 3, &hash2)
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2, r3})
+	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2, r3}, "")
 	if !result.Valid {
 		t.Errorf("chain should be valid, broken at %d", result.BrokenAt)
 	}
@@ -102,7 +102,7 @@ func TestVerifyChainLinks_BrokenHash(t *testing.T) {
 	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
 	r2 := makeReceipt("urn:receipt:002", "chain-1", 2, strPtr("sha256:wrong"))
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2})
+	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2}, "")
 	if result.Valid {
 		t.Error("chain with wrong hash should be invalid")
 	}
@@ -119,7 +119,7 @@ func TestVerifyChainLinks_BrokenSequence(t *testing.T) {
 	hash1, _ := receipt.HashReceipt(r1)
 	r2 := makeReceipt("urn:receipt:002", "chain-1", 5, &hash1) // gap in sequence
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2})
+	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2}, "")
 	if result.Valid {
 		t.Error("chain with sequence gap should be invalid")
 	}
@@ -138,7 +138,7 @@ func TestVerifyChainLinks_BrokenSequence(t *testing.T) {
 func TestVerifyChainLinks_FirstReceiptNonNilPrevHash(t *testing.T) {
 	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, strPtr("sha256:shouldbenull"))
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1})
+	result := VerifyChainLinks([]receipt.AgentReceipt{r1}, "")
 	if result.Valid {
 		t.Error("first receipt with non-nil prev hash should be invalid")
 	}
@@ -147,5 +147,103 @@ func TestVerifyChainLinks_FirstReceiptNonNilPrevHash(t *testing.T) {
 	}
 	if result.Receipts[0].HashLinkValid {
 		t.Error("hash link should be invalid (non-nil prev hash on first receipt)")
+	}
+}
+
+func TestVerifyChainLinks_SignatureValid(t *testing.T) {
+	kp, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generate key pair: %v", err)
+	}
+
+	unsigned := receipt.UnsignedAgentReceipt{
+		Context:      receipt.Context(),
+		ID:           "urn:receipt:s1",
+		Type:         receipt.CredentialType(),
+		Version:      receipt.Version,
+		Issuer:       receipt.Issuer{ID: "did:agent:test"},
+		IssuanceDate: "2026-04-01T10:00:00Z",
+		CredentialSubject: receipt.CredentialSubject{
+			Principal: receipt.Principal{ID: "did:user:test"},
+			Action: receipt.Action{
+				ID:        "act_s1",
+				Type:      "filesystem.file.read",
+				RiskLevel: receipt.RiskLow,
+				Timestamp: "2026-04-01T10:00:00Z",
+			},
+			Outcome: receipt.Outcome{Status: receipt.StatusSuccess},
+			Chain:   receipt.Chain{Sequence: 1, ChainID: "chain-sig"},
+		},
+	}
+	signed, err := receipt.Sign(unsigned, kp.PrivateKey, "did:agent:test#key-1")
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	result := VerifyChainLinks([]receipt.AgentReceipt{signed}, kp.PublicKey)
+	if len(result.Receipts) != 1 {
+		t.Fatalf("got %d results, want 1", len(result.Receipts))
+	}
+	sv := result.Receipts[0].SignatureValid
+	if sv == nil {
+		t.Fatal("SignatureValid should not be nil when public key provided")
+	}
+	if !*sv {
+		t.Error("signature should be valid for correctly signed receipt")
+	}
+}
+
+func TestVerifyChainLinks_SignatureInvalid(t *testing.T) {
+	kp, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generate key pair: %v", err)
+	}
+	wrongKP, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generate wrong key pair: %v", err)
+	}
+
+	unsigned := receipt.UnsignedAgentReceipt{
+		Context:      receipt.Context(),
+		ID:           "urn:receipt:s2",
+		Type:         receipt.CredentialType(),
+		Version:      receipt.Version,
+		Issuer:       receipt.Issuer{ID: "did:agent:test"},
+		IssuanceDate: "2026-04-01T10:00:00Z",
+		CredentialSubject: receipt.CredentialSubject{
+			Principal: receipt.Principal{ID: "did:user:test"},
+			Action: receipt.Action{
+				ID:        "act_s2",
+				Type:      "filesystem.file.read",
+				RiskLevel: receipt.RiskLow,
+				Timestamp: "2026-04-01T10:00:00Z",
+			},
+			Outcome: receipt.Outcome{Status: receipt.StatusSuccess},
+			Chain:   receipt.Chain{Sequence: 1, ChainID: "chain-sig2"},
+		},
+	}
+	signed, err := receipt.Sign(unsigned, kp.PrivateKey, "did:agent:test#key-1")
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	result := VerifyChainLinks([]receipt.AgentReceipt{signed}, wrongKP.PublicKey)
+	if len(result.Receipts) != 1 {
+		t.Fatalf("got %d results, want 1", len(result.Receipts))
+	}
+	sv := result.Receipts[0].SignatureValid
+	if sv == nil {
+		t.Fatal("SignatureValid should not be nil when public key provided")
+	}
+	if *sv {
+		t.Error("signature should be invalid when verified with wrong key")
+	}
+}
+
+func TestVerifyChainLinks_NoPublicKey_SignatureNotChecked(t *testing.T) {
+	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
+	result := VerifyChainLinks([]receipt.AgentReceipt{r1}, "")
+	if result.Receipts[0].SignatureValid != nil {
+		t.Error("SignatureValid should be nil when no public key provided")
 	}
 }

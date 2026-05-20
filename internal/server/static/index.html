@@ -1406,11 +1406,15 @@
     }
 
     // ---------- Chain detail ----------
+    let chainSigKey = '';
+
     async function showChain(chainId) {
       try {
+        const verifyURL = '/api/chains/' + encodeURIComponent(chainId) + '/verify' +
+          (chainSigKey ? '?public_key=' + encodeURIComponent(chainSigKey) : '');
         const [receipts, verification] = await Promise.all([
           fetchJSON('/api/receipts?chain_id=' + encodeURIComponent(chainId)),
-          fetchJSON('/api/chains/' + encodeURIComponent(chainId) + '/verify'),
+          fetchJSON(verifyURL),
         ]);
 
         receipts.sort((a, b) => a.sequence - b.sequence);
@@ -1423,10 +1427,18 @@
       }
     }
 
+    async function reverifyChain(chainId) {
+      const ta = document.getElementById('chain-sig-key');
+      chainSigKey = ta ? ta.value.trim() : '';
+      await showChain(chainId);
+    }
+
     function renderChainDetail(chainId, receipts, verification) {
       const verifyStatus = verification.valid
         ? '<span style="color:var(--status-success);font-weight:500;">Chain valid</span>'
         : `<span style="color:var(--status-failure);font-weight:500;">Chain broken at #${verification.broken_at}</span>`;
+
+      const hasSigResults = (verification.receipts || []).some(v => v.signature_valid != null);
 
       const verifyMap = {};
       (verification.receipts || []).forEach(v => { verifyMap[v.receipt_id] = v; });
@@ -1437,10 +1449,25 @@
           <span class="muted text-sm">${verification.length} receipts</span>
         </div>
 
+        <details class="mb-4" ${chainSigKey ? 'open' : ''}>
+          <summary class="muted text-sm" style="cursor:pointer;">Signature verification</summary>
+          <div class="mt-2 space-y-2">
+            <label for="chain-sig-key" class="muted text-xs">Ed25519 public key (PEM)</label>
+            <textarea id="chain-sig-key" class="font-mono text-xs" rows="4" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;resize:vertical;" placeholder="-----BEGIN PUBLIC KEY-----…" aria-label="Ed25519 public key for signature verification">${escapeHtml(chainSigKey)}</textarea>
+            <button onclick="reverifyChain('${escapeAttr(chainId)}')" style="font-size:0.75rem;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);cursor:pointer;">Verify signatures</button>
+            ${hasSigResults ? '<span class="muted text-xs ml-2">Sig badges shown below</span>' : ''}
+          </div>
+        </details>
+
         <div class="relative ml-4">
           ${receipts.map((r) => {
             const v = verifyMap[r.id] || {};
             const valid = v.hash_link_valid !== false && v.sequence_valid !== false;
+            const sigBadge = v.signature_valid === true
+              ? '<span class="badge badge-success" title="Signature valid">Sig ✓</span>'
+              : v.signature_valid === false
+                ? '<span class="badge badge-failure" title="Signature invalid">Sig ✗</span>'
+                : '';
             return `
               <div class="relative chain-line pl-6 pb-6 last:pb-0">
                 <div class="chain-dot ${valid ? 'valid' : 'invalid'}"></div>
@@ -1449,7 +1476,7 @@
                     <span class="font-mono text-xs">#${r.sequence} ${escapeHtml(r.action_type)}</span>
                     <div class="flex gap-2 items-center">
                       <span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span>
-                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}
+                      <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${sigBadge}${mismatchIndicatorHTML(r)}
                     </div>
                   </div>
                   <div class="muted text-xs" title="${escapeAttr(r.timestamp)}">${formatRelative(r.timestamp)}</div>
@@ -1638,7 +1665,11 @@
     // ---------- Utilities ----------
     async function fetchJSON(url) {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const body = await res.json(); if (body.error) msg = body.error; } catch (_) {}
+        throw new Error(msg);
+      }
       return res.json();
     }
 
