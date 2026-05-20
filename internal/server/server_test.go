@@ -152,6 +152,34 @@ func TestReceiptsEndpoint_FilterByRisk(t *testing.T) {
 	}
 }
 
+func TestReceiptsEndpoint_Limit(t *testing.T) {
+	srv := setupServer(t)
+
+	// Valid limit caps the result set.
+	req := httptest.NewRequest("GET", "/api/receipts?limit=1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("limit=1: got status %d, want 200", w.Code)
+	}
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("limit=1: got %d rows, want 1", len(rows))
+	}
+
+	for _, bad := range []string{"0", "-1", "abc", "10001"} {
+		req = httptest.NewRequest("GET", "/api/receipts?limit="+bad, nil)
+		w = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("limit=%s: got status %d, want 400", bad, w.Code)
+		}
+	}
+}
+
 func TestReceiptsEndpoint_FilterBySince(t *testing.T) {
 	srv := setupServer(t)
 	req := httptest.NewRequest("GET", "/api/receipts?since=2026-04-01T10:01:00Z", nil)

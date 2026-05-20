@@ -139,7 +139,7 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 		}
 		const maxLimit = 10000
 		if n > maxLimit {
-			writeError(w, http.StatusBadRequest, "limit must not exceed 10000")
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("limit must not exceed %d", maxLimit))
 			return
 		}
 		f.Limit = &n
