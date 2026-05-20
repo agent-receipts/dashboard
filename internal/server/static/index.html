@@ -1189,10 +1189,14 @@
       setTimeout(() => URL.revokeObjectURL(url), 0);
     }
 
+    function safeFilename(s) {
+      return s.replace(/[^A-Za-z0-9_-]/g, '_');
+    }
+
     function downloadReceiptJSON() {
       if (!currentReceipt) return;
       const id = currentReceipt.id || '';
-      const suffix = id.includes(':') ? id.split(':').pop() : id;
+      const suffix = safeFilename(id.includes(':') ? id.split(':').pop() : id);
       downloadJSON(currentReceipt, `receipt-${suffix}.json`);
     }
 
@@ -1202,7 +1206,7 @@
         const full = await Promise.all(
           currentChainReceipts.map(r => fetchJSON('/api/receipts/' + encodeURIComponent(r.id)))
         );
-        const suffix = currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId;
+        const suffix = safeFilename(currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId);
         downloadJSON(full, `chain-${suffix}.json`);
       } catch (err) {
         showError('Failed to export chain: ' + err.message);
