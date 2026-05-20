@@ -188,12 +188,23 @@ func TestConfigEndpoint(t *testing.T) {
 	t.Cleanup(func() { reader.Close() })
 
 	cases := []struct {
-		name   string
-		cfg    Config
-		wantMs int64
+		name       string
+		cfg        Config
+		wantMs     int64
+		wantDBPath string
+		wantDBName string
+		wantVer    string
 	}{
-		{"zero falls back to default", Config{}, DefaultPollInterval.Milliseconds()},
-		{"explicit interval is echoed", Config{PollInterval: 2500 * time.Millisecond}, 2500},
+		{"zero falls back to default", Config{}, DefaultPollInterval.Milliseconds(), "", "", ""},
+		{"explicit interval is echoed", Config{PollInterval: 2500 * time.Millisecond}, 2500, "", "", ""},
+		{
+			"db path and version are echoed",
+			Config{DBPath: "/var/lib/agent-receipts/receipts.db", Version: "v1.2.3"},
+			DefaultPollInterval.Milliseconds(),
+			"/var/lib/agent-receipts/receipts.db",
+			"receipts.db",
+			"v1.2.3",
+		},
 	}
 
 	for _, tc := range cases {
@@ -209,6 +220,9 @@ func TestConfigEndpoint(t *testing.T) {
 			var got struct {
 				PollIntervalMs int64  `json:"poll_interval_ms"`
 				ServerTime     string `json:"server_time"`
+				DBPath         string `json:"db_path"`
+				DBName         string `json:"db_name"`
+				Version        string `json:"version"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatalf("decode: %v", err)
@@ -218,6 +232,17 @@ func TestConfigEndpoint(t *testing.T) {
 			}
 			if _, err := time.Parse(time.RFC3339, got.ServerTime); err != nil {
 				t.Errorf("server_time %q is not RFC3339: %v", got.ServerTime, err)
+			}
+			if got.DBPath != tc.wantDBPath {
+				t.Errorf("db_path = %q, want %q", got.DBPath, tc.wantDBPath)
+			}
+			// Empty DBPath must surface as empty db_name, not "." — that's
+			// what filepath.Base would return without the guard in handleConfig.
+			if got.DBName != tc.wantDBName {
+				t.Errorf("db_name = %q, want %q", got.DBName, tc.wantDBName)
+			}
+			if got.Version != tc.wantVer {
+				t.Errorf("version = %q, want %q", got.Version, tc.wantVer)
 			}
 		})
 	}
