@@ -172,6 +172,7 @@ func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 	chainID := r.PathValue("chainID")
+	publicKeyPEM := r.URL.Query().Get("public_key")
 
 	receipts, err := s.reader.GetChain(chainID)
 	if err != nil {
@@ -180,7 +181,7 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := verify.VerifyChainLinks(receipts)
+	result := verify.VerifyChainLinks(receipts, publicKeyPEM)
 	writeJSON(w, http.StatusOK, result)
 }
 
