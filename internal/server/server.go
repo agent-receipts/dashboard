@@ -21,9 +21,11 @@ const DefaultPollInterval = 5 * time.Second
 type Config struct {
 	// PollInterval is how often the dashboard polls /api/receipts for new rows.
 	PollInterval time.Duration
-	// DBPath is the absolute path to the SQLite database being served. Surfaced
-	// in the header so users know which store they are looking at when running
-	// multiple dashboards or pointing at a non-default file.
+	// DBPath is the path to the SQLite database being served, surfaced in the
+	// header so users know which store they are looking at when running
+	// multiple dashboards or pointing at a non-default file. Callers should
+	// resolve this to an absolute path (e.g. via filepath.Abs) before passing
+	// it in; the server uses it verbatim for display only.
 	DBPath string
 	// Version is the dashboard build version, shown in the header footer.
 	Version string
@@ -74,11 +76,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	// server_time gives the frontend an authoritative watermark for live polling
 	// when the store is empty at load — relying on the client's wall clock would
 	// silently drop receipts whenever the two clocks disagree.
+	// filepath.Base("") returns ".", which would surface in the header as a
+	// misleading file name; guard so an unset DBPath stays an empty string.
+	dbName := ""
+	if s.cfg.DBPath != "" {
+		dbName = filepath.Base(s.cfg.DBPath)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"poll_interval_ms": s.cfg.PollInterval.Milliseconds(),
 		"server_time":      time.Now().UTC().Format(time.RFC3339),
 		"db_path":          s.cfg.DBPath,
-		"db_name":          filepath.Base(s.cfg.DBPath),
+		"db_name":          dbName,
 		"version":          s.cfg.Version,
 	})
 }

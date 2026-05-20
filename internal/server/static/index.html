@@ -522,10 +522,13 @@
       </div>
     </div>
 
-    <nav class="tab-bar" role="tablist">
-      <button class="tab active" onclick="showView('overview')" id="tab-overview" role="tab">Overview</button>
-      <button class="tab" onclick="showView('receipts')" id="tab-receipts" role="tab">Receipts</button>
-      <button class="tab" onclick="showView('chains')" id="tab-chains" role="tab">Chains</button>
+    <!-- Native <button> semantics intentionally — implementing the full ARIA
+         tabs pattern (aria-selected toggling + aria-controls + role=tabpanel)
+         would carry assertive-tech expectations we don't currently meet. -->
+    <nav class="tab-bar">
+      <button class="tab active" onclick="showView('overview')" id="tab-overview">Overview</button>
+      <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
+      <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
     </nav>
   </header>
 
@@ -658,6 +661,10 @@
   <script>
     // ---------- State ----------
     let debounceTimer = null;
+    // Which single risk filter the "High risk" card should apply when clicked.
+    // The card counts high+critical, but the backend filter is single-valued,
+    // so we prefer critical when any exist (more severe), else high.
+    let highRiskPreferredFilter = 'high';
 
     // Live polling state. Tails /api/receipts using `since=<timestamp>` and
     // prepends fresh rows into whichever view is currently visible.
@@ -774,11 +781,13 @@
 
         const receipts = await fetchJSON('/api/receipts');
         if (gen !== poller.generation) return;
-        renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts', { compact: true });
-        if (poller.activeView === 'overview') nav.setSelector('#recent-receipts tbody tr');
+        renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
 
         // Seed polling from the full fetch, not the displayed slice.
         startPolling('overview', 'recent-receipts', receipts, () => ({}));
+        // Wire keyboard nav after startPolling so the j/k/Enter row list is
+        // initialised even though stopPolling() cleared activeView above.
+        nav.setSelector('#recent-receipts tbody tr');
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
       }
@@ -798,8 +807,11 @@
     function renderStats(stats) {
       const riskCounts = {};
       (stats.by_risk || []).forEach(r => riskCounts[r.label] = r.count);
-      const highRisk = (riskCounts['high'] || 0) + (riskCounts['critical'] || 0);
-      const latestRel = stats.latest_timestamp ? formatRelative(stats.latest_timestamp) : 'none';
+      const highCount     = riskCounts['high'] || 0;
+      const criticalCount = riskCounts['critical'] || 0;
+      const highRisk      = highCount + criticalCount;
+      highRiskPreferredFilter = criticalCount > 0 ? 'critical' : 'high';
+      const latestRel   = stats.latest_timestamp ? formatRelative(stats.latest_timestamp) : 'none';
       const latestTitle = stats.latest_timestamp || '';
 
       document.getElementById('stats-cards').innerHTML = `
@@ -819,9 +831,11 @@
           label: 'High risk',
           value: highRisk,
           danger: highRisk > 0,
-          sub: highRisk > 0 ? `${riskCounts['critical'] || 0} critical · ${riskCounts['high'] || 0} high` : 'no high-risk activity',
+          sub: highRisk > 0 ? `${criticalCount} critical · ${highCount} high` : 'no high-risk activity',
           onClick: "showHighRisk()",
-          title: 'Filter to high + critical receipts',
+          title: criticalCount > 0
+            ? 'Filter to critical receipts'
+            : 'Filter to high-risk receipts',
         })}
         ${statCardHTML({
           label: 'Latest',
@@ -871,7 +885,7 @@
     }
 
     function showHighRisk() {
-      document.getElementById('filter-risk').value = 'high';
+      document.getElementById('filter-risk').value = highRiskPreferredFilter;
       showView('receipts');
     }
 
@@ -951,8 +965,8 @@
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
         renderMatchCount(receipts.length);
-        if (poller.activeView === 'receipts') nav.setSelector('#receipts-table tbody tr');
         startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
+        nav.setSelector('#receipts-table tbody tr');
       } catch (err) {
         showError('Failed to load receipts: ' + err.message);
         document.getElementById('receipts-table').innerHTML =
@@ -1090,9 +1104,6 @@
       try {
         const chains = await fetchJSON('/api/chains');
         renderChainsList(chains);
-        if (poller.activeView !== 'chains') {
-          // chains view didn't manage active view yet; record state
-        }
         nav.setSelector('#chains-list .chain-card');
       } catch (err) {
         showError('Failed to load chains: ' + err.message);
@@ -1114,7 +1125,7 @@
       document.getElementById('chains-list').innerHTML = `
         <div class="space-y-3">
           ${chains.map(c => `
-            <div class="card card-clickable chain-card" data-chain-id="${escapeAttr(c.chain_id)}" onclick="showChain(this.dataset.chainId)" tabindex="0">
+            <div class="card card-clickable chain-card" data-chain-id="${escapeAttr(c.chain_id)}" onclick="showChain(this.dataset.chainId)" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showChain(this.dataset.chainId)}">
               <div class="flex items-center justify-between mb-1">
                 <span class="font-mono text-sm accent">${escapeHtml(c.chain_id)}</span>
                 <span class="muted text-sm">${c.receipt_count} receipts</span>
@@ -1277,17 +1288,23 @@
     }
 
     // ---------- Modal helpers ----------
+    let lastFocusedBeforeModal = null;
     function openModal(id) {
       const el = document.getElementById(id);
-      el.hidden = false;
       lastFocusedBeforeModal = document.activeElement;
+      el.hidden = false;
+      // Move focus inside the modal so keyboard / screen-reader users don't
+      // get stuck behind the overlay. Esc and backdrop-click still close.
+      const focusable = el.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable) focusable.focus();
     }
     function closeModalById(id) {
       const el = document.getElementById(id);
       el.hidden = true;
       if (lastFocusedBeforeModal && lastFocusedBeforeModal.focus) lastFocusedBeforeModal.focus();
     }
-    let lastFocusedBeforeModal = null;
     function closeModal()      { closeModalById('receipt-modal'); }
     function closeChainModal() { closeModalById('chain-modal'); }
     function showShortcuts()   { openModal('shortcuts-modal'); }

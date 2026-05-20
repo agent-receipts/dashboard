@@ -684,6 +684,51 @@ func TestReader_Stats(t *testing.T) {
 	if len(stats.ByStatus) == 0 {
 		t.Error("empty by_status")
 	}
+	// LatestTimestamp must match the newest seeded receipt; the header
+	// "Updated Nm ago" indicator depends on this value being accurate.
+	const wantLatest = "2026-04-01T11:01:00Z"
+	if stats.LatestTimestamp != wantLatest {
+		t.Errorf("got latest %q, want %q", stats.LatestTimestamp, wantLatest)
+	}
+}
+
+func TestReader_Stats_EmptyStore(t *testing.T) {
+	// MAX(timestamp) returns NULL on an empty table; the reader must return
+	// the zero value rather than erroring, so the dashboard can render an
+	// "(none)" latest-timestamp slot on a fresh install.
+	dbPath := seedEmptyDB(t)
+	r, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	stats, err := r.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Total != 0 {
+		t.Errorf("got total %d, want 0", stats.Total)
+	}
+	if stats.Chains != 0 {
+		t.Errorf("got chains %d, want 0", stats.Chains)
+	}
+	if stats.LatestTimestamp != "" {
+		t.Errorf("got latest %q, want empty", stats.LatestTimestamp)
+	}
+}
+
+// seedEmptyDB creates a temporary SQLite file with the receipts schema in
+// place but no rows — used to exercise empty-store paths like NULL MAX().
+func seedEmptyDB(t *testing.T) string {
+	t.Helper()
+	dbPath := t.TempDir() + "/empty-receipts.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	s.Close()
+	return dbPath
 }
 
 func TestReader_IsReadOnly(t *testing.T) {

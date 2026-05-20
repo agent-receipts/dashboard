@@ -73,8 +73,9 @@ type Stats struct {
 	ByRisk   []GroupCount `json:"by_risk"`
 	ByStatus []GroupCount `json:"by_status"`
 	// LatestTimestamp is the ISO 8601 timestamp of the most recent receipt
-	// in the store, or "" if the store is empty. Used in the header to show
-	// when the audit trail was last updated.
+	// in the store. Omitted from the JSON response (and left as the zero
+	// value) when the store is empty. Used in the header to show when the
+	// audit trail was last updated.
 	LatestTimestamp string `json:"latest_timestamp,omitempty"`
 }
 

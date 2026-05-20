@@ -150,9 +150,17 @@ func main() {
 	}
 	defer reader.Close()
 
+	// Resolve to an absolute path for the header display so users see a
+	// stable, fully-qualified location even if -db was passed relatively.
+	// Fall back to the raw value if resolution somehow fails; the dashboard
+	// still works either way.
+	displayDBPath := *dbPath
+	if abs, err := filepath.Abs(*dbPath); err == nil {
+		displayDBPath = abs
+	}
 	srv := server.New(reader, server.Config{
 		PollInterval: *pollInterval,
-		DBPath:       *dbPath,
+		DBPath:       displayDBPath,
 		Version:      resolveVersion(),
 	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
