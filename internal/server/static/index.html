@@ -1337,12 +1337,12 @@
       const hashRows = [];
       if (hasConvHash) {
         hashRows.push(kvBlock('Conversation',
-          `<span class="font-mono text-xs" title="${escapeAttr(intent.conversation_hash)}">${escapeHtml(truncateHash16(intent.conversation_hash))}</span>`
+          `<span class="font-mono text-xs" title="${escapeAttr(intent.conversation_hash)}">${escapeHtml(truncateHash(intent.conversation_hash, 16))}</span>`
         ));
       }
       if (hasReasonHash) {
         hashRows.push(kvBlock('Reasoning',
-          `<span class="font-mono text-xs" title="${escapeAttr(intent.reasoning_hash)}">${escapeHtml(truncateHash16(intent.reasoning_hash))}</span>`
+          `<span class="font-mono text-xs" title="${escapeAttr(intent.reasoning_hash)}">${escapeHtml(truncateHash(intent.reasoning_hash, 16))}</span>`
         ));
       }
       if (hashRows.length > 0) {
@@ -1356,9 +1356,9 @@
         </div>`;
     }
 
-    function truncateHash16(h) {
+    function truncateHash(h, n = 12) {
       if (!h) return '';
-      return h.length > 16 ? h.slice(0, 16) + '…' : h;
+      return h.length > n ? h.slice(0, n) + '…' : h;
     }
 
     // ---------- Authorization section (modal body) ----------
@@ -1458,10 +1458,6 @@
       return `<div><div class="muted text-xs mb-2">Outcome</div><div class="space-y-2">${rows.join('')}</div></div>`;
     }
 
-    function truncateHash(h) {
-      if (!h) return '';
-      return h.length > 12 ? h.slice(0, 12) + '…' : h;
-    }
 
     function formatDuration(seconds) {
       if (seconds < 60) return `${seconds}s`;
