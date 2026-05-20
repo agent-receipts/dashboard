@@ -1386,8 +1386,12 @@
 
       const kvRows = [];
       if (hasGrantedAt) {
+        const grantedDate = new Date(auth.granted_at);
+        const grantedVal = !Number.isNaN(grantedDate.getTime())
+          ? escapeHtml(formatTime(auth.granted_at))
+          : escapeHtml(auth.granted_at);
         kvRows.push(kvBlock('Granted',
-          `<span title="${escapeAttr(auth.granted_at)}">${escapeHtml(formatTime(auth.granted_at))}</span>`
+          `<span title="${escapeAttr(auth.granted_at)}">${grantedVal}</span>`
         ));
       }
       if (hasExpiresAt) {
