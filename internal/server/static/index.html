@@ -1376,7 +1376,7 @@
       if (hasScopes) {
         const badges = auth.scopes.map(s =>
           `<span class="badge badge-unknown" style="font-family:var(--font-mono);">${escapeHtml(s)}</span>`
-        ).join(' ');
+        ).join('');
         rows.push(`
           <div>
             <div class="muted text-xs mb-1">Scopes</div>
@@ -1391,7 +1391,8 @@
         ));
       }
       if (hasExpiresAt) {
-        const expired = new Date(auth.expires_at) < new Date();
+        const expiresDate = new Date(auth.expires_at);
+        const expired = !Number.isNaN(expiresDate.getTime()) && expiresDate < new Date();
         const expiredNote = expired
           ? ` <span style="color:var(--status-failure);font-size:0.75rem;">(expired)</span>`
           : '';
