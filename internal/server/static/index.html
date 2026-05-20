@@ -1366,7 +1366,8 @@
         <details class="mb-4" ${chainSigKey ? 'open' : ''}>
           <summary class="muted text-sm" style="cursor:pointer;">Signature verification</summary>
           <div class="mt-2 space-y-2">
-            <textarea id="chain-sig-key" class="font-mono text-xs" rows="4" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;resize:vertical;" placeholder="Paste PEM public key (-----BEGIN PUBLIC KEY-----…)">${escapeHtml(chainSigKey)}</textarea>
+            <label for="chain-sig-key" class="muted text-xs">Ed25519 public key (PEM)</label>
+            <textarea id="chain-sig-key" class="font-mono text-xs" rows="4" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;resize:vertical;" placeholder="-----BEGIN PUBLIC KEY-----…" aria-label="Ed25519 public key for signature verification">${escapeHtml(chainSigKey)}</textarea>
             <button onclick="reverifyChain('${escapeAttr(chainId)}')" style="font-size:0.75rem;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);cursor:pointer;">Verify signatures</button>
             ${hasSigResults ? '<span class="muted text-xs ml-2">Sig badges shown below</span>' : ''}
           </div>

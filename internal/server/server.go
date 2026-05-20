@@ -2,8 +2,12 @@
 package server
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
 	"embed"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -174,6 +178,13 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 	chainID := r.PathValue("chainID")
 	publicKeyPEM := r.URL.Query().Get("public_key")
 
+	if publicKeyPEM != "" {
+		if err := validateEd25519PEM(publicKeyPEM); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid public_key: "+err.Error())
+			return
+		}
+	}
+
 	receipts, err := s.reader.GetChain(chainID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "chain query failed")
@@ -183,6 +194,21 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 
 	result := verify.VerifyChainLinks(receipts, publicKeyPEM)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func validateEd25519PEM(pemStr string) error {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return fmt.Errorf("not a valid PEM block")
+	}
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse public key: %w", err)
+	}
+	if _, ok := key.(ed25519.PublicKey); !ok {
+		return fmt.Errorf("not an Ed25519 public key")
+	}
+	return nil
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
