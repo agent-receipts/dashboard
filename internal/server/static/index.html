@@ -899,7 +899,7 @@
       const maxAction = Math.max(...topActions.map(r => r.count), 1);
       document.getElementById('action-chart').innerHTML = topActions.map(r => `
         <div class="bar-row">
-          <span class="bar-label"><span class="badge">${escapeHtml(r.label)}</span></span>
+          <span class="bar-label" style="width:140px;min-width:140px;" title="${escapeAttr(r.label)}"><span class="badge" style="max-width:136px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(r.label)}</span></span>
           <div class="bar-track"><div class="bar-fill bar-action" style="width: ${(r.count / maxAction * 100)}%"></div></div>
           <span class="bar-count">${r.count}</span>
         </div>
