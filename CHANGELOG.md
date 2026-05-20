@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Overview "Recent receipts" now fetches only 20 rows from the server instead of the full store (up to 10,000 after #55), reducing unnecessary bandwidth and memory usage (#58)
+
 ### Added
 
 - Output status mismatch detection — flags receipts where the declared output hash does not match the computed value (#52)

@@ -806,7 +806,7 @@
         renderStats(stats);
         renderHeaderContext(null, stats);
 
-        const receipts = await fetchJSON('/api/receipts');
+        const receipts = await fetchJSON('/api/receipts?limit=20');
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
 
