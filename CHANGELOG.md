@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Output status mismatch detection — flags receipts where the declared output hash does not match the computed value (#52)
 - Dashboard UI polish: context header showing active database, keyboard navigation between receipts, and loading skeletons (#53)
+- JSON export buttons in the receipt detail and chain detail modals — download individual receipts as `receipt-{id}.json` or entire chains as `chain-{chainId}.json` (#7)
 
 ## [0.1.6] - 2026-05-19
 
