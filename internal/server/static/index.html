@@ -633,7 +633,10 @@
       <div class="modal-panel" role="dialog" aria-labelledby="modal-title" aria-modal="true">
         <div class="modal-head">
           <h2 class="modal-title" id="modal-title">Receipt Detail</h2>
-          <button class="icon-btn" type="button" onclick="closeModal()" aria-label="Close">×</button>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="icon-btn" type="button" onclick="downloadReceiptJSON()" aria-label="Download receipt as JSON" title="Download JSON" style="font-size:0.75rem;width:auto;padding:0 8px;">⬇ JSON</button>
+            <button class="icon-btn" type="button" onclick="closeModal()" aria-label="Close">×</button>
+          </div>
         </div>
         <div id="modal-content" class="modal-body"></div>
       </div>
@@ -644,7 +647,10 @@
       <div class="modal-panel" role="dialog" aria-labelledby="chain-modal-title" aria-modal="true">
         <div class="modal-head">
           <h2 class="modal-title" id="chain-modal-title">Chain Detail</h2>
-          <button class="icon-btn" type="button" onclick="closeChainModal()" aria-label="Close">×</button>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="icon-btn" type="button" onclick="downloadChainJSON()" aria-label="Download chain as JSON" title="Download chain JSON" style="font-size:0.75rem;width:auto;padding:0 8px;">⬇ JSON</button>
+            <button class="icon-btn" type="button" onclick="closeChainModal()" aria-label="Close">×</button>
+          </div>
         </div>
         <div id="chain-modal-content" class="modal-body"></div>
       </div>
@@ -676,6 +682,12 @@
   <script>
     // ---------- State ----------
     let debounceTimer = null;
+    // Holds the receipt/chain data for the currently open detail modal so
+    // the download buttons can reference it without threading the objects
+    // through HTML onclick attributes.
+    let currentReceipt = null;
+    let currentChainId = null;
+    let currentChainReceipts = null;
     // Which single risk filter the "High risk" card should apply when clicked.
     // The card counts high+critical, but the backend filter is single-valued,
     // so we prefer critical when any exist (more severe), else high.
@@ -1164,10 +1176,48 @@
       `;
     }
 
+    // ---------- JSON download ----------
+    function downloadJSON(data, filename) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function safeFilename(s) {
+      return s.replace(/[^A-Za-z0-9_-]/g, '_');
+    }
+
+    function downloadReceiptJSON() {
+      if (!currentReceipt) return;
+      const id = currentReceipt.id || '';
+      const suffix = safeFilename(id.includes(':') ? id.split(':').pop() : id);
+      downloadJSON(currentReceipt, `receipt-${suffix}.json`);
+    }
+
+    async function downloadChainJSON() {
+      if (!currentChainReceipts || !currentChainId) return;
+      try {
+        const full = await Promise.all(
+          currentChainReceipts.map(r => fetchJSON('/api/receipts/' + encodeURIComponent(r.id)))
+        );
+        const suffix = safeFilename(currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId);
+        downloadJSON(full, `chain-${suffix}.json`);
+      } catch (err) {
+        showError('Failed to export chain: ' + err.message);
+      }
+    }
+
     // ---------- Receipt detail ----------
     async function showReceipt(id) {
       try {
         const receipt = await fetchJSON('/api/receipts/' + encodeURIComponent(id));
+        currentReceipt = receipt;
         document.getElementById('modal-title').textContent = receipt.id;
         document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt);
         openModal('receipt-modal');
@@ -1418,6 +1468,8 @@
         ]);
 
         receipts.sort((a, b) => a.sequence - b.sequence);
+        currentChainId = chainId;
+        currentChainReceipts = receipts;
 
         document.getElementById('chain-modal-title').textContent = chainId;
         document.getElementById('chain-modal-content').innerHTML = renderChainDetail(chainId, receipts, verification);
