@@ -1278,11 +1278,9 @@
             </div>
           </div>
 
-          ${subj.intent && subj.intent.prompt_preview ? `
-          <div>
-            <div class="muted text-xs mb-1">Intent</div>
-            <div class="text-sm" style="background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;">${escapeHtml(subj.intent.prompt_preview)}</div>
-          </div>` : ''}
+          ${intentSectionHTML(subj.intent)}
+
+          ${authorizationSectionHTML(subj.authorization)}
 
           ${parametersDisclosureHTML(subj.action.parameters_disclosure)}
 
@@ -1313,6 +1311,115 @@
           <div class="${cls}">${valueHTML}</div>
         </div>
       `;
+    }
+
+    // ---------- Intent section (modal body) ----------
+    function intentSectionHTML(intent) {
+      if (!intent) return '';
+      const hasPreview     = intent.prompt_preview && intent.prompt_preview.length > 0;
+      const hasConvHash    = intent.conversation_hash && intent.conversation_hash.length > 0;
+      const hasReasonHash  = intent.reasoning_hash && intent.reasoning_hash.length > 0;
+      if (!hasPreview && !hasConvHash && !hasReasonHash) return '';
+
+      const rows = [];
+
+      if (hasPreview) {
+        const truncatedNote = intent.prompt_preview_truncated
+          ? ` <span class="muted text-xs" style="font-style:italic;">(truncated)</span>`
+          : '';
+        rows.push(`
+          <div>
+            <div class="muted text-xs mb-1">Preview${truncatedNote}</div>
+            <div class="text-sm" style="background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;">${escapeHtml(intent.prompt_preview)}</div>
+          </div>`);
+      }
+
+      const hashRows = [];
+      if (hasConvHash) {
+        hashRows.push(kvBlock('Conversation',
+          `<span class="font-mono text-xs" title="${escapeAttr(intent.conversation_hash)}">${escapeHtml(truncateHash(intent.conversation_hash, 16))}</span>`
+        ));
+      }
+      if (hasReasonHash) {
+        hashRows.push(kvBlock('Reasoning',
+          `<span class="font-mono text-xs" title="${escapeAttr(intent.reasoning_hash)}">${escapeHtml(truncateHash(intent.reasoning_hash, 16))}</span>`
+        ));
+      }
+      if (hashRows.length > 0) {
+        rows.push(`<div class="grid grid-cols-2 gap-4">${hashRows.join('')}</div>`);
+      }
+
+      return `
+        <div>
+          <div class="muted text-xs mb-2">Intent</div>
+          <div class="space-y-2">${rows.join('')}</div>
+        </div>`;
+    }
+
+    function truncateHash(h, n = 12) {
+      if (!h) return '';
+      return h.length > n ? h.slice(0, n) + '…' : h;
+    }
+
+    // ---------- Authorization section (modal body) ----------
+    function authorizationSectionHTML(auth) {
+      if (!auth || typeof auth !== 'object') return '';
+
+      const hasScopes    = Array.isArray(auth.scopes) && auth.scopes.length > 0;
+      const hasGrantedAt = auth.granted_at && auth.granted_at.length > 0;
+      const hasExpiresAt = auth.expires_at && auth.expires_at.length > 0;
+      const hasGrantRef  = auth.grant_ref && auth.grant_ref.length > 0;
+      if (!hasScopes && !hasGrantedAt && !hasExpiresAt && !hasGrantRef) return '';
+
+      const rows = [];
+
+      if (hasScopes) {
+        const badges = auth.scopes.map(s =>
+          `<span class="badge badge-unknown" style="font-family:var(--font-mono);">${escapeHtml(s)}</span>`
+        ).join('');
+        rows.push(`
+          <div>
+            <div class="muted text-xs mb-1">Scopes</div>
+            <div class="flex flex-wrap gap-1">${badges}</div>
+          </div>`);
+      }
+
+      const kvRows = [];
+      if (hasGrantedAt) {
+        const grantedDate = new Date(auth.granted_at);
+        const grantedVal = !Number.isNaN(grantedDate.getTime())
+          ? escapeHtml(formatTime(auth.granted_at))
+          : escapeHtml(auth.granted_at);
+        kvRows.push(kvBlock('Granted',
+          `<span title="${escapeAttr(auth.granted_at)}">${grantedVal}</span>`
+        ));
+      }
+      if (hasExpiresAt) {
+        const expiresDate = new Date(auth.expires_at);
+        const expired = !Number.isNaN(expiresDate.getTime()) && expiresDate < new Date();
+        const expiredNote = expired
+          ? ` <span style="color:var(--status-failure);font-size:0.75rem;">(expired)</span>`
+          : '';
+        kvRows.push(kvBlock('Expires',
+          `<span title="${escapeAttr(auth.expires_at)}">${escapeHtml(formatTime(auth.expires_at))}</span>${expiredNote}`
+        ));
+      }
+      if (kvRows.length > 0) {
+        rows.push(`<div class="grid grid-cols-2 gap-4">${kvRows.join('')}</div>`);
+      }
+
+      if (hasGrantRef) {
+        rows.push(kvBlock('Grant ref',
+          `<span class="font-mono text-xs">${escapeHtml(auth.grant_ref)}</span>`,
+          { small: true }
+        ));
+      }
+
+      return `
+        <div>
+          <div class="muted text-xs mb-2">Authorization</div>
+          <div class="space-y-2">${rows.join('')}</div>
+        </div>`;
     }
 
     // ---------- Outcome details (modal body) ----------
@@ -1356,10 +1463,6 @@
       return `<div><div class="muted text-xs mb-2">Outcome</div><div class="space-y-2">${rows.join('')}</div></div>`;
     }
 
-    function truncateHash(h) {
-      if (!h) return '';
-      return h.length > 12 ? h.slice(0, 12) + '…' : h;
-    }
 
     function formatDuration(seconds) {
       if (seconds < 60) return `${seconds}s`;
