@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,6 +130,19 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("since"); v != "" {
 		f.Since = &v
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		const maxLimit = 10000
+		if n > maxLimit {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("limit must not exceed %d", maxLimit))
+			return
+		}
+		f.Limit = &n
 	}
 
 	rows, err := s.reader.ListReceipts(f)
