@@ -72,6 +72,10 @@ type Stats struct {
 	Chains   int          `json:"chains"`
 	ByRisk   []GroupCount `json:"by_risk"`
 	ByStatus []GroupCount `json:"by_status"`
+	// LatestTimestamp is the ISO 8601 timestamp of the most recent receipt
+	// in the store, or "" if the store is empty. Used in the header to show
+	// when the audit trail was last updated.
+	LatestTimestamp string `json:"latest_timestamp,omitempty"`
 }
 
 // GroupCount is a label + count pair.
@@ -315,6 +319,16 @@ func (r *Reader) Stats() (Stats, error) {
 	}
 	if err := r.db.QueryRow("SELECT COUNT(DISTINCT chain_id) FROM receipts").Scan(&st.Chains); err != nil {
 		return Stats{}, err
+	}
+
+	// MAX over an empty table returns NULL; scan into a nullable string so the
+	// empty-store case is "" rather than an error.
+	var latest sql.NullString
+	if err := r.db.QueryRow("SELECT MAX(timestamp) FROM receipts").Scan(&latest); err != nil {
+		return Stats{}, err
+	}
+	if latest.Valid {
+		st.LatestTimestamp = latest.String
 	}
 
 	var err error

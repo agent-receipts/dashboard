@@ -7,86 +7,405 @@
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            bg: { DEFAULT: '#0d1117', card: '#161b22', hover: '#1c2128' },
-            border: '#30363d',
-            text: { primary: '#e6edf3', secondary: '#7d8590', muted: '#484f58' },
-          }
-        }
-      }
-    }
+    tailwind.config = { darkMode: 'class' };
   </script>
   <style>
-    body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
-    .risk-low { color: #3fb950; }
-    .risk-medium { color: #d29922; }
-    .risk-high { color: #f85149; }
-    .risk-critical { color: #ff7b72; background: rgba(248,81,73,0.1); padding: 2px 8px; border-radius: 9999px; }
-    .status-success { color: #3fb950; }
-    .status-failure { color: #f85149; }
-    .status-pending { color: #d29922; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
-    .badge-low { background: rgba(63,185,80,0.15); color: #3fb950; }
-    .badge-medium { background: rgba(210,153,34,0.15); color: #d29922; }
-    .badge-high { background: rgba(248,81,73,0.15); color: #f85149; }
-    .badge-critical { background: rgba(255,123,114,0.2); color: #ff7b72; border: 1px solid rgba(255,123,114,0.3); }
-    .badge-success { background: rgba(63,185,80,0.15); color: #3fb950; }
-    .badge-failure { background: rgba(248,81,73,0.15); color: #f85149; }
-    .badge-pending { background: rgba(210,153,34,0.15); color: #d29922; }
-    .verify-pass { color: #3fb950; }
-    .verify-fail { color: #f85149; }
-    .tab { cursor: pointer; padding: 8px 16px; border-bottom: 2px solid transparent; }
-    .tab.active { border-bottom-color: #f78166; color: #e6edf3; }
-    .tab:not(.active) { color: #7d8590; }
-    .tab:hover:not(.active) { color: #e6edf3; border-bottom-color: #30363d; }
-    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 16px; overflow-x: auto; font-size: 0.8rem; }
-    .chain-line { border-left: 2px solid #30363d; }
-    .chain-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #30363d; background: #161b22; position: absolute; left: -6px; top: 8px; }
-    .chain-dot.valid { border-color: #3fb950; background: rgba(63,185,80,0.3); }
-    .chain-dot.invalid { border-color: #f85149; background: rgba(248,81,73,0.3); }
-    select, input[type="text"] {
-      background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
-      border-radius: 6px; padding: 6px 10px; font-size: 0.875rem;
-    }
-    select:focus, input[type="text"]:focus { outline: none; border-color: #58a6ff; }
+    /* ---------- Tokens ---------- */
+    :root {
+      --bg:             #0d1117;
+      --surface:        #161b22;
+      --surface-hover:  #1c2128;
+      --surface-sunken: #010409;
+      --border:         #30363d;
+      --border-strong:  #484f58;
+      --text:           #e6edf3;
+      --muted:          #7d8590;
+      --subtle:         #484f58;
+      --accent:         #58a6ff;
+      --accent-warm:    #f78166;
 
+      --risk-low:       #3fb950;
+      --risk-medium:    #d29922;
+      --risk-high:      #f85149;
+      --risk-critical:  #ff7b72;
+      --status-success: #3fb950;
+      --status-failure: #f85149;
+      --status-pending: #d29922;
+
+      --radius:    6px;
+      --radius-lg: 8px;
+      --shadow:    0 4px 12px rgba(0,0,0,0.4);
+
+      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    /* ---------- Reset / base ---------- */
+    body { background: var(--bg); color: var(--text); font-family: var(--font-sans); }
+    .font-mono { font-family: var(--font-mono); }
+    .muted { color: var(--muted); }
+    .subtle { color: var(--subtle); }
+    .accent { color: var(--accent); }
+    .divider { border-color: var(--border); }
+
+    /* ---------- Surfaces ---------- */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+    }
+    .card-clickable {
+      cursor: pointer;
+      transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+    }
+    .card-clickable:hover { border-color: var(--border-strong); background: var(--surface-hover); }
+    .card-clickable:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ---------- Header ---------- */
+    .app-header {
+      position: sticky; top: 0; z-index: 40;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .app-header-inner {
+      display: flex; align-items: center; gap: 16px;
+      padding: 10px 24px;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 8px;
+      font-weight: 600; font-size: 0.95rem;
+    }
+    .brand-label { color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+    .header-context {
+      display: flex; align-items: center; gap: 18px;
+      flex: 1; min-width: 0;
+      font-size: 0.8rem; color: var(--muted);
+    }
+    .ctx-item { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .ctx-item .ctx-label { color: var(--subtle); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.65rem; }
+    .ctx-item .ctx-value { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 26ch; }
+    .ctx-item.ctx-mono .ctx-value { font-family: var(--font-mono); font-size: 0.78rem; }
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+
+    .conn-status {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.8rem;
+    }
+    .conn-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--status-success);
+      box-shadow: 0 0 0 0 rgba(63,185,80,0.5);
+    }
+    .conn-status.is-error { color: var(--status-failure); }
+    .conn-status.is-error .conn-dot { background: var(--status-failure); }
+
+    .icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px;
+      border-radius: var(--radius);
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer; font-size: 0.85rem;
+      transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    }
+    .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+    .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ---------- Tabs ---------- */
+    .tab-bar {
+      display: flex; gap: 2px;
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    .tab {
+      cursor: pointer;
+      padding: 10px 16px;
+      border: none; background: transparent;
+      border-bottom: 2px solid transparent;
+      color: var(--muted);
+      font-size: 0.875rem;
+      font-family: inherit;
+    }
+    .tab.active { border-bottom-color: var(--accent-warm); color: var(--text); }
+    .tab:not(.active):hover { color: var(--text); border-bottom-color: var(--border); }
+    .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+    /* ---------- Stats cards ---------- */
+    .stat-card {
+      padding: 16px;
+      display: flex; flex-direction: column; gap: 4px;
+      min-height: 92px;
+    }
+    .stat-label { color: var(--muted); font-size: 0.78rem; font-weight: 500; }
+    .stat-value { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+    .stat-value.is-danger { color: var(--risk-high); }
+    .stat-sub { color: var(--muted); font-size: 0.75rem; margin-top: auto; }
+    .stat-chevron {
+      position: absolute; right: 12px; top: 12px;
+      color: var(--subtle); font-size: 0.85rem;
+      opacity: 0; transition: opacity 0.12s ease, color 0.12s ease;
+    }
+    .card-clickable:hover .stat-chevron,
+    .card-clickable:focus-visible .stat-chevron { opacity: 1; color: var(--accent); }
+
+    /* ---------- Bar charts ---------- */
+    .bar-row { display: flex; align-items: center; gap: 12px; }
+    .bar-label { width: 72px; }
+    .bar-track {
+      flex: 1; height: 8px;
+      background: var(--surface-sunken);
+      border-radius: 9999px;
+      overflow: hidden;
+    }
+    .bar-fill { height: 100%; border-radius: 9999px; }
+    .bar-count { width: 36px; text-align: right; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* ---------- Badges ---------- */
+    .badge {
+      display: inline-block; padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 0.7rem; font-weight: 500;
+      line-height: 1.4;
+    }
+    .badge-low      { background: rgba(63,185,80,0.15);  color: var(--risk-low); }
+    .badge-medium   { background: rgba(210,153,34,0.15); color: var(--risk-medium); }
+    .badge-high     { background: rgba(248,81,73,0.15);  color: var(--risk-high); }
+    .badge-critical { background: rgba(255,123,114,0.2); color: var(--risk-critical); border: 1px solid rgba(255,123,114,0.3); }
+    .badge-success  { background: rgba(63,185,80,0.15);  color: var(--status-success); }
+    .badge-failure  { background: rgba(248,81,73,0.15);  color: var(--status-failure); }
+    .badge-pending  { background: rgba(210,153,34,0.15); color: var(--status-pending); }
+
+    .bar-low      { background: rgba(63,185,80,0.6); }
+    .bar-medium   { background: rgba(210,153,34,0.6); }
+    .bar-high     { background: rgba(248,81,73,0.6); }
+    .bar-critical { background: rgba(255,123,114,0.7); }
+    .bar-success  { background: rgba(63,185,80,0.6); }
+    .bar-failure  { background: rgba(248,81,73,0.6); }
+    .bar-pending  { background: rgba(210,153,34,0.6); }
+
+    /* ---------- Form controls ---------- */
+    .form-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .form-label {
+      font-size: 0.7rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    select, input[type="text"] {
+      background: var(--surface-sunken);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 0.875rem;
+      font-family: inherit;
+    }
+    select:focus, input[type="text"]:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(88,166,255,0.15);
+    }
+
+    /* ---------- Filter chips ---------- */
+    .filter-bar-meta {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      margin-top: 4px; margin-bottom: 12px;
+      font-size: 0.8rem;
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 2px 4px 2px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      color: var(--text);
+      font-size: 0.75rem;
+    }
+    .chip .chip-key { color: var(--muted); text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.04em; }
+    .chip .chip-value { color: var(--text); font-family: var(--font-mono); }
+    .chip-x {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--muted); padding: 0 6px;
+      line-height: 1; font-size: 0.95rem;
+      border-radius: 9999px;
+    }
+    .chip-x:hover { color: var(--text); background: var(--surface-hover); }
+    .chip-clear-all {
+      background: none; border: none; cursor: pointer;
+      color: var(--accent); font-size: 0.75rem; padding: 2px 4px;
+    }
+    .chip-clear-all:hover { text-decoration: underline; }
+    .match-count { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+    /* ---------- Table ---------- */
+    .receipts-table-wrap {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .receipts-table-scroll {
+      max-height: calc(100vh - 280px);
+      overflow: auto;
+    }
+    table.receipts {
+      width: 100%; border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    table.receipts thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--surface);
+      color: var(--muted);
+      font-weight: 500; text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    table.receipts tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      vertical-align: middle;
+    }
+    table.receipts tbody tr {
+      cursor: pointer;
+      transition: background 0.08s ease;
+    }
+    table.receipts tbody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
+    table.receipts tbody tr:hover { background: var(--surface-hover); }
+    table.receipts tbody tr.kbd-focused {
+      box-shadow: inset 2px 0 0 0 var(--accent);
+      background: var(--surface-hover);
+    }
+    table.receipts tbody tr.row-new { animation: row-flash 2.5s ease-out; }
     @keyframes row-flash {
-      0% { background-color: rgba(88,166,255,0.25); }
+      0%   { background-color: rgba(88,166,255,0.25); }
       100% { background-color: transparent; }
     }
-    tr.row-new { animation: row-flash 2.5s ease-out; }
 
+    .chain-card {
+      padding: 12px 14px;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+    .chain-card.kbd-focused {
+      border-color: var(--accent);
+      box-shadow: inset 2px 0 0 0 var(--accent);
+    }
+
+    /* ---------- Empty / loading / error ---------- */
+    .empty-state {
+      text-align: center; padding: 48px 16px;
+      color: var(--muted);
+    }
+    .empty-state .empty-title { color: var(--text); font-weight: 500; margin-bottom: 4px; }
+    .empty-state .empty-hint { font-size: 0.85rem; }
+    .empty-state .empty-action { margin-top: 12px; }
+
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface) 0%, var(--surface-hover) 50%, var(--surface) 100%);
+      background-size: 200% 100%;
+      border-radius: var(--radius);
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+      display: inline-block;
+    }
+    @keyframes skeleton-pulse {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .skeleton-line { height: 12px; width: 100%; display: block; }
+
+    .error-banner {
+      background: rgba(248,81,73,0.08);
+      border: 1px solid rgba(248,81,73,0.4);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      font-size: 0.85rem;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .error-banner .error-dot { color: var(--status-failure); }
+    .error-banner .error-close {
+      margin-left: auto;
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 1rem;
+    }
+
+    /* ---------- Live toast ---------- */
     #live-toast {
       position: fixed; bottom: 20px; right: 20px; z-index: 60;
-      background: #161b22; border: 1px solid #30363d; border-left: 3px solid #58a6ff;
-      color: #e6edf3; font-size: 0.875rem; padding: 8px 14px; border-radius: 6px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      color: var(--text);
+      font-size: 0.85rem;
+      padding: 8px 14px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
       opacity: 0; transform: translateY(10px); pointer-events: none;
       transition: opacity 0.2s ease, transform 0.2s ease;
     }
     #live-toast.show { opacity: 1; transform: translateY(0); }
 
-    /* Parameters-disclosure hover preview on the receipts table. The full
-       value lives in the detail modal; the tooltip is a quick triage hint. */
+    /* ---------- Modals ---------- */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 50;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 64px 16px 16px;
+    }
+    .modal-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      width: 100%; max-width: 720px;
+      max-height: 82vh; overflow-y: auto;
+      box-shadow: var(--shadow);
+    }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-title { font-size: 1rem; font-weight: 600; }
+    .modal-body { padding: 16px; }
+
+    pre {
+      background: var(--surface-sunken);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      overflow-x: auto;
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
+    }
+
+    /* ---------- Chain timeline ---------- */
+    .chain-line { border-left: 2px solid var(--border); }
+    .chain-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      position: absolute; left: -6px; top: 10px;
+    }
+    .chain-dot.valid   { border-color: var(--status-success); background: rgba(63,185,80,0.3); }
+    .chain-dot.invalid { border-color: var(--status-failure); background: rgba(248,81,73,0.3); }
+
+    /* ---------- Parameters disclosure ---------- */
     .disclosure-indicator {
       position: relative; display: inline-block; margin-left: 6px;
-      color: #7d8590; cursor: help; font-size: 0.85rem;
+      color: var(--muted); cursor: help; font-size: 0.85rem;
       background: none; border: none; padding: 0;
     }
-    .disclosure-indicator:hover { color: #58a6ff; }
-    .disclosure-indicator:focus { outline: 2px solid #58a6ff; outline-offset: 2px; }
+    .disclosure-indicator:hover { color: var(--accent); }
+    .disclosure-indicator:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
     .disclosure-tooltip {
       visibility: hidden; opacity: 0;
       position: absolute; left: 0; top: calc(100% + 6px); z-index: 70;
       width: max-content; max-width: 480px;
-      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
-      padding: 8px 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.75rem; color: #e6edf3; white-space: pre-wrap;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 8px 10px; box-shadow: var(--shadow);
+      font-family: var(--font-mono);
+      font-size: 0.75rem; color: var(--text); white-space: pre-wrap;
       word-break: break-word; pointer-events: none;
       transition: opacity 0.1s ease;
     }
@@ -94,110 +413,192 @@
     .disclosure-indicator:focus .disclosure-tooltip,
     .mismatch-indicator:hover .disclosure-tooltip,
     .mismatch-indicator:focus .disclosure-tooltip { visibility: visible; opacity: 1; }
-    .disclosure-tooltip .label { color: #7d8590; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .disclosure-tooltip .label { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
     .disclosure-tooltip .value { display: block; margin-top: 2px; margin-bottom: 6px; }
     .disclosure-tooltip .value:last-child { margin-bottom: 0; }
     .disclosure-block {
-      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
-      padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 8px 10px; font-family: var(--font-mono);
       font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;
       max-height: 9em; overflow: hidden; position: relative;
     }
     .disclosure-block.expanded { max-height: none; }
     .toggle {
-      color: #58a6ff; cursor: pointer; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--accent); cursor: pointer; font-family: var(--font-sans);
       font-size: 0.75rem; margin-top: 6px; display: inline-block; background: none; border: none;
       padding: 0; text-decoration: underline;
     }
-    .toggle:focus { outline: 2px solid #58a6ff; outline-offset: 2px; }
+    .toggle:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     /* Status/output mismatch indicator. Surfaces receipts whose outcome was
        stamped success while the MCP tool payload reports isError:true. Shares
        the disclosure-tooltip styles for hover/focus reveal — see issue #50. */
     .mismatch-indicator {
       position: relative; display: inline-block; margin-left: 6px;
-      color: #d29922; cursor: help; font-size: 0.85rem;
+      color: var(--risk-medium); cursor: help; font-size: 0.85rem;
       background: none; border: none; padding: 0; vertical-align: middle;
     }
     .mismatch-indicator:hover { color: #f0b429; }
-    .mismatch-indicator:focus { outline: 2px solid #d29922; outline-offset: 2px; }
-    .mismatch-indicator .disclosure-tooltip { color: #e6edf3; }
+    .mismatch-indicator:focus { outline: 2px solid var(--risk-medium); outline-offset: 2px; }
+    .mismatch-indicator .disclosure-tooltip { color: var(--text); }
     .mismatch-banner {
       background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.35);
-      border-left: 3px solid #d29922; border-radius: 6px;
-      padding: 8px 12px; font-size: 0.8rem; color: #e6edf3;
+      border-left: 3px solid var(--risk-medium); border-radius: var(--radius);
+      padding: 8px 12px; font-size: 0.8rem; color: var(--text);
     }
-    .mismatch-banner .label { color: #d29922; font-weight: 600; margin-right: 6px; }
+    .mismatch-banner .label { color: var(--risk-medium); font-weight: 600; margin-right: 6px; }
+
+    /* ---------- Keyboard shortcut help ---------- */
+    .kbd {
+      display: inline-block;
+      padding: 1px 6px; min-width: 18px;
+      background: var(--surface-sunken);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text);
+      text-align: center;
+    }
+    .shortcut-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+    }
+    .shortcut-row:last-child { border-bottom: none; }
+    .shortcut-keys { display: inline-flex; gap: 4px; }
+    .shortcut-desc { color: var(--muted); font-size: 0.85rem; }
+
+    /* ---------- Layout helpers ---------- */
+    main.app-main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+    @media (max-width: 720px) {
+      .app-header-inner { flex-wrap: wrap; gap: 8px; }
+      .header-context { order: 3; width: 100%; gap: 12px; }
+      .ctx-item .ctx-value { max-width: 16ch; }
+      main.app-main { padding: 16px; }
+    }
   </style>
 </head>
 <body class="min-h-screen">
 
   <!-- Header -->
-  <header class="border-b border-[#30363d] px-6 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f78166" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 12l2 2 4-4"/>
-        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
-      </svg>
-      <h1 class="text-lg font-semibold">Agent Receipts</h1>
-      <span class="text-[#7d8590] text-sm">Dashboard</span>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <div class="brand">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-warm)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 12l2 2 4-4"/>
+          <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+        </svg>
+        <span>Agent Receipts</span>
+        <span class="brand-label">Dashboard</span>
+      </div>
+
+      <div class="header-context" id="header-context">
+        <span class="ctx-item ctx-mono" id="ctx-db" title="">
+          <span class="ctx-label">db</span>
+          <span class="ctx-value">…</span>
+        </span>
+        <span class="ctx-item" id="ctx-count">
+          <span class="ctx-label">receipts</span>
+          <span class="ctx-value">—</span>
+        </span>
+        <span class="ctx-item" id="ctx-latest" title="">
+          <span class="ctx-label">latest</span>
+          <span class="ctx-value">—</span>
+        </span>
+      </div>
+
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-shortcuts" type="button" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)">?</button>
+        <span class="ctx-item" id="ctx-version">
+          <span class="ctx-label">v</span>
+          <span class="ctx-value">—</span>
+        </span>
+        <div id="connection-status" class="conn-status" aria-live="polite">
+          <span class="conn-dot"></span>
+          <span class="conn-text">Connected</span>
+        </div>
+      </div>
     </div>
-    <div id="connection-status" class="text-sm text-[#3fb950] flex items-center gap-1">
-      <span class="w-2 h-2 bg-[#3fb950] rounded-full inline-block"></span>
-      Connected
-    </div>
+
+    <nav class="tab-bar" role="tablist">
+      <button class="tab active" onclick="showView('overview')" id="tab-overview" role="tab">Overview</button>
+      <button class="tab" onclick="showView('receipts')" id="tab-receipts" role="tab">Receipts</button>
+      <button class="tab" onclick="showView('chains')" id="tab-chains" role="tab">Chains</button>
+    </nav>
   </header>
 
-  <!-- Navigation tabs -->
-  <nav class="border-b border-[#30363d] px-6 flex gap-1">
-    <button class="tab active" onclick="showView('overview')" id="tab-overview">Overview</button>
-    <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
-    <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
-  </nav>
-
   <!-- Main content -->
-  <main class="p-6 max-w-7xl mx-auto">
+  <main class="app-main">
+
+    <div id="error-banner" class="error-banner" hidden role="alert">
+      <span class="error-dot">●</span>
+      <span id="error-message">Something went wrong.</span>
+      <button type="button" class="error-close" onclick="clearError()" aria-label="Dismiss">×</button>
+    </div>
 
     <!-- Overview view -->
     <div id="view-overview">
-      <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <!-- Filled by JS -->
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <h3 class="text-sm font-medium text-[#7d8590] mb-3">Risk Distribution</h3>
+      <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"></div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div class="card p-4">
+          <h3 class="text-sm font-medium muted mb-3">Risk distribution</h3>
           <div id="risk-chart" class="space-y-2"></div>
         </div>
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <h3 class="text-sm font-medium text-[#7d8590] mb-3">Status Distribution</h3>
+        <div class="card p-4">
+          <h3 class="text-sm font-medium muted mb-3">Status distribution</h3>
           <div id="status-chart" class="space-y-2"></div>
         </div>
       </div>
-      <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-        <h3 class="text-sm font-medium text-[#7d8590] mb-3">Recent Receipts</h3>
+
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium muted">Recent receipts</h3>
+          <button class="text-xs accent" onclick="showView('receipts')" style="background:none;border:none;cursor:pointer;">View all →</button>
+        </div>
         <div id="recent-receipts"></div>
       </div>
     </div>
 
     <!-- Receipts view -->
     <div id="view-receipts" class="hidden">
-      <div class="flex flex-wrap gap-3 mb-4">
-        <select id="filter-risk" onchange="loadReceipts()">
-          <option value="">All risk levels</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-          <option value="critical">Critical</option>
-        </select>
-        <select id="filter-status" onchange="loadReceipts()">
-          <option value="">All statuses</option>
-          <option value="success">Success</option>
-          <option value="failure">Failure</option>
-          <option value="pending">Pending</option>
-        </select>
-        <input type="text" id="filter-action" placeholder="Action type..." oninput="debounceLoadReceipts()">
-        <input type="text" id="filter-chain" placeholder="Chain ID..." oninput="debounceLoadReceipts()">
+      <div class="flex flex-wrap gap-3 mb-2">
+        <div class="form-field">
+          <label class="form-label" for="filter-risk">Risk</label>
+          <select id="filter-risk" onchange="loadReceipts()">
+            <option value="">All</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-status">Status</label>
+          <select id="filter-status" onchange="loadReceipts()">
+            <option value="">All</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+            <option value="pending">Pending</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-action">Action type</label>
+          <input type="text" id="filter-action" placeholder="filesystem.file.read" oninput="debounceLoadReceipts()">
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-chain">Chain ID</label>
+          <input type="text" id="filter-chain" placeholder="urn:chain:…" oninput="debounceLoadReceipts()">
+        </div>
       </div>
+
+      <div class="filter-bar-meta">
+        <div id="filter-chips" class="flex items-center gap-2 flex-wrap"></div>
+        <span class="match-count" id="match-count"></span>
+      </div>
+
       <div id="receipts-table"></div>
     </div>
 
@@ -210,34 +611,56 @@
     <div id="live-toast" role="status" aria-live="polite"></div>
 
     <!-- Receipt detail modal -->
-    <div id="receipt-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4">
-      <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-4 border-b border-[#30363d]">
-          <h2 class="text-lg font-semibold" id="modal-title">Receipt Detail</h2>
-          <button onclick="closeModal()" class="text-[#7d8590] hover:text-[#e6edf3]">&times;</button>
+    <div id="receipt-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="modal-title" aria-modal="true">
+        <div class="modal-head">
+          <h2 class="modal-title" id="modal-title">Receipt Detail</h2>
+          <button class="icon-btn" type="button" onclick="closeModal()" aria-label="Close">×</button>
         </div>
-        <div id="modal-content" class="p-4"></div>
+        <div id="modal-content" class="modal-body"></div>
       </div>
     </div>
 
     <!-- Chain detail modal -->
-    <div id="chain-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-start justify-center pt-16 px-4">
-      <div class="bg-[#161b22] border border-[#30363d] rounded-lg w-full max-w-3xl max-h-[80vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-4 border-b border-[#30363d]">
-          <h2 class="text-lg font-semibold" id="chain-modal-title">Chain Detail</h2>
-          <button onclick="closeChainModal()" class="text-[#7d8590] hover:text-[#e6edf3]">&times;</button>
+    <div id="chain-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="chain-modal-title" aria-modal="true">
+        <div class="modal-head">
+          <h2 class="modal-title" id="chain-modal-title">Chain Detail</h2>
+          <button class="icon-btn" type="button" onclick="closeChainModal()" aria-label="Close">×</button>
         </div>
-        <div id="chain-modal-content" class="p-4"></div>
+        <div id="chain-modal-content" class="modal-body"></div>
+      </div>
+    </div>
+
+    <!-- Shortcut help modal -->
+    <div id="shortcuts-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="shortcuts-modal-title" aria-modal="true" style="max-width: 480px;">
+        <div class="modal-head">
+          <h2 class="modal-title" id="shortcuts-modal-title">Keyboard shortcuts</h2>
+          <button class="icon-btn" type="button" onclick="closeShortcuts()" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="shortcut-row"><span class="shortcut-desc">Show this help</span><span class="shortcut-keys"><span class="kbd">?</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Focus action filter</span><span class="shortcut-keys"><span class="kbd">/</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next row</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous row</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Open focused row</span><span class="shortcut-keys"><span class="kbd">↵</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Close modal / blur input</span><span class="shortcut-keys"><span class="kbd">Esc</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Go to Overview</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">o</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Go to Receipts</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Go to Chains</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">c</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Clear all filters</span><span class="shortcut-keys"><span class="kbd">c</span></span></div>
+        </div>
       </div>
     </div>
   </main>
 
   <script>
-    // State
+    // ---------- State ----------
     let debounceTimer = null;
 
-    // Live polling state. The poller tails /api/receipts using `since=<timestamp>`
-    // and prepends fresh rows into whichever view is currently visible.
+    // Live polling state. Tails /api/receipts using `since=<timestamp>` and
+    // prepends fresh rows into whichever view is currently visible.
     const POLL_FALLBACK_MS = 5000;
     const POLL_BACKOFF_AFTER_EMPTY = 3;
     const POLL_MAX_INTERVAL_MS = 30000;
@@ -245,13 +668,13 @@
 
     const poller = {
       intervalMs: POLL_FALLBACK_MS,
-      serverTime: null,        // ISO timestamp returned by /api/config, used as empty-store baseline
+      serverTime: null,
       timer: null,
-      activeView: null,        // 'overview' | 'receipts' | null
-      containerId: null,       // tbody container id for the active view
-      filtersFn: null,         // () => object of query params (filters)
-      watermark: null,         // ISO timestamp of newest row currently displayed
-      knownIds: new Set(),     // dedup across polls
+      activeView: null,
+      containerId: null,
+      filtersFn: null,
+      watermark: null,
+      knownIds: new Set(),
       emptyCount: 0,
       // generation invalidates in-flight requests after a view/filter change.
       // Both loadOverview/loadReceipts and pollOnce capture it before awaiting
@@ -259,7 +682,49 @@
       generation: 0,
     };
 
-    // View switching
+    // Keyboard navigation: tracks the currently-navigable list of rows/cards
+    // in the active view so j/k/Enter operate on the right elements. The
+    // refresh() helper re-scans the DOM after each view change or re-render.
+    const nav = {
+      selector: null,
+      items: [],
+      index: -1,
+      refresh() {
+        this.items = this.selector
+          ? Array.from(document.querySelectorAll(this.selector))
+          : [];
+        if (this.index >= this.items.length) this.index = this.items.length - 1;
+        this.apply();
+      },
+      setSelector(sel) {
+        this.selector = sel;
+        this.index = -1;
+        this.refresh();
+      },
+      apply() {
+        document.querySelectorAll('.kbd-focused').forEach(el => el.classList.remove('kbd-focused'));
+        const el = this.items[this.index];
+        if (el) {
+          el.classList.add('kbd-focused');
+          el.scrollIntoView({ block: 'nearest' });
+        }
+      },
+      move(delta) {
+        if (this.items.length === 0) return;
+        if (this.index < 0) {
+          this.index = delta > 0 ? 0 : this.items.length - 1;
+        } else {
+          this.index = Math.max(0, Math.min(this.items.length - 1, this.index + delta));
+        }
+        this.apply();
+      },
+      activate() {
+        const el = this.items[this.index];
+        if (el) el.click();
+      },
+    };
+
+    // ---------- View switching ----------
     function showView(view) {
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
@@ -272,22 +737,50 @@
       if (view === 'chains') loadChains();
     }
 
-    // Overview
+    // ---------- Header context ----------
+    function renderHeaderContext(cfg, stats) {
+      if (cfg) {
+        const db = document.getElementById('ctx-db');
+        const name = cfg.db_name || '—';
+        db.querySelector('.ctx-value').textContent = name;
+        db.title = cfg.db_path || '';
+        const ver = document.getElementById('ctx-version');
+        ver.querySelector('.ctx-value').textContent = cfg.version || '—';
+      }
+      if (stats) {
+        document.getElementById('ctx-count').querySelector('.ctx-value').textContent =
+          (stats.total != null ? Number(stats.total).toLocaleString() : '—');
+        const latestEl = document.getElementById('ctx-latest');
+        if (stats.latest_timestamp) {
+          latestEl.querySelector('.ctx-value').textContent = formatRelative(stats.latest_timestamp);
+          latestEl.title = stats.latest_timestamp;
+        } else {
+          latestEl.querySelector('.ctx-value').textContent = 'none';
+          latestEl.title = '';
+        }
+      }
+    }
+
+    // ---------- Overview ----------
     async function loadOverview() {
       const gen = ++poller.generation;
+      renderStatsSkeleton();
+      renderRecentSkeleton();
       try {
         const stats = await fetchJSON('/api/stats');
         if (gen !== poller.generation) return;
         renderStats(stats);
+        renderHeaderContext(null, stats);
+
         const receipts = await fetchJSON('/api/receipts');
         if (gen !== poller.generation) return;
-        renderRecentReceipts(receipts.slice(0, RECENT_LIMIT));
-        // Seed polling from the full fetch, not the displayed slice, so the
-        // next poll doesn't surface receipts that share the watermark
-        // second but fell below RECENT_LIMIT in tie-ordering.
+        renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts', { compact: true });
+        if (poller.activeView === 'overview') nav.setSelector('#recent-receipts tbody tr');
+
+        // Seed polling from the full fetch, not the displayed slice.
         startPolling('overview', 'recent-receipts', receipts, () => ({}));
       } catch (err) {
-        console.error('load overview:', err);
+        showError('Failed to load overview: ' + err.message);
       }
     }
 
@@ -296,6 +789,7 @@
         const stats = await fetchJSON('/api/stats');
         if (poller.activeView !== 'overview') return;
         renderStats(stats);
+        renderHeaderContext(null, stats);
       } catch (err) {
         console.warn('refresh stats:', err);
       }
@@ -304,120 +798,220 @@
     function renderStats(stats) {
       const riskCounts = {};
       (stats.by_risk || []).forEach(r => riskCounts[r.label] = r.count);
-
       const highRisk = (riskCounts['high'] || 0) + (riskCounts['critical'] || 0);
+      const latestRel = stats.latest_timestamp ? formatRelative(stats.latest_timestamp) : 'none';
+      const latestTitle = stats.latest_timestamp || '';
 
       document.getElementById('stats-cards').innerHTML = `
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <div class="text-[#7d8590] text-sm mb-1">Total Receipts</div>
-          <div class="text-2xl font-bold">${stats.total}</div>
-        </div>
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <div class="text-[#7d8590] text-sm mb-1">Chains</div>
-          <div class="text-2xl font-bold">${stats.chains}</div>
-        </div>
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <div class="text-[#7d8590] text-sm mb-1">High Risk</div>
-          <div class="text-2xl font-bold ${highRisk > 0 ? 'text-[#f85149]' : ''}">${highRisk}</div>
-        </div>
-        <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-          <div class="text-[#7d8590] text-sm mb-1">Risk Levels</div>
-          <div class="text-2xl font-bold">${(stats.by_risk || []).length}</div>
-        </div>
+        ${statCardHTML({
+          label: 'Total receipts',
+          value: Number(stats.total || 0).toLocaleString(),
+          onClick: "showView('receipts')",
+          title: 'View all receipts',
+        })}
+        ${statCardHTML({
+          label: 'Chains',
+          value: Number(stats.chains || 0).toLocaleString(),
+          onClick: "showView('chains')",
+          title: 'View all chains',
+        })}
+        ${statCardHTML({
+          label: 'High risk',
+          value: highRisk,
+          danger: highRisk > 0,
+          sub: highRisk > 0 ? `${riskCounts['critical'] || 0} critical · ${riskCounts['high'] || 0} high` : 'no high-risk activity',
+          onClick: "showHighRisk()",
+          title: 'Filter to high + critical receipts',
+        })}
+        ${statCardHTML({
+          label: 'Latest',
+          value: latestRel,
+          valueSmall: true,
+          sub: stats.latest_timestamp ? new Date(stats.latest_timestamp).toLocaleString() : '',
+          titleAttr: latestTitle,
+          onClick: stats.latest_timestamp ? "showView('receipts')" : null,
+          title: 'Newest receipt in the store',
+        })}
       `;
 
-      // Risk chart
-      const maxCount = Math.max(...(stats.by_risk || []).map(r => r.count), 1);
+      const maxRisk = Math.max(...(stats.by_risk || []).map(r => r.count), 1);
       document.getElementById('risk-chart').innerHTML = (stats.by_risk || []).map(r => `
-        <div class="flex items-center gap-3">
-          <span class="w-16 text-sm badge ${riskClass(r.label)}">${escapeHtml(r.label)}</span>
-          <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
-            <div class="h-full rounded-full bg-opacity-60 ${riskBarColor(r.label)}" style="width: ${(r.count / maxCount * 100)}%"></div>
-          </div>
-          <span class="text-sm text-[#7d8590] w-8 text-right">${r.count}</span>
+        <div class="bar-row">
+          <span class="bar-label"><span class="badge ${riskClass(r.label)}">${escapeHtml(r.label)}</span></span>
+          <div class="bar-track"><div class="bar-fill ${riskBarClass(r.label)}" style="width: ${(r.count / maxRisk * 100)}%"></div></div>
+          <span class="bar-count">${r.count}</span>
         </div>
-      `).join('');
+      `).join('') || '<div class="muted text-sm">No data</div>';
 
-      // Status chart
       const maxStatus = Math.max(...(stats.by_status || []).map(r => r.count), 1);
       document.getElementById('status-chart').innerHTML = (stats.by_status || []).map(r => `
-        <div class="flex items-center gap-3">
-          <span class="w-16 text-sm badge ${statusClass(r.label)}">${escapeHtml(r.label)}</span>
-          <div class="flex-1 bg-[#0d1117] rounded-full h-4 overflow-hidden">
-            <div class="h-full rounded-full ${statusBarColor(r.label)}" style="width: ${(r.count / maxStatus * 100)}%"></div>
-          </div>
-          <span class="text-sm text-[#7d8590] w-8 text-right">${r.count}</span>
+        <div class="bar-row">
+          <span class="bar-label"><span class="badge ${statusClass(r.label)}">${escapeHtml(r.label)}</span></span>
+          <div class="bar-track"><div class="bar-fill ${statusBarClass(r.label)}" style="width: ${(r.count / maxStatus * 100)}%"></div></div>
+          <span class="bar-count">${r.count}</span>
+        </div>
+      `).join('') || '<div class="muted text-sm">No data</div>';
+    }
+
+    function statCardHTML(opts) {
+      const clickable = opts.onClick ? 'card-clickable' : '';
+      const role = opts.onClick ? 'role="button" tabindex="0"' : '';
+      const onKey = opts.onClick ? `onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${opts.onClick}}"` : '';
+      const onClick = opts.onClick ? `onclick="${opts.onClick}"` : '';
+      const titleAttr = opts.title ? ` title="${escapeAttr(opts.title)}"` : '';
+      const valClass = `stat-value ${opts.danger ? 'is-danger' : ''} ${opts.valueSmall ? 'text-lg' : ''}`;
+      return `
+        <div class="card stat-card ${clickable}" style="position:relative;" ${onClick} ${role} ${onKey}${titleAttr}>
+          <div class="stat-label">${escapeHtml(opts.label)}</div>
+          <div class="${valClass}" ${opts.titleAttr ? `title="${escapeAttr(opts.titleAttr)}"` : ''}>${opts.value}</div>
+          ${opts.sub ? `<div class="stat-sub">${escapeHtml(opts.sub)}</div>` : ''}
+          ${opts.onClick ? '<span class="stat-chevron">→</span>' : ''}
+        </div>
+      `;
+    }
+
+    function showHighRisk() {
+      document.getElementById('filter-risk').value = 'high';
+      showView('receipts');
+    }
+
+    function renderStatsSkeleton() {
+      document.getElementById('stats-cards').innerHTML = Array(4).fill(0).map(() => `
+        <div class="card stat-card">
+          <span class="skeleton skeleton-line" style="width:60%"></span>
+          <span class="skeleton" style="height:24px;width:50%;margin-top:8px;border-radius:4px;"></span>
+          <span class="skeleton skeleton-line" style="width:40%;margin-top:auto"></span>
+        </div>
+      `).join('');
+      document.getElementById('risk-chart').innerHTML = skeletonBars(4);
+      document.getElementById('status-chart').innerHTML = skeletonBars(3);
+    }
+
+    function renderRecentSkeleton() {
+      document.getElementById('recent-receipts').innerHTML = skeletonRows(6);
+    }
+
+    function skeletonBars(n) {
+      return Array(n).fill(0).map(() => `
+        <div class="bar-row">
+          <span class="skeleton" style="width:72px;height:16px;border-radius:9999px;"></span>
+          <div class="bar-track"><span class="skeleton" style="display:block;height:8px;width:${30 + Math.random()*60}%"></span></div>
+          <span class="skeleton" style="width:24px;height:12px;"></span>
         </div>
       `).join('');
     }
 
-    function riskBarColor(level) {
-      return { low: 'bg-green-600', medium: 'bg-yellow-600', high: 'bg-red-600', critical: 'bg-red-500' }[level] || 'bg-gray-600';
+    function skeletonRows(n) {
+      const rows = Array(n).fill(0).map(() => `
+        <tr>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:80%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:60%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:90%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton" style="width:48px;height:16px;border-radius:9999px;"></span></td>
+        </tr>
+      `).join('');
+      return `<div class="receipts-table-wrap"><div class="receipts-table-scroll"><table class="receipts"><tbody>${rows}</tbody></table></div></div>`;
     }
 
-    function statusBarColor(status) {
-      return { success: 'bg-green-600', failure: 'bg-red-600', pending: 'bg-yellow-600' }[status] || 'bg-gray-600';
-    }
+    // ---------- Bar / badge classes ----------
+    function riskBarClass(level)    { return ({ low: 'bar-low', medium: 'bar-medium', high: 'bar-high', critical: 'bar-critical' })[level] || 'bar-low'; }
+    function statusBarClass(status) { return ({ success: 'bar-success', failure: 'bar-failure', pending: 'bar-pending' })[status] || 'bar-pending'; }
 
-    // Receipts
+    // ---------- Receipts view ----------
     function debounceLoadReceipts() {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(loadReceipts, 300);
     }
 
     function currentReceiptFilters() {
-      const filters = {};
-      const risk = document.getElementById('filter-risk').value;
+      const f = {};
+      const risk   = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
-      const chain = document.getElementById('filter-chain').value;
-      if (risk) filters.risk_level = risk;
-      if (status) filters.status = status;
-      if (action) filters.action_type = action;
-      if (chain) filters.chain_id = chain;
-      return filters;
+      const chain  = document.getElementById('filter-chain').value;
+      if (risk)   f.risk_level  = risk;
+      if (status) f.status      = status;
+      if (action) f.action_type = action;
+      if (chain)  f.chain_id    = chain;
+      return f;
     }
 
     async function loadReceipts() {
       const filters = currentReceiptFilters();
       const params = new URLSearchParams(filters);
 
+      renderFilterChips(filters);
+      document.getElementById('receipts-table').innerHTML = skeletonRows(8);
+      document.getElementById('match-count').textContent = '';
+
       stopPolling();
       const gen = ++poller.generation;
       try {
         const receipts = await fetchJSON('/api/receipts?' + params.toString());
         if (gen !== poller.generation) return;
-        renderReceiptsTable(receipts, 'receipts-table');
+        renderReceiptsTable(receipts, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
+        renderMatchCount(receipts.length);
+        if (poller.activeView === 'receipts') nav.setSelector('#receipts-table tbody tr');
         startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
       } catch (err) {
-        console.error('load receipts:', err);
+        showError('Failed to load receipts: ' + err.message);
+        document.getElementById('receipts-table').innerHTML =
+          '<div class="empty-state"><div class="empty-title">Could not load receipts</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
       }
     }
 
-    function renderRecentReceipts(receipts) {
-      renderReceiptsTable(receipts, 'recent-receipts');
+    function renderMatchCount(n) {
+      const el = document.getElementById('match-count');
+      el.textContent = n === 1 ? '1 match' : `${n.toLocaleString()} matches`;
+    }
+
+    function renderFilterChips(filters) {
+      const labels = { risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain' };
+      const entries = Object.entries(filters);
+      const chips = entries.map(([k, v]) => `
+        <span class="chip">
+          <span class="chip-key">${labels[k] || k}</span>
+          <span class="chip-value">${escapeHtml(String(v))}</span>
+          <button type="button" class="chip-x" aria-label="Clear ${labels[k] || k}" onclick="clearFilter('${k}')">×</button>
+        </span>
+      `).join('');
+      const clearAll = entries.length > 1
+        ? `<button type="button" class="chip-clear-all" onclick="clearAllFilters()">Clear all</button>`
+        : '';
+      document.getElementById('filter-chips').innerHTML = chips + clearAll;
+    }
+
+    function clearFilter(key) {
+      const map = { risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain' };
+      const el = document.getElementById(map[key]);
+      if (el) { el.value = ''; loadReceipts(); }
+    }
+
+    function clearAllFilters() {
+      ['filter-risk', 'filter-status', 'filter-action', 'filter-chain'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      loadReceipts();
     }
 
     function receiptRowHTML(r, opts) {
       const flash = opts && opts.flash ? ' row-new' : '';
+      const tsAttr = r.timestamp ? ` title="${escapeAttr(r.timestamp)}"` : '';
       return `
-        <tr class="border-b border-[#30363d]/50 hover:bg-[#1c2128] cursor-pointer${flash}" data-receipt-id="${escapeHtml(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
-          <td class="py-2 pr-4 text-[#7d8590] whitespace-nowrap">${formatTime(r.timestamp)}</td>
-          <td class="py-2 pr-4 font-mono text-xs text-[#7d8590]">${r.server ? escapeHtml(r.server) : '<span class="text-[#484f58]">—</span>'}</td>
-          <td class="py-2 pr-4 font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="text-[#484f58]">—</span>'}</td>
-          <td class="py-2 pr-4 font-mono text-xs">${escapeHtml(r.action_type)}${disclosureIndicatorHTML(r)}</td>
-          <td class="py-2 pr-4"><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
-          <td class="py-2 pr-4"><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
-          <td class="py-2 pr-4 text-[#7d8590] font-mono text-xs cursor-pointer hover:text-[#58a6ff]" data-chain-id="${escapeHtml(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)">${escapeHtml(truncate(r.chain_id, 20))}</td>
-          <td class="py-2 pr-4 text-[#7d8590]">#${r.sequence}</td>
+        <tr class="${flash}" data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+          <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
+          <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
+          <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
+          <td class="font-mono text-xs">${escapeHtml(r.action_type)}${disclosureIndicatorHTML(r)}</td>
+          <td><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
+          <td><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
+          <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(r.chain_id, 20))}</td>
+          <td class="muted">#${r.sequence}</td>
         </tr>
       `;
     }
 
-    // mismatchIndicatorHTML renders the ⚠️ marker next to a status badge when
-    // the row's status disagrees with its disclosed output payload (issue #50).
-    // The hint is opt-in cosmetics — the underlying receipt and hash are
-    // untouched. Click is swallowed so it doesn't double-fire the row click.
     function mismatchIndicatorHTML(r) {
       if (!r.output_status_mismatch) return '';
       const safeId = (r.id || '').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -425,84 +1019,108 @@
       return `<button type="button" class="mismatch-indicator" onclick="event.stopPropagation()" aria-label="Status/output mismatch" aria-describedby="${tooltipId}">&#9888;<span class="disclosure-tooltip" id="${tooltipId}" role="tooltip"><span class="label">Status/output mismatch</span><span class="value">Outcome recorded as success, but the disclosed tool output reports isError: true.</span></span></button>`;
     }
 
-    // disclosureIndicatorHTML renders the 📋 hover-preview marker on rows that
-    // carry parameters_disclosure. Click is swallowed so it doesn't double-fire
-    // the row click; hover reveals input/output snippets from the list payload.
+    // Renders the parameters_disclosure hover preview marker on rows that
+    // carry disclosure data. Click is swallowed so it doesn't double-fire
+    // the row click.
     function disclosureIndicatorHTML(r) {
       if (!r.has_parameters_disclosure) return '';
-      const input = r.parameters_input_preview || '';
+      const input  = r.parameters_input_preview  || '';
       const output = r.parameters_output_preview || '';
       const parts = [];
-      if (input) {
-        parts.push(`<span class="label">Input</span><span class="value">${escapeHtml(input)}</span>`);
-      }
-      if (output) {
-        parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
-      }
-      const tooltipContent = parts.length > 0 ? parts.join('') : '<span class="text-[#7d8590] text-xs">Additional disclosure fields present — see detail view</span>';
-      // Sanitize receipt ID for use as DOM id: replace non-alphanumeric chars with underscore.
+      if (input)  parts.push(`<span class="label">Input</span><span class="value">${escapeHtml(input)}</span>`);
+      if (output) parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
+      const tooltipContent = parts.length > 0
+        ? parts.join('')
+        : '<span class="muted text-xs">Additional disclosure fields present — see detail view</span>';
+      // Sanitize receipt ID for use as DOM id.
       const safeId = r.id.replace(/[^A-Za-z0-9_-]/g, '_');
       const tooltipId = `disclosure-tooltip-${safeId}`;
       return `<button type="button" class="disclosure-indicator" onclick="event.stopPropagation()" aria-label="View parameters disclosure" aria-describedby="${tooltipId}">&#128203;<span class="disclosure-tooltip" id="${tooltipId}" role="tooltip">${tooltipContent}</span></button>`;
     }
 
-    function tbodyIdFor(containerId) {
-      return 'tbody-' + containerId;
-    }
+    function tbodyIdFor(containerId) { return 'tbody-' + containerId; }
 
-    function renderReceiptsTable(receipts, containerId) {
+    function renderReceiptsTable(receipts, containerId, opts) {
+      const container = document.getElementById(containerId);
       if (!receipts || receipts.length === 0) {
-        document.getElementById(containerId).innerHTML = '<p class="text-[#7d8590] text-sm">No receipts found.</p>';
+        const filtered = opts && opts.emptyHint;
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-title">${filtered ? 'No receipts match these filters' : 'No receipts yet'}</div>
+            <div class="empty-hint">${filtered
+              ? 'Try adjusting or clearing the filters above.'
+              : 'Receipts appear here as soon as an agent or MCP proxy writes them.'}</div>
+            ${filtered ? '<div class="empty-action"><button type="button" class="chip-clear-all" onclick="clearAllFilters()">Clear filters</button></div>' : ''}
+          </div>
+        `;
         return;
       }
-      document.getElementById(containerId).innerHTML = `
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-[#7d8590] text-left border-b border-[#30363d]">
-                <th class="pb-2 pr-4">Time</th>
-                <th class="pb-2 pr-4">Server</th>
-                <th class="pb-2 pr-4">Tool</th>
-                <th class="pb-2 pr-4">Action</th>
-                <th class="pb-2 pr-4">Risk</th>
-                <th class="pb-2 pr-4">Status</th>
-                <th class="pb-2 pr-4">Chain</th>
-                <th class="pb-2 pr-4">Seq</th>
-              </tr>
-            </thead>
-            <tbody id="${tbodyIdFor(containerId)}">
-              ${receipts.map(r => receiptRowHTML(r)).join('')}
-            </tbody>
-          </table>
+      container.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll">
+            <table class="receipts">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Server</th>
+                  <th>Tool</th>
+                  <th>Action</th>
+                  <th>Risk</th>
+                  <th>Status</th>
+                  <th>Chain</th>
+                  <th>Seq</th>
+                </tr>
+              </thead>
+              <tbody id="${tbodyIdFor(containerId)}">
+                ${receipts.map(r => receiptRowHTML(r)).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
       `;
     }
 
-    // Chains
+    // ---------- Chains ----------
     async function loadChains() {
+      document.getElementById('chains-list').innerHTML = `
+        <div class="space-y-3">
+          ${Array(4).fill(0).map(() => `<div class="card p-4"><span class="skeleton skeleton-line" style="width:60%"></span><br><span class="skeleton skeleton-line" style="width:40%;margin-top:6px;"></span></div>`).join('')}
+        </div>
+      `;
       try {
         const chains = await fetchJSON('/api/chains');
         renderChainsList(chains);
+        if (poller.activeView !== 'chains') {
+          // chains view didn't manage active view yet; record state
+        }
+        nav.setSelector('#chains-list .chain-card');
       } catch (err) {
-        console.error('load chains:', err);
+        showError('Failed to load chains: ' + err.message);
+        document.getElementById('chains-list').innerHTML =
+          '<div class="empty-state"><div class="empty-title">Could not load chains</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
       }
     }
 
     function renderChainsList(chains) {
       if (!chains || chains.length === 0) {
-        document.getElementById('chains-list').innerHTML = '<p class="text-[#7d8590] text-sm">No chains found.</p>';
+        document.getElementById('chains-list').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-title">No chains yet</div>
+            <div class="empty-hint">A chain is created when an agent emits its first receipt.</div>
+          </div>
+        `;
         return;
       }
       document.getElementById('chains-list').innerHTML = `
         <div class="space-y-3">
           ${chains.map(c => `
-            <div class="bg-[#161b22] border border-[#30363d] rounded-lg p-4 hover:border-[#484f58] cursor-pointer" data-chain-id="${escapeHtml(c.chain_id)}" onclick="showChain(this.dataset.chainId)">
-              <div class="flex items-center justify-between mb-2">
-                <span class="font-mono text-sm text-[#58a6ff]">${escapeHtml(c.chain_id)}</span>
-                <span class="text-[#7d8590] text-sm">${c.receipt_count} receipts</span>
+            <div class="card card-clickable chain-card" data-chain-id="${escapeAttr(c.chain_id)}" onclick="showChain(this.dataset.chainId)" tabindex="0">
+              <div class="flex items-center justify-between mb-1">
+                <span class="font-mono text-sm accent">${escapeHtml(c.chain_id)}</span>
+                <span class="muted text-sm">${c.receipt_count} receipts</span>
               </div>
-              <div class="text-[#7d8590] text-xs">
-                ${formatTime(c.first_timestamp)} &mdash; ${formatTime(c.last_timestamp)}
+              <div class="muted text-xs" title="${escapeAttr(c.first_timestamp)} → ${escapeAttr(c.last_timestamp)}">
+                ${formatRelative(c.first_timestamp)} — ${formatRelative(c.last_timestamp)}
               </div>
             </div>
           `).join('')}
@@ -510,15 +1128,15 @@
       `;
     }
 
-    // Receipt detail
+    // ---------- Receipt detail ----------
     async function showReceipt(id) {
       try {
         const receipt = await fetchJSON('/api/receipts/' + encodeURIComponent(id));
         document.getElementById('modal-title').textContent = receipt.id;
         document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt);
-        document.getElementById('receipt-modal').classList.remove('hidden');
+        openModal('receipt-modal');
       } catch (err) {
-        console.error('show receipt:', err);
+        showError('Failed to load receipt: ' + err.message);
       }
     }
 
@@ -552,81 +1170,64 @@
           ` : ''}
 
           <div class="grid grid-cols-2 gap-4">
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Server</div>
-              <div class="font-mono text-sm">${subj.action.target ? escapeHtml(subj.action.target.system) : '<span class="text-[#484f58]">—</span>'}</div>
-            </div>
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Tool</div>
-              <div class="font-mono text-sm">${subj.action.tool_name ? escapeHtml(subj.action.tool_name) : '<span class="text-[#484f58]">—</span>'}</div>
-            </div>
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Action Type</div>
-              <div class="font-mono text-sm">${escapeHtml(subj.action.type)}</div>
-            </div>
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Risk Level</div>
-              <div><span class="badge ${riskClass(subj.action.risk_level)}">${escapeHtml(subj.action.risk_level)}</span></div>
-            </div>
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Status</div>
-              <div><span class="badge ${statusClass(subj.outcome.status)}">${escapeHtml(subj.outcome.status)}</span></div>
-            </div>
-            <div>
-              <div class="text-[#7d8590] text-xs mb-1">Timestamp</div>
-              <div class="text-sm">${formatTime(subj.action.timestamp)}</div>
-            </div>
+            ${kvBlock('Server',   subj.action.target ? escapeHtml(subj.action.target.system) : '<span class="subtle">—</span>', { mono: true })}
+            ${kvBlock('Tool',     subj.action.tool_name ? escapeHtml(subj.action.tool_name) : '<span class="subtle">—</span>', { mono: true })}
+            ${kvBlock('Action type', escapeHtml(subj.action.type), { mono: true })}
+            ${kvBlock('Risk',     `<span class="badge ${riskClass(subj.action.risk_level)}">${escapeHtml(subj.action.risk_level)}</span>`)}
+            ${kvBlock('Status',   `<span class="badge ${statusClass(subj.outcome.status)}">${escapeHtml(subj.outcome.status)}</span>`)}
+            ${kvBlock('Timestamp', `<span title="${escapeAttr(subj.action.timestamp)}">${formatTime(subj.action.timestamp)}</span>`)}
           </div>
 
-          ${subj.action.target && subj.action.target.resource ? `
-          <div>
-            <div class="text-[#7d8590] text-xs mb-1">Resource</div>
-            <div class="font-mono text-xs">${escapeHtml(subj.action.target.resource)}</div>
-          </div>
-          ` : ''}
+          ${subj.action.target && subj.action.target.resource ? kvBlock('Resource', escapeHtml(subj.action.target.resource), { mono: true, small: true }) : ''}
 
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <div class="text-[#7d8590] text-xs mb-1">Issuer</div>
+              <div class="muted text-xs mb-1">Issuer</div>
               <div class="font-mono text-xs">${escapeHtml(r.issuer.id)}</div>
-              ${r.issuer.name ? `<div class="text-[#7d8590] text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
+              ${r.issuer.name ? `<div class="muted text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
             </div>
             <div>
-              <div class="text-[#7d8590] text-xs mb-1">Principal</div>
+              <div class="muted text-xs mb-1">Principal</div>
               <div class="font-mono text-xs">${escapeHtml(subj.principal.id)}</div>
             </div>
           </div>
 
-          ${subj.intent ? `
+          ${subj.intent && subj.intent.prompt_preview ? `
           <div>
-            <div class="text-[#7d8590] text-xs mb-1">Intent</div>
-            ${subj.intent.prompt_preview ? `<div class="text-sm bg-[#0d1117] border border-[#30363d] rounded p-2">${escapeHtml(subj.intent.prompt_preview)}</div>` : ''}
-          </div>
-          ` : ''}
+            <div class="muted text-xs mb-1">Intent</div>
+            <div class="text-sm" style="background:var(--surface-sunken);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;">${escapeHtml(subj.intent.prompt_preview)}</div>
+          </div>` : ''}
 
           ${parametersDisclosureHTML(subj.action.parameters_disclosure)}
 
           <div>
-            <div class="text-[#7d8590] text-xs mb-1">Chain</div>
+            <div class="muted text-xs mb-1">Chain</div>
             <div class="text-sm">
-              <span class="font-mono text-xs text-[#58a6ff] cursor-pointer" data-chain-id="${escapeHtml(subj.chain.chain_id)}" onclick="closeModal(); showChain(this.dataset.chainId)">${escapeHtml(subj.chain.chain_id)}</span>
-              &mdash; Sequence #${subj.chain.sequence}
+              <span class="font-mono text-xs accent" style="cursor:pointer;" data-chain-id="${escapeAttr(subj.chain.chain_id)}" onclick="closeModal(); showChain(this.dataset.chainId)">${escapeHtml(subj.chain.chain_id)}</span>
+              — Sequence #${subj.chain.sequence}
             </div>
           </div>
 
           <details class="mt-4">
-            <summary class="text-[#7d8590] text-sm cursor-pointer hover:text-[#e6edf3]">Raw JSON</summary>
-            <pre class="mt-2 text-xs">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
+            <summary class="muted text-sm" style="cursor:pointer;">Raw JSON</summary>
+            <pre class="mt-2">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
           </details>
         </div>
       `;
     }
 
-    // parametersDisclosureHTML renders the operator-disclosed parameter map
-    // (ADR-0012). Input/output get top billing because that's the common
-    // shape; any other keys fall through to a generic key/value list. Long
-    // values collapse with a "show more" toggle so big payloads don't blow
-    // out the modal.
+    function kvBlock(label, valueHTML, opts) {
+      opts = opts || {};
+      const cls = `${opts.mono ? 'font-mono' : ''} ${opts.small ? 'text-xs' : 'text-sm'}`.trim();
+      return `
+        <div>
+          <div class="muted text-xs mb-1">${escapeHtml(label)}</div>
+          <div class="${cls}">${valueHTML}</div>
+        </div>
+      `;
+    }
+
+    // ---------- Parameters disclosure (modal body) ----------
     const DISCLOSURE_PRIMARY_KEYS = ['input', 'output'];
     function parametersDisclosureHTML(disclosure) {
       if (!disclosure || typeof disclosure !== 'object') return '';
@@ -644,7 +1245,7 @@
 
       return `
         <div>
-          <div class="text-[#7d8590] text-xs mb-1">Parameters Disclosure</div>
+          <div class="muted text-xs mb-1">Parameters disclosure</div>
           <div class="space-y-3">
             ${primary.join('')}
             ${others.join('')}
@@ -653,15 +1254,15 @@
       `;
     }
 
-    // Threshold above which a disclosure block collapses behind a toggle.
-    // Approximate: JS uses character count, CSS uses height, so they won't
+    // Approximate threshold above which a disclosure block collapses behind
+    // a toggle. JS uses character count, CSS uses height, so they won't
     // perfectly align across all fonts and screen sizes.
     const DISCLOSURE_COLLAPSE_CHARS = 400;
     function disclosureBlockHTML(label, value) {
       const long = value.length > DISCLOSURE_COLLAPSE_CHARS;
       return `
         <div>
-          <div class="text-[#7d8590] text-xs mb-1 font-mono">${escapeHtml(label)}</div>
+          <div class="muted text-xs mb-1 font-mono">${escapeHtml(label)}</div>
           <div class="disclosure-block${long ? '' : ' expanded'}">${escapeHtml(value)}</div>
           ${long ? `<button type="button" class="toggle" onclick="toggleDisclosure(this)" aria-expanded="false">Show more</button>` : ''}
         </div>
@@ -675,11 +1276,33 @@
       el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
 
-    function closeModal() {
-      document.getElementById('receipt-modal').classList.add('hidden');
+    // ---------- Modal helpers ----------
+    function openModal(id) {
+      const el = document.getElementById(id);
+      el.hidden = false;
+      lastFocusedBeforeModal = document.activeElement;
+    }
+    function closeModalById(id) {
+      const el = document.getElementById(id);
+      el.hidden = true;
+      if (lastFocusedBeforeModal && lastFocusedBeforeModal.focus) lastFocusedBeforeModal.focus();
+    }
+    let lastFocusedBeforeModal = null;
+    function closeModal()      { closeModalById('receipt-modal'); }
+    function closeChainModal() { closeModalById('chain-modal'); }
+    function showShortcuts()   { openModal('shortcuts-modal'); }
+    function closeShortcuts()  { closeModalById('shortcuts-modal'); }
+
+    function isModalOpen() {
+      return ['receipt-modal','chain-modal','shortcuts-modal'].some(id => !document.getElementById(id).hidden);
+    }
+    function closeAnyOpenModal() {
+      if (!document.getElementById('shortcuts-modal').hidden) closeShortcuts();
+      if (!document.getElementById('chain-modal').hidden) closeChainModal();
+      if (!document.getElementById('receipt-modal').hidden) closeModal();
     }
 
-    // Chain detail
+    // ---------- Chain detail ----------
     async function showChain(chainId) {
       try {
         const [receipts, verification] = await Promise.all([
@@ -687,21 +1310,20 @@
           fetchJSON('/api/chains/' + encodeURIComponent(chainId) + '/verify'),
         ]);
 
-        // Sort by sequence ascending for timeline display.
         receipts.sort((a, b) => a.sequence - b.sequence);
 
         document.getElementById('chain-modal-title').textContent = chainId;
         document.getElementById('chain-modal-content').innerHTML = renderChainDetail(chainId, receipts, verification);
-        document.getElementById('chain-modal').classList.remove('hidden');
+        openModal('chain-modal');
       } catch (err) {
-        console.error('show chain:', err);
+        showError('Failed to load chain: ' + err.message);
       }
     }
 
     function renderChainDetail(chainId, receipts, verification) {
       const verifyStatus = verification.valid
-        ? '<span class="verify-pass font-medium">Chain Valid</span>'
-        : `<span class="verify-fail font-medium">Chain Broken at #${verification.broken_at}</span>`;
+        ? '<span style="color:var(--status-success);font-weight:500;">Chain valid</span>'
+        : `<span style="color:var(--status-failure);font-weight:500;">Chain broken at #${verification.broken_at}</span>`;
 
       const verifyMap = {};
       (verification.receipts || []).forEach(v => { verifyMap[v.receipt_id] = v; });
@@ -709,17 +1331,17 @@
       return `
         <div class="mb-4 flex items-center gap-3">
           <span class="text-sm">${verifyStatus}</span>
-          <span class="text-[#7d8590] text-sm">${verification.length} receipts</span>
+          <span class="muted text-sm">${verification.length} receipts</span>
         </div>
 
         <div class="relative ml-4">
-          ${receipts.map((r, i) => {
+          ${receipts.map((r) => {
             const v = verifyMap[r.id] || {};
             const valid = v.hash_link_valid !== false && v.sequence_valid !== false;
             return `
               <div class="relative chain-line pl-6 pb-6 last:pb-0">
                 <div class="chain-dot ${valid ? 'valid' : 'invalid'}"></div>
-                <div class="bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#484f58] cursor-pointer" data-receipt-id="${escapeHtml(r.id)}" onclick="closeChainModal(); showReceipt(this.dataset.receiptId)">
+                <div class="card card-clickable" style="background:var(--surface-sunken);padding:10px 12px;" data-receipt-id="${escapeAttr(r.id)}" onclick="closeChainModal(); showReceipt(this.dataset.receiptId)">
                   <div class="flex items-center justify-between mb-1">
                     <span class="font-mono text-xs">#${r.sequence} ${escapeHtml(r.action_type)}</span>
                     <div class="flex gap-2 items-center">
@@ -727,13 +1349,12 @@
                       <span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}
                     </div>
                   </div>
-                  <div class="text-[#7d8590] text-xs">${formatTime(r.timestamp)}</div>
+                  <div class="muted text-xs" title="${escapeAttr(r.timestamp)}">${formatRelative(r.timestamp)}</div>
                   ${!valid ? `
-                    <div class="mt-1 text-xs text-[#f85149]">
+                    <div class="mt-1 text-xs" style="color:var(--status-failure);">
                       ${v.hash_link_valid === false ? 'Hash link broken' : ''}
                       ${v.sequence_valid === false ? 'Sequence gap' : ''}
-                    </div>
-                  ` : ''}
+                    </div>` : ''}
                 </div>
               </div>
             `;
@@ -742,11 +1363,7 @@
       `;
     }
 
-    function closeChainModal() {
-      document.getElementById('chain-modal').classList.add('hidden');
-    }
-
-    // Live polling
+    // ---------- Live polling ----------
     function startPolling(view, containerId, initialRows, filtersFn) {
       stopPolling();
       poller.generation++;
@@ -782,30 +1399,29 @@
 
     function nextPollDelay() {
       if (poller.emptyCount < POLL_BACKOFF_AFTER_EMPTY) return poller.intervalMs;
-      // Exponential backoff once the stream goes quiet, capped at POLL_MAX_INTERVAL_MS.
       const factor = Math.pow(2, poller.emptyCount - POLL_BACKOFF_AFTER_EMPTY + 1);
       return Math.min(poller.intervalMs * factor, POLL_MAX_INTERVAL_MS);
     }
 
     async function pollOnce() {
       if (!poller.activeView) return;
-      if (document.visibilityState !== 'visible') return; // resumed by visibilitychange
+      if (document.visibilityState !== 'visible') return;
       const gen = poller.generation;
       const params = new URLSearchParams(poller.filtersFn ? poller.filtersFn() : {});
       params.set('since', poller.watermark);
       let rows;
       try {
         rows = await fetchJSON('/api/receipts?' + params.toString());
+        setConnectionStatus(true);
       } catch (err) {
         if (gen !== poller.generation) return;
         console.error('poll:', err);
+        setConnectionStatus(false, err.message);
         poller.emptyCount++;
         schedulePoll(nextPollDelay());
         return;
       }
 
-      // The view or filters may have changed while the request was in flight;
-      // a stale response must not pollute the freshly-rendered table.
       if (gen !== poller.generation) return;
       if (!poller.activeView) return;
 
@@ -821,20 +1437,16 @@
 
     function prependFreshRows(fresh) {
       const tbody = document.getElementById(tbodyIdFor(poller.containerId));
-      // Sort newest-first so the prepended block keeps the table's descending order.
       const sorted = fresh.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
 
       if (!tbody) {
-        // Container was re-rendered as the empty state; rebuild it. The
-        // overview is still capped at RECENT_LIMIT visible rows, but every
-        // fresh id goes into knownIds so the next poll won't re-flash the
-        // ones we didn't display.
         const toRender = poller.activeView === 'overview' ? sorted.slice(0, RECENT_LIMIT) : sorted;
         renderReceiptsTable(toRender, poller.containerId);
         fresh.forEach(r => poller.knownIds.add(r.id));
         bumpWatermark(fresh);
         if (poller.activeView === 'overview') refreshOverviewStats();
         showLiveToast(fresh.length);
+        nav.refresh();
         return;
       }
 
@@ -843,20 +1455,19 @@
       sorted.forEach(r => poller.knownIds.add(r.id));
       bumpWatermark(sorted);
 
-      // Overview keeps the recent list bounded and its stats in sync.
       if (poller.activeView === 'overview') {
         while (tbody.rows.length > RECENT_LIMIT) {
-          // Trim from the DOM only — leave the id in knownIds. Removing it
-          // would re-flash boundary-timestamp rows on the next inclusive
-          // `since` poll. knownIds growth is bounded by traffic volume; the
-          // overview's only callers are the initial fetch (≤ store limit)
-          // and live polls (≤ store limit per call).
           tbody.rows[tbody.rows.length - 1].remove();
         }
         refreshOverviewStats();
+      } else if (poller.activeView === 'receipts') {
+        // Refresh match count when new rows arrive.
+        const tableRows = tbody.rows.length;
+        renderMatchCount(tableRows);
       }
 
       showLiveToast(fresh.length);
+      nav.refresh();
     }
 
     function bumpWatermark(rows) {
@@ -876,11 +1487,19 @@
       liveToastTimer = setTimeout(() => el.classList.remove('show'), 2500);
     }
 
+    function setConnectionStatus(ok, msg) {
+      const el = document.getElementById('connection-status');
+      if (!el) return;
+      el.classList.toggle('is-error', !ok);
+      el.querySelector('.conn-text').textContent = ok ? 'Connected' : 'Disconnected';
+      el.title = ok ? '' : (msg || '');
+    }
+
     document.addEventListener('visibilitychange', () => {
       if (!poller.activeView) return;
       if (document.visibilityState === 'visible') {
         poller.emptyCount = 0;
-        schedulePoll(0); // catch up immediately
+        schedulePoll(0);
       } else if (poller.timer) {
         clearTimeout(poller.timer);
         poller.timer = null;
@@ -897,26 +1516,60 @@
         if (typeof cfg.server_time === 'string' && cfg.server_time) {
           poller.serverTime = cfg.server_time;
         }
+        renderHeaderContext(cfg, null);
       } catch (err) {
         console.warn('config:', err);
       }
     }
 
-    // Utilities
+    // ---------- Error banner ----------
+    function showError(msg) {
+      const banner = document.getElementById('error-banner');
+      document.getElementById('error-message').textContent = msg;
+      banner.hidden = false;
+    }
+    function clearError() {
+      document.getElementById('error-banner').hidden = true;
+    }
+
+    // ---------- Utilities ----------
     async function fetchJSON(url) {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     }
 
+    // Absolute time, locale-formatted. Used in modals where a precise stamp
+    // matters more than recency.
     function formatTime(ts) {
       if (!ts) return '';
       try {
         const d = new Date(ts);
         return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      } catch {
-        return ts;
-      }
+      } catch { return ts; }
+    }
+
+    // Relative time, with a fallback to absolute format for old timestamps.
+    // The full ISO stamp should be set as a title attribute by the caller.
+    function formatRelative(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      const ms = d.getTime();
+      if (Number.isNaN(ms)) return ts;
+      const diff = Date.now() - ms;
+      const s = Math.round(diff / 1000);
+      if (s < 0)        return 'in the future';
+      if (s < 5)        return 'just now';
+      if (s < 60)       return `${s}s ago`;
+      const m = Math.round(s / 60);
+      if (m < 60)       return `${m}m ago`;
+      const h = Math.round(m / 60);
+      if (h < 24)       return `${h}h ago`;
+      const days = Math.round(h / 24);
+      if (days < 7)     return `${days}d ago`;
+      try {
+        return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch { return ts; }
     }
 
     function truncate(s, len) {
@@ -925,35 +1578,112 @@
     }
 
     function escapeHtml(s) {
-      if (!s) return '';
+      if (s === null || s === undefined) return '';
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
+    // For values going into attribute context (title=, data-=, etc.). Same
+    // escaping as escapeHtml — kept as a named alias for intent.
+    function escapeAttr(s) { return escapeHtml(s); }
 
-    const VALID_RISK = new Set(['low', 'medium', 'high', 'critical']);
+    const VALID_RISK   = new Set(['low', 'medium', 'high', 'critical']);
     const VALID_STATUS = new Set(['success', 'failure', 'pending']);
+    function riskClass(level)   { return VALID_RISK.has(level)   ? 'badge-' + level   : 'badge-low'; }
+    function statusClass(status){ return VALID_STATUS.has(status)? 'badge-' + status : 'badge-pending'; }
 
-    function riskClass(level) {
-      return VALID_RISK.has(level) ? 'badge-' + level : 'badge-low';
+    // ---------- Keyboard handling ----------
+    // `g`-prefix sequences ("g o", "g r", "g c") share state with the
+    // single-key handlers via gPrefixUntil — a timestamp the next key must
+    // beat to count as part of the sequence.
+    let gPrefixUntil = 0;
+    const G_PREFIX_TIMEOUT_MS = 1000;
+
+    function isTypingTarget(el) {
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
     }
 
-    function statusClass(status) {
-      return VALID_STATUS.has(status) ? 'badge-' + status : 'badge-pending';
-    }
-
-    // Close modals on Escape
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closeModal(); closeChainModal(); }
+      // Esc: highest priority — always closes modals or blurs inputs.
+      if (e.key === 'Escape') {
+        if (isModalOpen()) { closeAnyOpenModal(); return; }
+        if (isTypingTarget(document.activeElement)) {
+          document.activeElement.blur();
+          return;
+        }
+        // Clear keyboard-focused row.
+        nav.index = -1;
+        nav.apply();
+        return;
+      }
+
+      // Don't intercept while typing in a filter input.
+      if (isTypingTarget(e.target)) return;
+
+      // Don't intercept while a modal is open (Esc handled above is the only key).
+      if (isModalOpen()) return;
+
+      // `?` — help. `Shift+/` produces `?` on US layouts.
+      if (e.key === '?') {
+        e.preventDefault();
+        showShortcuts();
+        return;
+      }
+
+      // `/` — focus action filter (switch to receipts if needed).
+      if (e.key === '/') {
+        e.preventDefault();
+        if (poller.activeView !== 'receipts') showView('receipts');
+        const el = document.getElementById('filter-action');
+        // Defer so showView() completes before focusing.
+        setTimeout(() => el && el.focus(), 0);
+        return;
+      }
+
+      // `g`-prefix sequences.
+      if (e.key === 'g') {
+        gPrefixUntil = Date.now() + G_PREFIX_TIMEOUT_MS;
+        return;
+      }
+      if (Date.now() < gPrefixUntil) {
+        gPrefixUntil = 0;
+        if (e.key === 'o') { e.preventDefault(); showView('overview'); return; }
+        if (e.key === 'r') { e.preventDefault(); showView('receipts'); return; }
+        if (e.key === 'c') { e.preventDefault(); showView('chains');   return; }
+      }
+
+      // Single-key navigation.
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault(); nav.move(+1); return;
+      }
+      if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault(); nav.move(-1); return;
+      }
+      if (e.key === 'Enter') {
+        if (nav.index >= 0) { e.preventDefault(); nav.activate(); }
+        return;
+      }
+      if (e.key === 'c') {
+        // Clear filters when in receipts view.
+        if (poller.activeView === 'receipts') {
+          e.preventDefault();
+          clearAllFilters();
+        }
+        return;
+      }
     });
 
-    // Close modals on backdrop click
-    document.getElementById('receipt-modal').addEventListener('click', e => {
-      if (e.target === e.currentTarget) closeModal();
-    });
-    document.getElementById('chain-modal').addEventListener('click', e => {
-      if (e.target === e.currentTarget) closeChainModal();
+    // Header help button.
+    document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
+
+    // Close modals on backdrop click.
+    ['receipt-modal','chain-modal','shortcuts-modal'].forEach(id => {
+      document.getElementById(id).addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeModalById(id);
+      });
     });
 
-    // Boot
+    // ---------- Boot ----------
     loadPollConfig().then(loadOverview);
   </script>
 </body>

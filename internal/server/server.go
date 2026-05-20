@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +21,12 @@ const DefaultPollInterval = 5 * time.Second
 type Config struct {
 	// PollInterval is how often the dashboard polls /api/receipts for new rows.
 	PollInterval time.Duration
+	// DBPath is the absolute path to the SQLite database being served. Surfaced
+	// in the header so users know which store they are looking at when running
+	// multiple dashboards or pointing at a non-default file.
+	DBPath string
+	// Version is the dashboard build version, shown in the header footer.
+	Version string
 }
 
 //go:embed static
@@ -70,6 +77,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"poll_interval_ms": s.cfg.PollInterval.Milliseconds(),
 		"server_time":      time.Now().UTC().Format(time.RFC3339),
+		"db_path":          s.cfg.DBPath,
+		"db_name":          filepath.Base(s.cfg.DBPath),
+		"version":          s.cfg.Version,
 	})
 }
 

@@ -150,7 +150,11 @@ func main() {
 	}
 	defer reader.Close()
 
-	srv := server.New(reader, server.Config{PollInterval: *pollInterval})
+	srv := server.New(reader, server.Config{
+		PollInterval: *pollInterval,
+		DBPath:       *dbPath,
+		Version:      resolveVersion(),
+	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)
 	log.Printf("reading from %s (read-only)", *dbPath)
