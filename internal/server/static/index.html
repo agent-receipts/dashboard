@@ -893,14 +893,18 @@
         </div>
       `).join('') || '<div class="muted text-sm">No data</div>';
 
-      const maxAction = Math.max(...(stats.by_action || []).map(r => r.count), 1);
-      document.getElementById('action-chart').innerHTML = (stats.by_action || []).map(r => `
+      const allActions = stats.by_action || [];
+      const topActions = allActions.slice(0, 5);
+      const moreCount = allActions.length - topActions.length;
+      const maxAction = Math.max(...topActions.map(r => r.count), 1);
+      document.getElementById('action-chart').innerHTML = topActions.map(r => `
         <div class="bar-row">
           <span class="bar-label"><span class="badge">${escapeHtml(r.label)}</span></span>
           <div class="bar-track"><div class="bar-fill bar-action" style="width: ${(r.count / maxAction * 100)}%"></div></div>
           <span class="bar-count">${r.count}</span>
         </div>
-      `).join('') || '<div class="muted text-sm">No data</div>';
+      `).join('') + (moreCount > 0 ? `<div class="muted text-xs mt-1">+${moreCount} more</div>` : '')
+        || '<div class="muted text-sm">No data</div>';
     }
 
     function statCardHTML(opts) {
