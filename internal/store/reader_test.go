@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -527,6 +528,89 @@ func TestReader_ListReceipts_OutputStatusMismatch(t *testing.T) {
 		if row.OutputStatusMismatch {
 			t.Errorf("%s: OutputStatusMismatch=true, want false under envelope-shape disclosure", row.ID)
 		}
+	}
+}
+
+// TestReader_ListReceipts_OutputStatusMismatch_LegacyShape pins that the
+// SQL mismatch detector still flags pre-v0.3.0 receipts that physically
+// carry the flat-map disclosure shape on disk. The sdkstore Insert path
+// will not produce these — the typed Go API requires
+// *receipt.DisclosureEnvelope — so we INSERT a raw receipt_json blob
+// directly to simulate a store seeded under an older SDK that has not
+// been re-keyed. The SQL in reader.go is shape-agnostic by design: it
+// looks for .parameters_disclosure.output, and a legacy row still has
+// that key.
+func TestReader_ListReceipts_OutputStatusMismatch_LegacyShape(t *testing.T) {
+	dbPath := t.TempDir() + "/mismatch-legacy.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	s.Close()
+
+	// Open a raw sqlite handle (read-write) and insert a v0.2.x-shaped
+	// receipt whose parameters_disclosure.output is a JSON-encoded string
+	// containing isError:true. Status is "success" — the exact mismatch
+	// the SQL is meant to flag.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite: %v", err)
+	}
+	defer db.Close()
+
+	const legacyReceiptJSON = `{
+		"@context":["https://www.w3.org/ns/credentials/v2","https://agentreceipts.ai/context/v1"],
+		"id":"urn:receipt:legacy-1",
+		"type":["VerifiableCredential","AgentReceipt"],
+		"version":"0.2.2",
+		"issuer":{"id":"did:agent:test-agent"},
+		"issuanceDate":"2026-03-01T09:00:00Z",
+		"credentialSubject":{
+			"principal":{"id":"did:user:test-user"},
+			"action":{
+				"id":"act_legacy-1",
+				"type":"mcp.tool.call",
+				"risk_level":"low",
+				"timestamp":"2026-03-01T09:00:00Z",
+				"parameters_disclosure":{
+					"input":"{\"path\":\"/etc/hosts\"}",
+					"output":"{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"denied\"}]}"
+				}
+			},
+			"outcome":{"status":"success"},
+			"chain":{"sequence":1,"previous_receipt_hash":null,"chain_id":"chain-legacy"}
+		},
+		"proof":{"type":"Ed25519Signature2020","proofValue":"u-legacy-1"}
+	}`
+
+	if _, err := db.Exec(
+		`INSERT INTO receipts (id, chain_id, sequence, action_type, risk_level, status, timestamp, issuer_id, receipt_json, receipt_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"urn:receipt:legacy-1", "chain-legacy", 1, "mcp.tool.call", "low", "success",
+		"2026-03-01T09:00:00Z", "did:agent:test-agent", legacyReceiptJSON, "sha256:legacy",
+	); err != nil {
+		t.Fatalf("insert legacy receipt: %v", err)
+	}
+	db.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if !rows[0].OutputStatusMismatch {
+		t.Errorf("legacy mismatch row got OutputStatusMismatch=false, want true (status=success + parameters_disclosure.output.isError=true)")
+	}
+	if !rows[0].HasParametersDisclosure {
+		t.Errorf("legacy row got HasParametersDisclosure=false, want true")
 	}
 }
 
