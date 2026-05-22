@@ -556,7 +556,8 @@ func TestReader_ListReceipts_OutputStatusMismatch_LegacyShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open raw sqlite: %v", err)
 	}
-	defer db.Close()
+	// No defer: the writer must be closed before OpenReadOnly so the
+	// reader sees a quiesced file. Single explicit Close below.
 
 	const legacyReceiptJSON = `{
 		"@context":["https://www.w3.org/ns/credentials/v2","https://agentreceipts.ai/context/v1"],
@@ -591,7 +592,9 @@ func TestReader_ListReceipts_OutputStatusMismatch_LegacyShape(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert legacy receipt: %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw sqlite: %v", err)
+	}
 
 	reader, err := OpenReadOnly(dbPath)
 	if err != nil {
