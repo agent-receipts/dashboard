@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-22
+
+### Changed
+
+- **Bump `github.com/agent-receipts/ar/sdk/go` to `v0.11.0`** (#67) — picks up the v0.3.0 envelope-shape `Action.parameters_disclosure` (`*receipt.DisclosureEnvelope` instead of the legacy `map[string]string`). Per [agent-receipts/ar#280](https://github.com/agent-receipts/ar/issues/280) and validated in [agent-receipts/ar#519](https://github.com/agent-receipts/ar/issues/519) Section 5.
+
+### Fixed
+
+- `internal/store/reader_test.go` refactored to compile against the envelope-shape disclosure type and to keep coverage of the SQL `OutputStatusMismatch` detector for both shapes (#67, #68). A new `TestReader_ListReceipts_OutputStatusMismatch_LegacyShape` inserts a raw v0.2.x-shaped `receipt_json` directly into the test DB so the legacy-flat-map mismatch path stays covered after the typed `sdkstore.Insert` switched to enforcing the envelope shape.
+
+### Known follow-up
+
+- The list-view disclosure preview path in `internal/store/reader.go` (`json_extract` of `.input` / `.output`, `disclosurePreviewMaxLen` truncation) is now functionally dead under v0.3.0: the envelope payload is opaque ciphertext, so the SQL extraction always yields empty strings. The detail-view rendering UX for encrypted disclosure (whether to surface envelope metadata, wire up a decryption path, etc.) is deliberately out of scope for this release and tracked separately.
+
 ## [0.2.2] - 2026-05-20
 
 ### Fixed
@@ -102,7 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/agent-receipts/dashboard/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/agent-receipts/dashboard/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/agent-receipts/dashboard/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/agent-receipts/dashboard/compare/v0.1.6...v0.2.0
 [0.1.6]: https://github.com/agent-receipts/dashboard/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/agent-receipts/dashboard/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/agent-receipts/dashboard/compare/v0.1.3...v0.1.4
