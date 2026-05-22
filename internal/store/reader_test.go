@@ -1,12 +1,28 @@
 package store
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
 )
+
+// testDisclosureEnvelope returns a sentinel HPKE disclosure envelope sized to
+// match the v1 ciphersuite (ADR-0012). Values are placeholder bytes — never
+// decryptable — but the receipt store does not validate envelope contents, so
+// they exercise the "has disclosure" code paths end-to-end.
+func testDisclosureEnvelope(kid string, ct string) *receipt.DisclosureEnvelope {
+	return &receipt.DisclosureEnvelope{
+		V:   "1",
+		Alg: "hpke-x25519-hkdf-sha256-aes-256-gcm",
+		Recipients: []receipt.DisclosureRecipient{{
+			KID: kid,
+			// 43-char unpadded base64url placeholder matching X25519 enc width.
+			Enc: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		}},
+		CT: ct,
+	}
+}
 
 func makeReceipt(id, chainID string, seq int, actionType string, risk receipt.RiskLevel, status receipt.OutcomeStatus, ts string, prevHash *string) receipt.AgentReceipt {
 	return receipt.AgentReceipt{
@@ -394,7 +410,14 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 	}
 }
 
-func TestReader_ListReceipts_ParametersDisclosurePreview(t *testing.T) {
+func TestReader_ListReceipts_ParametersDisclosurePresence(t *testing.T) {
+	// Under the v0.3.0 envelope shape (ADR-0012), parameters_disclosure is an
+	// opaque HPKE ciphertext blob — there are no `input`/`output` keys to
+	// preview. The list view's HasParametersDisclosure indicator must still
+	// fire whenever an envelope is present, and the preview columns must
+	// remain empty (the SQL json_extract paths target keys that no longer
+	// exist on the wire). Rendering the envelope itself is out of scope here;
+	// see the follow-up issue for the detail-view UX.
 	dbPath := t.TempDir() + "/disclosure-test.db"
 	s, err := sdkstore.Open(dbPath)
 	if err != nil {
@@ -403,32 +426,13 @@ func TestReader_ListReceipts_ParametersDisclosurePreview(t *testing.T) {
 
 	withDisclosure := makeReceipt("urn:receipt:d1", "chain-d", 1,
 		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
-	withDisclosure.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"input":  "read /etc/passwd",
-		"output": "root:x:0:0:root:/root:/bin/bash",
-	}
+	withDisclosure.CredentialSubject.Action.ParametersDisclosure = testDisclosureEnvelope(
+		"did:key:test#enc-1", "ciphertext-placeholder-d1")
 
-	// A receipt with a disclosure value longer than the preview cap so we can
-	// confirm SQL truncates rather than streaming the whole thing.
-	long := strings.Repeat("A", 500)
-	withLong := makeReceipt("urn:receipt:d2", "chain-d", 2,
+	withoutDisclosure := makeReceipt("urn:receipt:d2", "chain-d", 2,
 		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
-	withLong.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"input": long,
-	}
 
-	// A receipt with disclosure containing only non-primary keys (no input/output).
-	withNonPrimaryKeys := makeReceipt("urn:receipt:d2b", "chain-d", 3,
-		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:30Z", nil)
-	withNonPrimaryKeys.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"api_key": "sk-...",
-		"region": "us-west-2",
-	}
-
-	withoutDisclosure := makeReceipt("urn:receipt:d3", "chain-d", 4,
-		"tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
-
-	for _, r := range []receipt.AgentReceipt{withDisclosure, withLong, withNonPrimaryKeys, withoutDisclosure} {
+	for _, r := range []receipt.AgentReceipt{withDisclosure, withoutDisclosure} {
 		hash, err := receipt.HashReceipt(r)
 		if err != nil {
 			t.Fatalf("hash: %v", err)
@@ -449,97 +453,56 @@ func TestReader_ListReceipts_ParametersDisclosurePreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(rows) != 4 {
-		t.Fatalf("got %d rows, want 4", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
 	}
 
-	// newest-first: d3, d2b, d2, d1.
+	// newest-first: d2 (no envelope), d1 (envelope).
+	if rows[0].HasParametersDisclosure {
+		t.Errorf("d2 (no envelope) got HasParametersDisclosure=true, want false")
+	}
 	if rows[0].ParametersInputPreview != "" || rows[0].ParametersOutputPreview != "" {
-		t.Errorf("d3 (no disclosure) got input=%q output=%q, want empty",
+		t.Errorf("d2 (no envelope) got non-empty previews input=%q output=%q",
 			rows[0].ParametersInputPreview, rows[0].ParametersOutputPreview)
 	}
-	if rows[0].HasParametersDisclosure {
-		t.Errorf("d3 (no disclosure) got HasParametersDisclosure=true, want false")
-	}
 
-	// d2b: has disclosure (non-primary keys only) but no input/output previews.
-	if rows[1].ParametersInputPreview != "" || rows[1].ParametersOutputPreview != "" {
-		t.Errorf("d2b (non-primary keys only) got input=%q output=%q, want both empty",
-			rows[1].ParametersInputPreview, rows[1].ParametersOutputPreview)
-	}
 	if !rows[1].HasParametersDisclosure {
-		t.Errorf("d2b (has disclosure) got HasParametersDisclosure=false, want true")
+		t.Errorf("d1 (envelope present) got HasParametersDisclosure=false, want true")
 	}
-
-	if got := len(rows[2].ParametersInputPreview); got != disclosurePreviewMaxLen {
-		t.Errorf("d2 input preview length = %d, want %d (truncated)", got, disclosurePreviewMaxLen)
-	}
-	if rows[2].ParametersOutputPreview != "" {
-		t.Errorf("d2 output preview = %q, want empty", rows[2].ParametersOutputPreview)
-	}
-	if !rows[2].HasParametersDisclosure {
-		t.Errorf("d2 (has disclosure) got HasParametersDisclosure=false, want true")
-	}
-
-	if rows[3].ParametersInputPreview != "read /etc/passwd" {
-		t.Errorf("d1 input preview = %q, want %q", rows[3].ParametersInputPreview, "read /etc/passwd")
-	}
-	if rows[3].ParametersOutputPreview != "root:x:0:0:root:/root:/bin/bash" {
-		t.Errorf("d1 output preview = %q, want %q",
-			rows[3].ParametersOutputPreview, "root:x:0:0:root:/root:/bin/bash")
-	}
-	if !rows[3].HasParametersDisclosure {
-		t.Errorf("d1 (has disclosure) got HasParametersDisclosure=false, want true")
+	// The envelope is opaque to the reader, so the legacy input/output
+	// previews must be empty — surfacing ciphertext would be misleading.
+	if rows[1].ParametersInputPreview != "" || rows[1].ParametersOutputPreview != "" {
+		t.Errorf("d1 (envelope) got non-empty previews input=%q output=%q; envelope payload must not leak into list view",
+			rows[1].ParametersInputPreview, rows[1].ParametersOutputPreview)
 	}
 }
 
 func TestReader_ListReceipts_OutputStatusMismatch(t *testing.T) {
+	// Pre-v0.3.0 the reader inspected parameters_disclosure.output for an
+	// isError:true marker so it could flag MCP receipts whose outcome.status
+	// had been stamped before the response payload was inspected (issue #50).
+	// Under ADR-0012 the envelope is opaque ciphertext — the dashboard cannot
+	// peek inside without the forensic private key — so OutputStatusMismatch
+	// must always be false at the list-view layer, regardless of whether an
+	// envelope is attached. Detecting the mismatch will move to whatever
+	// component eventually holds the disclosure key; see follow-up issue.
 	dbPath := t.TempDir() + "/mismatch-test.db"
 	s, err := sdkstore.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open sdk store: %v", err)
 	}
 
-	// status=success + output JSON with isError:true → mismatch.
-	mismatch := makeReceipt("urn:receipt:m1", "chain-m", 1,
+	// status=success + envelope present (legacy mismatch source) → still false.
+	withEnvelope := makeReceipt("urn:receipt:m1", "chain-m", 1,
 		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
-	mismatch.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"output": `{"content":[{"text":"401 Bad credentials","type":"text"}],"isError":true}`,
-	}
+	withEnvelope.CredentialSubject.Action.ParametersDisclosure = testDisclosureEnvelope(
+		"did:key:test#enc-1", "opaque-ciphertext-m1")
 
-	// status=success + output JSON with isError:false → consistent, no mismatch.
-	clean := makeReceipt("urn:receipt:m2", "chain-m", 2,
+	// status=success, no disclosure → false (control).
+	bare := makeReceipt("urn:receipt:m2", "chain-m", 2,
 		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
-	clean.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"output": `{"content":[{"text":"ok"}],"isError":false}`,
-	}
 
-	// status=success + output JSON without isError key → no mismatch.
-	noFlag := makeReceipt("urn:receipt:m3", "chain-m", 3,
-		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
-	noFlag.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"output": `{"content":[{"text":"ok"}]}`,
-	}
-
-	// status=failure + output JSON with isError:true → consistent, no mismatch.
-	expectedFail := makeReceipt("urn:receipt:m4", "chain-m", 4,
-		"mcp.tool.call", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:03:00Z", nil)
-	expectedFail.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"output": `{"isError":true}`,
-	}
-
-	// status=success + plain (non-JSON) string output → no mismatch.
-	plain := makeReceipt("urn:receipt:m5", "chain-m", 5,
-		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:04:00Z", nil)
-	plain.CredentialSubject.Action.ParametersDisclosure = map[string]string{
-		"output": "plain text body, not JSON",
-	}
-
-	// status=success + no disclosure at all → no mismatch.
-	bare := makeReceipt("urn:receipt:m6", "chain-m", 6,
-		"mcp.tool.call", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:05:00Z", nil)
-
-	for _, r := range []receipt.AgentReceipt{mismatch, clean, noFlag, expectedFail, plain, bare} {
+	for _, r := range []receipt.AgentReceipt{withEnvelope, bare} {
 		hash, err := receipt.HashReceipt(r)
 		if err != nil {
 			t.Fatalf("hash: %v", err)
@@ -560,31 +523,9 @@ func TestReader_ListReceipts_OutputStatusMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-
-	byID := map[string]ReceiptRow{}
-	for _, r := range rows {
-		byID[r.ID] = r
-	}
-
-	cases := []struct {
-		id   string
-		want bool
-	}{
-		{"urn:receipt:m1", true},
-		{"urn:receipt:m2", false},
-		{"urn:receipt:m3", false},
-		{"urn:receipt:m4", false},
-		{"urn:receipt:m5", false},
-		{"urn:receipt:m6", false},
-	}
-	for _, tc := range cases {
-		row, ok := byID[tc.id]
-		if !ok {
-			t.Errorf("%s missing from results", tc.id)
-			continue
-		}
-		if row.OutputStatusMismatch != tc.want {
-			t.Errorf("%s: OutputStatusMismatch=%v, want %v", tc.id, row.OutputStatusMismatch, tc.want)
+	for _, row := range rows {
+		if row.OutputStatusMismatch {
+			t.Errorf("%s: OutputStatusMismatch=true, want false under envelope-shape disclosure", row.ID)
 		}
 	}
 }
