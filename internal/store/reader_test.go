@@ -556,7 +556,13 @@ func TestReader_ListReceipts_OutputStatusMismatch_LegacyShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open raw sqlite: %v", err)
 	}
-	defer db.Close()
+	// Failure-path safety net: if any t.Fatalf below short-circuits the
+	// explicit Close, t.Cleanup still releases the handle. database/sql's
+	// DB.Close is idempotent (sets a `closed` flag, subsequent calls return
+	// nil), so this is a no-op on the happy path. The explicit Close before
+	// OpenReadOnly is the load-bearing one — it surfaces errors and quiesces
+	// the file before the reader opens it.
+	t.Cleanup(func() { _ = db.Close() })
 
 	const legacyReceiptJSON = `{
 		"@context":["https://www.w3.org/ns/credentials/v2","https://agentreceipts.ai/context/v1"],
@@ -591,7 +597,9 @@ func TestReader_ListReceipts_OutputStatusMismatch_LegacyShape(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert legacy receipt: %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw sqlite: %v", err)
+	}
 
 	reader, err := OpenReadOnly(dbPath)
 	if err != nil {
