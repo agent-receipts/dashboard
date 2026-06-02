@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chain verification false negative** ([agent-receipts/ar#719](https://github.com/agent-receipts/ar/issues/719)) — `/api/chains/{id}/verify` reported valid chains as broken. The recomputed hash linkage round-tripped each receipt through the Go struct (`receipt.HashReceipt`), which drops any forward-compat fields a newer SDK wrote, so it disagreed with the canonical hash the collector stored. Verification now recomputes from the verbatim `receipt_json` wire bytes via `receipt.HashRawReceipt`, matching `agent-receipts verify` and any auditor reading the raw bytes. `store.GetChain` now returns the raw bytes alongside the parsed receipt.
+
 ## [0.3.0] - 2026-05-22
 
 ### Changed

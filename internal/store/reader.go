@@ -58,12 +58,24 @@ type ReceiptRow struct {
 // in list rows. The modal still shows the full value via the detail endpoint.
 const disclosurePreviewMaxLen = 200
 
+// ChainReceipt pairs a parsed receipt with the verbatim JSON bytes stored in
+// the receipt_json column. Chain verification recomputes the canonical hash
+// from Raw via receipt.HashRawReceipt — the same hash form the collector and
+// an auditor use — rather than round-tripping through the Go struct. The
+// struct path (receipt.HashReceipt) silently drops any forward-compat fields a
+// newer SDK wrote, yielding a hash that disagrees with the stored one and a
+// false "broken chain" report (issue #719).
+type ChainReceipt struct {
+	Receipt receipt.AgentReceipt
+	Raw     []byte
+}
+
 // ChainSummary holds aggregate information about a receipt chain.
 type ChainSummary struct {
 	ChainID        string `json:"chain_id"`
 	ReceiptCount   int    `json:"receipt_count"`
 	FirstTimestamp string `json:"first_timestamp"`
-	LastTimestamp   string `json:"last_timestamp"`
+	LastTimestamp  string `json:"last_timestamp"`
 }
 
 // Stats holds aggregate statistics for the store.
@@ -262,8 +274,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	return out, rows.Err()
 }
 
-// GetChain retrieves all receipts in a chain, ordered by sequence.
-func (r *Reader) GetChain(chainID string) ([]receipt.AgentReceipt, error) {
+// GetChain retrieves all receipts in a chain, ordered by sequence. Each result
+// carries both the parsed receipt and the verbatim receipt_json bytes so chain
+// verification can recompute hashes from the wire form (see ChainReceipt).
+func (r *Reader) GetChain(chainID string) ([]ChainReceipt, error) {
 	rows, err := r.db.Query(
 		"SELECT receipt_json FROM receipts WHERE chain_id = ? ORDER BY sequence ASC",
 		chainID,
@@ -273,7 +287,7 @@ func (r *Reader) GetChain(chainID string) ([]receipt.AgentReceipt, error) {
 	}
 	defer rows.Close()
 
-	var out []receipt.AgentReceipt
+	var out []ChainReceipt
 	for rows.Next() {
 		var rJSON string
 		if err := rows.Scan(&rJSON); err != nil {
@@ -283,7 +297,7 @@ func (r *Reader) GetChain(chainID string) ([]receipt.AgentReceipt, error) {
 		if err := json.Unmarshal([]byte(rJSON), &ar); err != nil {
 			return nil, fmt.Errorf("corrupt receipt in chain %s: %w", chainID, err)
 		}
-		out = append(out, ar)
+		out = append(out, ChainReceipt{Receipt: ar, Raw: []byte(rJSON)})
 	}
 	return out, rows.Err()
 }

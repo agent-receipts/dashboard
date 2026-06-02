@@ -7,6 +7,8 @@ import (
 	"log"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
+
+	"github.com/agent-receipts/dashboard/internal/store"
 )
 
 // LinkVerification holds the result for a single receipt in a chain.
@@ -32,7 +34,13 @@ type ChainLinkResult struct {
 // When publicKeyPEM is non-empty, each receipt's Ed25519 signature is also
 // verified using the ar SDK; SignatureValid will be set per receipt.
 // When publicKeyPEM is empty, signature checks are skipped (SignatureValid is nil).
-func VerifyChainLinks(receipts []receipt.AgentReceipt, publicKeyPEM string) ChainLinkResult {
+//
+// Hash linkage is recomputed from each receipt's verbatim wire bytes
+// (receipt.HashRawReceipt), which is the canonical hash form the collector
+// stored and an auditor would reproduce. Hashing the re-marshalled Go struct
+// instead (receipt.HashReceipt) drops any forward-compat fields a newer SDK
+// emitted, making a valid chain look broken — issue #719.
+func VerifyChainLinks(receipts []store.ChainReceipt, publicKeyPEM string) ChainLinkResult {
 	if len(receipts) == 0 {
 		return ChainLinkResult{Valid: true, Length: 0, BrokenAt: -1}
 	}
@@ -40,14 +48,15 @@ func VerifyChainLinks(receipts []receipt.AgentReceipt, publicKeyPEM string) Chai
 	results := make([]LinkVerification, 0, len(receipts))
 	brokenAt := -1
 
-	for i, r := range receipts {
+	for i, cr := range receipts {
+		r := cr.Receipt
 		chain := r.CredentialSubject.Chain
 
 		hashValid := true
 		if i == 0 {
 			hashValid = chain.PreviousReceiptHash == nil
 		} else {
-			prevHash, err := receipt.HashReceipt(receipts[i-1])
+			prevHash, err := receipt.HashRawReceipt(receipts[i-1].Raw)
 			if err != nil {
 				hashValid = false
 			} else {
@@ -59,7 +68,7 @@ func VerifyChainLinks(receipts []receipt.AgentReceipt, publicKeyPEM string) Chai
 		if i == 0 {
 			seqValid = chain.Sequence >= 1
 		} else {
-			seqValid = chain.Sequence == receipts[i-1].CredentialSubject.Chain.Sequence+1
+			seqValid = chain.Sequence == receipts[i-1].Receipt.CredentialSubject.Chain.Sequence+1
 		}
 
 		lv := LinkVerification{

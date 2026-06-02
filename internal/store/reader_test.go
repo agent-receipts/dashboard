@@ -639,10 +639,16 @@ func TestReader_GetChain(t *testing.T) {
 	}
 	// Should be ordered by sequence.
 	for i := 1; i < len(receipts); i++ {
-		prev := receipts[i-1].CredentialSubject.Chain.Sequence
-		curr := receipts[i].CredentialSubject.Chain.Sequence
+		prev := receipts[i-1].Receipt.CredentialSubject.Chain.Sequence
+		curr := receipts[i].Receipt.CredentialSubject.Chain.Sequence
 		if curr <= prev {
 			t.Errorf("receipts not ordered: seq %d after seq %d", curr, prev)
+		}
+	}
+	// Each result must carry the verbatim wire bytes used for hash recompute.
+	for i, cr := range receipts {
+		if len(cr.Raw) == 0 {
+			t.Errorf("receipt %d: missing raw JSON bytes", i)
 		}
 	}
 }

@@ -1,9 +1,12 @@
 package verify
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
+
+	"github.com/agent-receipts/dashboard/internal/store"
 )
 
 func makeReceipt(id, chainID string, seq int, prevHash *string) receipt.AgentReceipt {
@@ -38,6 +41,28 @@ func makeReceipt(id, chainID string, seq int, prevHash *string) receipt.AgentRec
 
 func strPtr(s string) *string { return &s }
 
+// chainReceipt pairs a receipt with the verbatim wire bytes the store would
+// hold, mirroring store.GetChain. Verification recomputes hashes from Raw.
+func chainReceipt(t *testing.T, r receipt.AgentReceipt) store.ChainReceipt {
+	t.Helper()
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+	return store.ChainReceipt{Receipt: r, Raw: raw}
+}
+
+// rawHash returns the canonical hash of a chain receipt's wire bytes — the
+// value a producer would store in the next receipt's previous_receipt_hash.
+func rawHash(t *testing.T, cr store.ChainReceipt) string {
+	t.Helper()
+	h, err := receipt.HashRawReceipt(cr.Raw)
+	if err != nil {
+		t.Fatalf("hash raw receipt: %v", err)
+	}
+	return h
+}
+
 func TestVerifyChainLinks_Empty(t *testing.T) {
 	result := VerifyChainLinks(nil, "")
 	if !result.Valid {
@@ -49,8 +74,8 @@ func TestVerifyChainLinks_Empty(t *testing.T) {
 }
 
 func TestVerifyChainLinks_SingleReceipt(t *testing.T) {
-	r := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	result := VerifyChainLinks([]receipt.AgentReceipt{r}, "")
+	cr := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, nil))
+	result := VerifyChainLinks([]store.ChainReceipt{cr}, "")
 	if !result.Valid {
 		t.Errorf("single receipt should be valid, broken at %d", result.BrokenAt)
 	}
@@ -69,19 +94,13 @@ func TestVerifyChainLinks_SingleReceipt(t *testing.T) {
 }
 
 func TestVerifyChainLinks_ValidChain(t *testing.T) {
-	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	hash1, err := receipt.HashReceipt(r1)
-	if err != nil {
-		t.Fatalf("hash: %v", err)
-	}
-	r2 := makeReceipt("urn:receipt:002", "chain-1", 2, &hash1)
-	hash2, err := receipt.HashReceipt(r2)
-	if err != nil {
-		t.Fatalf("hash: %v", err)
-	}
-	r3 := makeReceipt("urn:receipt:003", "chain-1", 3, &hash2)
+	cr1 := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, nil))
+	hash1 := rawHash(t, cr1)
+	cr2 := chainReceipt(t, makeReceipt("urn:receipt:002", "chain-1", 2, &hash1))
+	hash2 := rawHash(t, cr2)
+	cr3 := chainReceipt(t, makeReceipt("urn:receipt:003", "chain-1", 3, &hash2))
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2, r3}, "")
+	result := VerifyChainLinks([]store.ChainReceipt{cr1, cr2, cr3}, "")
 	if !result.Valid {
 		t.Errorf("chain should be valid, broken at %d", result.BrokenAt)
 	}
@@ -98,11 +117,64 @@ func TestVerifyChainLinks_ValidChain(t *testing.T) {
 	}
 }
 
-func TestVerifyChainLinks_BrokenHash(t *testing.T) {
-	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	r2 := makeReceipt("urn:receipt:002", "chain-1", 2, strPtr("sha256:wrong"))
+// TestVerifyChainLinks_ForwardCompatFields is the regression test for issue
+// #719. A chain whose stored hashes were computed over wire bytes carrying a
+// field the Go struct does not know about must still verify as valid: the
+// recompute must hash the raw bytes, not a re-marshal of the struct.
+func TestVerifyChainLinks_ForwardCompatFields(t *testing.T) {
+	// Build chain receipts whose Raw bytes carry a forward-compat top-level
+	// field the AgentReceipt struct drops on Unmarshal.
+	withFutureField := func(t *testing.T, r receipt.AgentReceipt) store.ChainReceipt {
+		t.Helper()
+		var generic map[string]any
+		raw, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := json.Unmarshal(raw, &generic); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		generic["_future_field"] = "v2"
+		enriched, err := json.Marshal(generic)
+		if err != nil {
+			t.Fatalf("marshal enriched: %v", err)
+		}
+		return store.ChainReceipt{Receipt: r, Raw: enriched}
+	}
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2}, "")
+	cr1 := withFutureField(t, makeReceipt("urn:receipt:001", "default", 1, nil))
+	hash1 := rawHash(t, cr1)
+	cr2 := withFutureField(t, makeReceipt("urn:receipt:002", "default", 2, &hash1))
+	hash2 := rawHash(t, cr2)
+	cr3 := withFutureField(t, makeReceipt("urn:receipt:003", "default", 3, &hash2))
+
+	result := VerifyChainLinks([]store.ChainReceipt{cr1, cr2, cr3}, "")
+	if !result.Valid {
+		t.Fatalf("chain with forward-compat fields should be valid, broken at %d", result.BrokenAt)
+	}
+	for i, rv := range result.Receipts {
+		if !rv.HashLinkValid {
+			t.Errorf("receipt %d: hash link should be valid", i)
+		}
+	}
+
+	// Sanity check: hashing the re-marshalled struct (the old behaviour)
+	// would drop _future_field and disagree, proving the test exercises the
+	// real divergence rather than a no-op.
+	structHash, err := receipt.HashReceipt(cr1.Receipt)
+	if err != nil {
+		t.Fatalf("hash receipt: %v", err)
+	}
+	if structHash == hash1 {
+		t.Fatal("expected struct hash to differ from raw hash with forward-compat field present")
+	}
+}
+
+func TestVerifyChainLinks_BrokenHash(t *testing.T) {
+	cr1 := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, nil))
+	cr2 := chainReceipt(t, makeReceipt("urn:receipt:002", "chain-1", 2, strPtr("sha256:wrong")))
+
+	result := VerifyChainLinks([]store.ChainReceipt{cr1, cr2}, "")
 	if result.Valid {
 		t.Error("chain with wrong hash should be invalid")
 	}
@@ -115,11 +187,11 @@ func TestVerifyChainLinks_BrokenHash(t *testing.T) {
 }
 
 func TestVerifyChainLinks_BrokenSequence(t *testing.T) {
-	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	hash1, _ := receipt.HashReceipt(r1)
-	r2 := makeReceipt("urn:receipt:002", "chain-1", 5, &hash1) // gap in sequence
+	cr1 := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, nil))
+	hash1 := rawHash(t, cr1)
+	cr2 := chainReceipt(t, makeReceipt("urn:receipt:002", "chain-1", 5, &hash1)) // gap in sequence
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1, r2}, "")
+	result := VerifyChainLinks([]store.ChainReceipt{cr1, cr2}, "")
 	if result.Valid {
 		t.Error("chain with sequence gap should be invalid")
 	}
@@ -136,9 +208,9 @@ func TestVerifyChainLinks_BrokenSequence(t *testing.T) {
 }
 
 func TestVerifyChainLinks_FirstReceiptNonNilPrevHash(t *testing.T) {
-	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, strPtr("sha256:shouldbenull"))
+	cr1 := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, strPtr("sha256:shouldbenull")))
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1}, "")
+	result := VerifyChainLinks([]store.ChainReceipt{cr1}, "")
 	if result.Valid {
 		t.Error("first receipt with non-nil prev hash should be invalid")
 	}
@@ -180,7 +252,7 @@ func TestVerifyChainLinks_SignatureValid(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{signed}, kp.PublicKey)
+	result := VerifyChainLinks([]store.ChainReceipt{chainReceipt(t, signed)}, kp.PublicKey)
 	if len(result.Receipts) != 1 {
 		t.Fatalf("got %d results, want 1", len(result.Receipts))
 	}
@@ -227,7 +299,7 @@ func TestVerifyChainLinks_SignatureInvalid(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	result := VerifyChainLinks([]receipt.AgentReceipt{signed}, wrongKP.PublicKey)
+	result := VerifyChainLinks([]store.ChainReceipt{chainReceipt(t, signed)}, wrongKP.PublicKey)
 	if len(result.Receipts) != 1 {
 		t.Fatalf("got %d results, want 1", len(result.Receipts))
 	}
@@ -241,8 +313,8 @@ func TestVerifyChainLinks_SignatureInvalid(t *testing.T) {
 }
 
 func TestVerifyChainLinks_NoPublicKey_SignatureNotChecked(t *testing.T) {
-	r1 := makeReceipt("urn:receipt:001", "chain-1", 1, nil)
-	result := VerifyChainLinks([]receipt.AgentReceipt{r1}, "")
+	cr := chainReceipt(t, makeReceipt("urn:receipt:001", "chain-1", 1, nil))
+	result := VerifyChainLinks([]store.ChainReceipt{cr}, "")
 	if result.Receipts[0].SignatureValid != nil {
 		t.Error("SignatureValid should be nil when no public key provided")
 	}
