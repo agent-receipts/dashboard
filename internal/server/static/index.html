@@ -1565,9 +1565,9 @@
     // ---------- Parameters disclosure: HPKE decryption ----------
     // An HPKE envelope (parameters_disclosure with a recipients array and a ct
     // field) is encrypted to a forensic key. We render a placeholder and decrypt
-    // it server-side via /api/disclosure/{id} using the loaded private key.
-    // Older receipts carry a plaintext {input, output, …} disclosure instead —
-    // those keep their existing rendering.
+    // it server-side via /api/disclosure/{id} using the loaded private key. This
+    // is the only disclosure shape the detail view renders; see
+    // disclosureSectionHTML for why legacy plaintext disclosures do not appear.
     function isHpkeEnvelope(d) {
       return d && typeof d === 'object' && Array.isArray(d.recipients) && typeof d.ct === 'string';
     }
@@ -1870,10 +1870,16 @@
     async function clearForensicKey() {
       try {
         const res = await fetch('/api/forensic-key', { method: 'DELETE' });
-        applyForensicStatus(await res.json().catch(() => ({ available: forensicState.available })));
+        if (res.ok) {
+          applyForensicStatus(await res.json().catch(() => ({ available: forensicState.available })));
+        } else {
+          // The clear was rejected (e.g. 403): never assume the key is gone —
+          // re-sync from the authoritative status so the UI matches the server.
+          await loadForensicStatus();
+        }
       } catch (err) {
         console.warn('forensic clear:', err);
-        applyForensicStatus({ available: forensicState.available });
+        await loadForensicStatus();
       }
       renderForensicModalBody();
       refreshOpenReceiptDisclosure();
