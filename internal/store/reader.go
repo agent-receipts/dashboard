@@ -60,8 +60,8 @@ const disclosurePreviewMaxLen = 200
 
 // ChainReceipt pairs a parsed receipt with the verbatim JSON bytes stored in
 // the receipt_json column. Chain verification recomputes the canonical hash
-// from Raw via receipt.HashRawReceipt — the same hash form the collector and
-// an auditor use — rather than round-tripping through the Go struct. The
+// from Raw via receipt.HashRawReceipt — the same hash form that the collector
+// and an auditor use — rather than round-tripping through the Go struct. The
 // struct path (receipt.HashReceipt) silently drops any forward-compat fields a
 // newer SDK wrote, yielding a hash that disagrees with the stored one and a
 // false "broken chain" report (issue #719).

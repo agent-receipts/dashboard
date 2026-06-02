@@ -36,8 +36,8 @@ type ChainLinkResult struct {
 // When publicKeyPEM is empty, signature checks are skipped (SignatureValid is nil).
 //
 // Hash linkage is recomputed from each receipt's verbatim wire bytes
-// (receipt.HashRawReceipt), which is the canonical hash form the collector
-// stored and an auditor would reproduce. Hashing the re-marshalled Go struct
+// (receipt.HashRawReceipt), which is the canonical hash form that the
+// collector stored and an auditor would reproduce. Hashing the re-marshalled Go struct
 // instead (receipt.HashReceipt) drops any forward-compat fields a newer SDK
 // emitted, making a valid chain look broken — issue #719.
 func VerifyChainLinks(receipts []store.ChainReceipt, publicKeyPEM string) ChainLinkResult {
