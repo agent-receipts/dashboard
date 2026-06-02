@@ -202,6 +202,10 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
+	// A raw-file upload puts the private key bytes in body; zero it once we're
+	// done so the only retained copy is the one held (and later cleared) by the
+	// key store, keeping the key's in-memory lifetime minimal.
+	defer zero(body)
 	if len(body) > maxForensicKeyBody {
 		writeError(w, http.StatusRequestEntityTooLarge, "forensic key payload is too large")
 		return

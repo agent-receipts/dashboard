@@ -1752,6 +1752,11 @@
     async function loadForensicStatus() {
       try {
         applyForensicStatus(await fetchJSON('/api/forensic-key'));
+        // The server may already hold a key from a prior session (the key lives
+        // in server memory, not the browser). If a receipt was opened before
+        // this resolved, re-hydrate it so a matching receipt decrypts rather
+        // than staying stuck in the locked state.
+        refreshOpenReceiptDisclosure();
       } catch (err) {
         console.warn('forensic status:', err);
         renderForensicChip();
@@ -1775,11 +1780,15 @@
       }
     }
 
-    // Abbreviate a sha256:<hex> fingerprint for compact display.
+    // Abbreviate a recipient identifier for compact display. A sha256:<hex>
+    // fingerprint keeps its prefix and shows the first 10 hex chars; any other
+    // form (e.g. a did:key URL) is truncated as-is so it isn't mislabelled.
     function shortFingerprint(fp) {
       if (!fp) return '';
-      const hex = fp.startsWith('sha256:') ? fp.slice(7) : fp;
-      return 'sha256:' + hex.slice(0, 10) + '…';
+      if (fp.startsWith('sha256:')) {
+        return 'sha256:' + fp.slice(7, 17) + '…';
+      }
+      return fp.length > 24 ? fp.slice(0, 24) + '…' : fp;
     }
 
     function openForensic() {
