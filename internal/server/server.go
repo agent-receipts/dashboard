@@ -34,6 +34,11 @@ type Config struct {
 	DBPath string
 	// Version is the dashboard build version, shown in the header footer.
 	Version string
+	// Host is the address the server is bound to. It gates forensic key
+	// operations: the loaded private key can decrypt every matching
+	// disclosure, so a key is only accepted when the bind is loopback (see
+	// forensicAvailable). The empty value is treated as loopback.
+	Host string
 }
 
 //go:embed static
@@ -41,8 +46,9 @@ var staticFS embed.FS
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	reader *store.Reader
-	cfg    Config
+	reader   *store.Reader
+	cfg      Config
+	forensic *forensicKeyStore
 }
 
 // New creates a new Server backed by the given reader. A zero PollInterval
@@ -51,7 +57,7 @@ func New(reader *store.Reader, cfg Config) *Server {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}
-	return &Server{reader: reader, cfg: cfg}
+	return &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}}
 }
 
 // Handler returns the HTTP handler with all routes registered.
@@ -66,6 +72,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
 	mux.HandleFunc("GET /api/chains/{chainID}/verify", s.handleChainVerify)
+
+	// Forensic disclosure: load/clear the operator's X25519 private key (held
+	// in memory only) and decrypt a receipt's parameters_disclosure envelope
+	// inline. The decrypt route lives under its own prefix because the receipt
+	// detail route uses a trailing {id...} wildcard, which cannot carry a
+	// further path segment.
+	mux.HandleFunc("GET /api/forensic-key", s.handleForensicKeyGet)
+	mux.HandleFunc("POST /api/forensic-key", s.handleForensicKeyLoad)
+	mux.HandleFunc("DELETE /api/forensic-key", s.handleForensicKeyClear)
+	mux.HandleFunc("GET /api/disclosure/{id...}", s.handleReceiptDisclosure)
 
 	// Static files + index.
 	mux.HandleFunc("GET /", s.handleIndex)

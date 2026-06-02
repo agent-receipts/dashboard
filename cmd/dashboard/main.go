@@ -162,6 +162,7 @@ func main() {
 		PollInterval: *pollInterval,
 		DBPath:       displayDBPath,
 		Version:      resolveVersion(),
+		Host:         *host,
 	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)
