@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Forensic disclosure decryption** — operators can now load their X25519 forensic private key into the dashboard and view decrypted `parameters_disclosure` envelopes inline in the receipt detail view. A header "Forensic key" control accepts the raw 32-byte key (as written by `agent-receipts-daemon --init-forensic-key`), or a hex / base64 / PKCS#8 PEM paste, and shows the loaded key's `sha256:` fingerprint for verification against the daemon's startup log. Receipts encrypted to that key decrypt automatically; non-matching receipts show a clear "key mismatch" state, and receipts decrypt-fail or lock gracefully without ever blocking the receipt view. This closes the detail-view decryption follow-up deferred in 0.3.0.
+  - The private key is held in the dashboard's process memory only — never persisted, never logged — and is zeroed on clear. Decryption reuses the audited SDK `receipt.DecryptDisclosure` (HPKE base mode, `hpke-x25519-hkdf-sha256-aes-256-gcm`).
+  - Forensic key operations are refused unless the dashboard is bound to a loopback address (the default `127.0.0.1`), so a loaded key is never reachable from the network. As a second layer, the forensic endpoints also reject requests whose `Host` header is not loopback, blocking DNS-rebinding from a page in the operator's browser. New endpoints: `GET/POST/DELETE /api/forensic-key` and `GET /api/disclosure/{id}`.
+
+### Changed
+
+- **Bump `github.com/agent-receipts/ar/sdk/go` to `v0.15.0`** — picks up the forensic-disclosure helpers (`ForensicPublicFromPrivate`, `ForensicKeyFingerprint`) and HPKE encrypt/decrypt wiring from [agent-receipts/ar#722](https://github.com/agent-receipts/ar/pull/722).
+
 ### Fixed
 
 - **Chain verification false negative** ([agent-receipts/ar#719](https://github.com/agent-receipts/ar/issues/719)) — `/api/chains/{id}/verify` reported valid chains as broken. The recomputed hash linkage round-tripped each receipt through the Go struct (`receipt.HashReceipt`), which drops any forward-compat fields a newer SDK wrote, so it disagreed with the canonical hash the collector stored. Verification now recomputes from the verbatim `receipt_json` wire bytes via `receipt.HashRawReceipt`, matching `agent-receipts verify` and any auditor reading the raw bytes. `store.GetChain` now returns the raw bytes alongside the parsed receipt.

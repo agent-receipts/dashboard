@@ -450,6 +450,49 @@
       border-left: 3px solid var(--risk-medium); border-radius: var(--radius);
       padding: 8px 12px; font-size: 0.8rem; color: var(--text);
     }
+
+    /* ---------- Forensic key (header chip + panel) ---------- */
+    .forensic-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 3px 8px; cursor: pointer;
+      color: var(--muted); font-size: 0.75rem; font-family: var(--font-mono);
+    }
+    .forensic-chip:hover { border-color: var(--border-strong); color: var(--text); }
+    .forensic-chip:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .forensic-chip.loaded { color: var(--status-success); border-color: rgba(63,185,80,0.4); }
+    .forensic-field {
+      width: 100%; background: var(--surface-sunken); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 6px 8px; resize: vertical;
+      font-family: var(--font-mono); font-size: 0.75rem; color: var(--text);
+    }
+    .forensic-btn {
+      font-size: 0.75rem; padding: 5px 12px; border: 1px solid var(--border);
+      border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer;
+    }
+    .forensic-btn:hover { border-color: var(--border-strong); }
+    .forensic-btn.danger { color: var(--status-failure); border-color: rgba(248,81,73,0.4); }
+
+    /* ---------- Parameters disclosure: decryption panel ---------- */
+    .decrypt-panel {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 10px 12px; font-size: 0.8rem;
+    }
+    .decrypt-panel .decrypt-head {
+      display: flex; align-items: center; gap: 8px; font-weight: 500; margin-bottom: 6px;
+    }
+    .decrypt-panel.locked    { background: var(--surface-sunken); border-color: var(--border); }
+    .decrypt-panel.locked    .decrypt-head { color: var(--muted); }
+    .decrypt-panel.mismatch,
+    .decrypt-panel.failed    { background: rgba(248,81,73,0.06); border-color: rgba(248,81,73,0.35); }
+    .decrypt-panel.mismatch  .decrypt-head,
+    .decrypt-panel.failed    .decrypt-head { color: var(--status-failure); }
+    .decrypt-panel.decrypted {
+      background: rgba(63,185,80,0.06); border-color: rgba(63,185,80,0.35);
+      border-left: 3px solid var(--status-success);
+    }
+    .decrypt-panel.decrypted .decrypt-head { color: var(--status-success); }
+    .decrypt-meta { color: var(--muted); font-size: 0.7rem; font-family: var(--font-mono); word-break: break-all; }
     .mismatch-banner .label { color: var(--risk-medium); font-weight: 600; margin-right: 6px; }
     .outcome-error-banner {
       background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.35);
@@ -521,6 +564,9 @@
       </div>
 
       <div class="header-actions">
+        <button class="forensic-chip" id="forensic-chip" type="button" onclick="openForensic()" aria-haspopup="dialog" title="Forensic decryption key">
+          <span id="forensic-chip-label">🔒 Forensic key</span>
+        </button>
         <button class="icon-btn" id="btn-shortcuts" type="button" aria-label="Keyboard shortcuts (?)" title="Keyboard shortcuts (?)">?</button>
         <span class="ctx-item" id="ctx-version">
           <span class="ctx-label">v</span>
@@ -675,6 +721,17 @@
           <div class="shortcut-row"><span class="shortcut-desc">Go to Chains</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">c</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Clear all filters</span><span class="shortcut-keys"><span class="kbd">c</span></span></div>
         </div>
+      </div>
+    </div>
+
+    <!-- Forensic decryption key modal -->
+    <div id="forensic-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="forensic-modal-title" aria-modal="true" style="max-width: 520px;">
+        <div class="modal-head">
+          <h2 class="modal-title" id="forensic-modal-title">Forensic decryption key</h2>
+          <button class="icon-btn" type="button" onclick="closeForensic()" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body" id="forensic-modal-body"></div>
       </div>
     </div>
   </main>
@@ -1225,6 +1282,7 @@
         document.getElementById('modal-title').textContent = receipt.id;
         document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt);
         openModal('receipt-modal');
+        hydrateDisclosure(receipt);
       } catch (err) {
         showError('Failed to load receipt: ' + err.message);
       }
@@ -1286,7 +1344,7 @@
 
           ${authorizationSectionHTML(subj.authorization)}
 
-          ${parametersDisclosureHTML(subj.action.parameters_disclosure)}
+          ${disclosureSectionHTML(subj.action.parameters_disclosure)}
 
           ${outcomeDetailsHTML(subj.outcome)}
 
@@ -1482,32 +1540,6 @@
     }
 
     // ---------- Parameters disclosure (modal body) ----------
-    const DISCLOSURE_PRIMARY_KEYS = ['input', 'output'];
-    function parametersDisclosureHTML(disclosure) {
-      if (!disclosure || typeof disclosure !== 'object') return '';
-      const keys = Object.keys(disclosure);
-      if (keys.length === 0) return '';
-
-      const primary = DISCLOSURE_PRIMARY_KEYS
-        .filter(k => disclosure[k] != null && String(disclosure[k]) !== '')
-        .map(k => disclosureBlockHTML(k.charAt(0).toUpperCase() + k.slice(1), String(disclosure[k])));
-      const others = keys
-        .filter(k => !DISCLOSURE_PRIMARY_KEYS.includes(k))
-        .map(k => disclosureBlockHTML(k, String(disclosure[k])));
-
-      if (primary.length === 0 && others.length === 0) return '';
-
-      return `
-        <div>
-          <div class="muted text-xs mb-1">Parameters disclosure</div>
-          <div class="space-y-3">
-            ${primary.join('')}
-            ${others.join('')}
-          </div>
-        </div>
-      `;
-    }
-
     // Approximate threshold above which a disclosure block collapses behind
     // a toggle. JS uses character count, CSS uses height, so they won't
     // perfectly align across all fonts and screen sizes.
@@ -1528,6 +1560,140 @@
       const expanded = block.classList.toggle('expanded');
       el.textContent = expanded ? 'Show less' : 'Show more';
       el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+
+    // ---------- Parameters disclosure: HPKE decryption ----------
+    // An HPKE envelope (parameters_disclosure with a recipients array and a ct
+    // field) is encrypted to a forensic key. We render a placeholder and decrypt
+    // it server-side via /api/disclosure/{id} using the loaded private key. This
+    // is the only disclosure shape the detail view renders; see
+    // disclosureSectionHTML for why legacy plaintext disclosures do not appear.
+    function isHpkeEnvelope(d) {
+      return d && typeof d === 'object' && Array.isArray(d.recipients) && typeof d.ct === 'string';
+    }
+
+    // Only HPKE envelopes are rendered here. The pre-v0.3.0 plaintext
+    // {input, output} disclosure no longer survives the round-trip through the
+    // SDK's typed *DisclosureEnvelope (which carries only v/alg/recipients/ct),
+    // so there is nothing legacy to render in the detail view.
+    function disclosureSectionHTML(d) {
+      if (!isHpkeEnvelope(d)) return '';
+      // The panel body is filled by hydrateDisclosure once the modal opens.
+      return `
+        <div>
+          <div class="muted text-xs mb-1">Parameters disclosure</div>
+          <div id="disclosure-panel">
+            <div class="decrypt-panel locked">
+              <div class="decrypt-head">🔒 Encrypted parameters</div>
+              <div class="muted text-xs">Checking…</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function envelopeKids(d) {
+      return (d.recipients || []).map(r => r && r.kid).filter(Boolean);
+    }
+
+    async function hydrateDisclosure(receipt) {
+      const subj = receipt && receipt.credentialSubject;
+      const d = subj && subj.action && subj.action.parameters_disclosure;
+      if (!isHpkeEnvelope(d)) return;
+      if (!document.getElementById('disclosure-panel')) return;
+      // No key loaded: the locked state is fully derivable from the envelope the
+      // client already holds, so render it without a server round-trip. Only
+      // decryption needs the server (it alone holds the private key), which also
+      // keeps recovered plaintext confined to the dedicated /api/disclosure route.
+      if (!forensicState.loaded) {
+        setDisclosurePanel(receipt.id, renderDisclosurePanel({ state: 'locked', alg: d.alg, kids: envelopeKids(d) }));
+        return;
+      }
+      try {
+        const resp = await fetchJSON('/api/disclosure/' + encodeURIComponent(receipt.id));
+        setDisclosurePanel(receipt.id, renderDisclosurePanel(resp));
+      } catch (err) {
+        setDisclosurePanel(receipt.id, renderDisclosurePanelError(err.message));
+      }
+    }
+
+    // Write into the open receipt's disclosure panel, but only if that receipt
+    // is still the one on screen — the operator may have switched receipts while
+    // the request was in flight (the panel id is shared across detail opens).
+    function setDisclosurePanel(receiptId, html) {
+      if (!currentReceipt || currentReceipt.id !== receiptId) return;
+      const panel = document.getElementById('disclosure-panel');
+      if (panel) panel.innerHTML = html;
+    }
+
+    function renderDisclosurePanel(resp) {
+      const state = resp && resp.state;
+      const kids = (resp && resp.kids) || [];
+      const kidLine = kids.length
+        ? `<div class="decrypt-meta" title="${escapeAttr(kids.join(', '))}">recipient: ${escapeHtml(kids.map(shortFingerprint).join(', '))}</div>`
+        : '';
+
+      if (state === 'decrypted') {
+        const params = resp.parameters || {};
+        const keys = Object.keys(params);
+        const blocks = keys.length
+          ? keys.map(k => disclosureBlockHTML(k, formatDisclosureValue(params[k]))).join('')
+          : '<div class="muted text-xs">(empty parameters object)</div>';
+        return `
+          <div class="decrypt-panel decrypted">
+            <div class="decrypt-head">🔓 Decrypted parameters</div>
+            <div class="space-y-3">${blocks}</div>
+            ${kidLine}
+          </div>`;
+      }
+
+      if (state === 'mismatch') {
+        return `
+          <div class="decrypt-panel mismatch">
+            <div class="decrypt-head">🔑 Decryption key mismatch</div>
+            <div class="text-xs">The loaded key does not match this receipt's recipient.</div>
+            <div class="decrypt-meta">loaded: ${escapeHtml(shortFingerprint(resp.fingerprint))}</div>
+            ${kidLine}
+          </div>`;
+      }
+
+      if (state === 'failed') {
+        return `
+          <div class="decrypt-panel failed">
+            <div class="decrypt-head">⚠ Decryption failed</div>
+            <div class="text-xs">The envelope could not be decrypted with the loaded key.</div>
+            ${kidLine}
+          </div>`;
+      }
+
+      // 'none' should not occur here (the panel only renders for HPKE
+      // envelopes), but guard against an orphaned header if it ever does.
+      if (state === 'none') {
+        return '<div class="muted text-xs">No parameters disclosure recorded.</div>';
+      }
+
+      // locked (default): no key loaded.
+      return `
+        <div class="decrypt-panel locked">
+          <div class="decrypt-head">🔒 Encrypted parameters</div>
+          <div class="text-xs muted">Decryption key not loaded.
+            <button class="toggle" type="button" onclick="openForensic()">Load forensic key</button>
+          </div>
+          ${kidLine}
+        </div>`;
+    }
+
+    function renderDisclosurePanelError(msg) {
+      return `
+        <div class="decrypt-panel failed">
+          <div class="decrypt-head">⚠ Disclosure unavailable</div>
+          <div class="text-xs">${escapeHtml(msg || 'Could not check disclosure state.')}</div>
+        </div>`;
+    }
+
+    function formatDisclosureValue(v) {
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'string') return v;
+      try { return JSON.stringify(v, null, 2); } catch (_) { return String(v); }
     }
 
     // ---------- Modal helpers ----------
@@ -1554,12 +1720,178 @@
     function closeShortcuts()  { closeModalById('shortcuts-modal'); }
 
     function isModalOpen() {
-      return ['receipt-modal','chain-modal','shortcuts-modal'].some(id => !document.getElementById(id).hidden);
+      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].some(id => !document.getElementById(id).hidden);
     }
     function closeAnyOpenModal() {
+      if (!document.getElementById('forensic-modal').hidden) closeForensic();
       if (!document.getElementById('shortcuts-modal').hidden) closeShortcuts();
       if (!document.getElementById('chain-modal').hidden) closeChainModal();
       if (!document.getElementById('receipt-modal').hidden) closeModal();
+    }
+
+    // ---------- Forensic decryption key ----------
+    // The operator's X25519 private key is held in the dashboard process memory
+    // only (never persisted). This client tracks the loaded status and drives
+    // the load/clear UI; key parsing, fingerprinting, and HPKE decryption all
+    // happen server-side via /api/forensic-key and /api/disclosure/{id}.
+    // available defaults false until the server confirms a loopback bind, so the
+    // load form (and any key submission) is never offered before status resolves.
+    const forensicState = { available: false, loaded: false, fingerprint: '' };
+
+    // applyForensicStatus is the single writer of forensicState: every
+    // load/clear/status response is the authoritative forensicKeyStatus JSON,
+    // so funnelling all three through here keeps the client mirror from drifting.
+    function applyForensicStatus(st) {
+      st = st || {};
+      forensicState.available = !!st.available;
+      forensicState.loaded = !!st.loaded;
+      forensicState.fingerprint = st.fingerprint || '';
+      renderForensicChip();
+    }
+
+    async function loadForensicStatus() {
+      try {
+        applyForensicStatus(await fetchJSON('/api/forensic-key'));
+        // The server may already hold a key from a prior session (the key lives
+        // in server memory, not the browser). If a receipt was opened before
+        // this resolved, re-hydrate it so a matching receipt decrypts rather
+        // than staying stuck in the locked state.
+        refreshOpenReceiptDisclosure();
+      } catch (err) {
+        console.warn('forensic status:', err);
+        renderForensicChip();
+      }
+    }
+
+    function renderForensicChip() {
+      const chip = document.getElementById('forensic-chip');
+      const label = document.getElementById('forensic-chip-label');
+      if (!chip || !label) return;
+      if (forensicState.loaded) {
+        chip.classList.add('loaded');
+        label.textContent = '🔓 ' + shortFingerprint(forensicState.fingerprint);
+        chip.title = 'Forensic key loaded: ' + forensicState.fingerprint;
+      } else {
+        chip.classList.remove('loaded');
+        label.textContent = '🔒 Forensic key';
+        chip.title = forensicState.available
+          ? 'Load a forensic decryption key'
+          : 'Forensic decryption unavailable (not bound to loopback)';
+      }
+    }
+
+    // Abbreviate a recipient identifier for compact display. A sha256:<hex>
+    // fingerprint keeps its prefix and shows the first 10 hex chars; any other
+    // form (e.g. a did:key URL) is truncated as-is so it isn't mislabelled.
+    function shortFingerprint(fp) {
+      if (!fp) return '';
+      if (fp.startsWith('sha256:')) {
+        return 'sha256:' + fp.slice(7, 17) + '…';
+      }
+      return fp.length > 24 ? fp.slice(0, 24) + '…' : fp;
+    }
+
+    function openForensic() {
+      renderForensicModalBody();
+      openModal('forensic-modal');
+    }
+    function closeForensic() { closeModalById('forensic-modal'); }
+
+    function renderForensicModalBody() {
+      const body = document.getElementById('forensic-modal-body');
+      if (!body) return;
+
+      if (!forensicState.available) {
+        body.innerHTML = `
+          <p class="text-sm muted">Forensic decryption is disabled because the dashboard is not bound to a loopback address. Restart with <code>-host 127.0.0.1</code> to enable it.</p>`;
+        return;
+      }
+
+      if (forensicState.loaded) {
+        body.innerHTML = `
+          <p class="text-sm mb-3">A forensic key is loaded for this session. Matching receipts decrypt automatically in the detail view.</p>
+          <div class="muted text-xs mb-1">Loaded key fingerprint</div>
+          <div class="decrypt-meta mb-3">${escapeHtml(forensicState.fingerprint)}</div>
+          <p class="muted text-xs mb-3">Verify this matches the fingerprint the daemon logged at startup. The key is held in memory only and is never written to disk.</p>
+          <button class="forensic-btn danger" type="button" onclick="clearForensicKey()">Clear key</button>`;
+        return;
+      }
+
+      body.innerHTML = `
+        <p class="text-sm mb-3">Load your X25519 forensic private key to decrypt <code>parameters_disclosure</code> envelopes. The key stays in this dashboard's memory for the session only — it is never persisted or sent elsewhere.</p>
+        <div class="space-y-3">
+          <div>
+            <label class="muted text-xs" for="forensic-file">Key file (raw 32-byte key from <code>--init-forensic-key</code>)</label>
+            <input class="forensic-field" type="file" id="forensic-file">
+          </div>
+          <div>
+            <label class="muted text-xs" for="forensic-text">…or paste hex / base64 / PKCS#8 PEM</label>
+            <textarea class="forensic-field" id="forensic-text" rows="3" placeholder="hex, base64, or -----BEGIN PRIVATE KEY-----"></textarea>
+          </div>
+          <div id="forensic-error" class="text-xs" style="color:var(--status-failure);" hidden></div>
+          <button class="forensic-btn" type="button" onclick="submitForensicKey()">Load key</button>
+        </div>`;
+    }
+
+    function forensicError(msg) {
+      const el = document.getElementById('forensic-error');
+      if (!el) return;
+      if (!msg) { el.hidden = true; el.textContent = ''; return; }
+      el.hidden = false; el.textContent = msg;
+    }
+
+    async function submitForensicKey() {
+      const fileInput = document.getElementById('forensic-file');
+      const textInput = document.getElementById('forensic-text');
+      forensicError('');
+
+      let body;
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if (file) {
+        body = await file.arrayBuffer();
+      } else {
+        const text = ((textInput && textInput.value) || '').trim();
+        if (!text) { forensicError('Choose a key file or paste a key.'); return; }
+        body = text;
+      }
+
+      try {
+        const res = await fetch('/api/forensic-key', { method: 'POST', body });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { forensicError(data.error || ('HTTP ' + res.status)); return; }
+        applyForensicStatus(data);
+        renderForensicModalBody();
+        refreshOpenReceiptDisclosure();
+      } catch (err) {
+        forensicError(err.message || String(err));
+      }
+    }
+
+    async function clearForensicKey() {
+      try {
+        const res = await fetch('/api/forensic-key', { method: 'DELETE' });
+        if (res.ok) {
+          applyForensicStatus(await res.json().catch(() => ({ available: forensicState.available })));
+        } else {
+          // The clear was rejected (e.g. 403): never assume the key is gone —
+          // re-sync from the authoritative status so the UI matches the server.
+          await loadForensicStatus();
+        }
+      } catch (err) {
+        console.warn('forensic clear:', err);
+        await loadForensicStatus();
+      }
+      renderForensicModalBody();
+      refreshOpenReceiptDisclosure();
+    }
+
+    // Re-run disclosure hydration for the open receipt modal after the key
+    // changes, so a just-loaded key decrypts inline (or a cleared key re-locks)
+    // without the operator reopening the receipt.
+    function refreshOpenReceiptDisclosure() {
+      if (!document.getElementById('receipt-modal').hidden && currentReceipt) {
+        hydrateDisclosure(currentReceipt);
+      }
     }
 
     // ---------- Chain detail ----------
@@ -1970,7 +2302,7 @@
     document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
 
     // Close modals on backdrop click.
-    ['receipt-modal','chain-modal','shortcuts-modal'].forEach(id => {
+    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].forEach(id => {
       document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModalById(id);
       });
@@ -1978,6 +2310,7 @@
 
     // ---------- Boot ----------
     loadPollConfig().then(loadOverview);
+    loadForensicStatus();
   </script>
 </body>
 </html>
