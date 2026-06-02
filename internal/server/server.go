@@ -37,7 +37,8 @@ type Config struct {
 	// Host is the address the server is bound to. It gates forensic key
 	// operations: the loaded private key can decrypt every matching
 	// disclosure, so a key is only accepted when the bind is loopback (see
-	// forensicAvailable). The empty value is treated as loopback.
+	// forensicAvailable). An empty or all-interfaces bind (""/"0.0.0.0"/"::")
+	// is not loopback and disables forensic operations.
 	Host string
 }
 

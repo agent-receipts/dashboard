@@ -1624,14 +1624,19 @@
       if (!document.getElementById('disclosure-panel')) return;
       try {
         const resp = await fetchJSON('/api/disclosure/' + encodeURIComponent(receipt.id));
-        // Bail if the operator switched to a different receipt while in flight.
-        if (!currentReceipt || currentReceipt.id !== receipt.id) return;
-        const panel = document.getElementById('disclosure-panel');
-        if (panel) panel.innerHTML = renderDisclosurePanel(resp);
+        setDisclosurePanel(receipt.id, renderDisclosurePanel(resp));
       } catch (err) {
-        const panel = document.getElementById('disclosure-panel');
-        if (panel) panel.innerHTML = renderDisclosurePanelError(err.message);
+        setDisclosurePanel(receipt.id, renderDisclosurePanelError(err.message));
       }
+    }
+
+    // Write into the open receipt's disclosure panel, but only if that receipt
+    // is still the one on screen — the operator may have switched receipts while
+    // the request was in flight (the panel id is shared across detail opens).
+    function setDisclosurePanel(receiptId, html) {
+      if (!currentReceipt || currentReceipt.id !== receiptId) return;
+      const panel = document.getElementById('disclosure-panel');
+      if (panel) panel.innerHTML = html;
     }
 
     function renderDisclosurePanel(resp) {
@@ -1674,7 +1679,11 @@
           </div>`;
       }
 
-      if (state === 'none') return '';
+      // 'none' should not occur here (the panel only renders for HPKE
+      // envelopes), but guard against an orphaned header if it ever does.
+      if (state === 'none') {
+        return '<div class="muted text-xs">No parameters disclosure recorded.</div>';
+      }
 
       // locked (default): no key loaded.
       return `
@@ -1739,18 +1748,28 @@
     // only (never persisted). This client tracks the loaded status and drives
     // the load/clear UI; key parsing, fingerprinting, and HPKE decryption all
     // happen server-side via /api/forensic-key and /api/disclosure/{id}.
-    const forensicState = { available: true, loaded: false, fingerprint: '' };
+    // available defaults false until the server confirms a loopback bind, so the
+    // load form (and any key submission) is never offered before status resolves.
+    const forensicState = { available: false, loaded: false, fingerprint: '' };
+
+    // applyForensicStatus is the single writer of forensicState: every
+    // load/clear/status response is the authoritative forensicKeyStatus JSON,
+    // so funnelling all three through here keeps the client mirror from drifting.
+    function applyForensicStatus(st) {
+      st = st || {};
+      forensicState.available = !!st.available;
+      forensicState.loaded = !!st.loaded;
+      forensicState.fingerprint = st.fingerprint || '';
+      renderForensicChip();
+    }
 
     async function loadForensicStatus() {
       try {
-        const st = await fetchJSON('/api/forensic-key');
-        forensicState.available = !!st.available;
-        forensicState.loaded = !!st.loaded;
-        forensicState.fingerprint = st.fingerprint || '';
+        applyForensicStatus(await fetchJSON('/api/forensic-key'));
       } catch (err) {
         console.warn('forensic status:', err);
+        renderForensicChip();
       }
-      renderForensicChip();
     }
 
     function renderForensicChip() {
@@ -1845,10 +1864,7 @@
         const res = await fetch('/api/forensic-key', { method: 'POST', body });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { forensicError(data.error || ('HTTP ' + res.status)); return; }
-        forensicState.loaded = !!data.loaded;
-        forensicState.fingerprint = data.fingerprint || '';
-        forensicState.available = true;
-        renderForensicChip();
+        applyForensicStatus(data);
         renderForensicModalBody();
         refreshOpenReceiptDisclosure();
       } catch (err) {
@@ -1858,13 +1874,12 @@
 
     async function clearForensicKey() {
       try {
-        await fetch('/api/forensic-key', { method: 'DELETE' });
+        const res = await fetch('/api/forensic-key', { method: 'DELETE' });
+        applyForensicStatus(await res.json().catch(() => ({ available: forensicState.available })));
       } catch (err) {
         console.warn('forensic clear:', err);
+        applyForensicStatus({ available: forensicState.available });
       }
-      forensicState.loaded = false;
-      forensicState.fingerprint = '';
-      renderForensicChip();
       renderForensicModalBody();
       refreshOpenReceiptDisclosure();
     }

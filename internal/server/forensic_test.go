@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,15 @@ import (
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
 	"github.com/agent-receipts/dashboard/internal/store"
 )
+
+// localReq builds a request whose Host header names loopback, matching what a
+// browser on 127.0.0.1 sends. httptest.NewRequest defaults Host to
+// "example.com", which the forensic endpoints reject as a DNS-rebinding guard.
+func localReq(method, target string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, target, body)
+	r.Host = "127.0.0.1:8080"
+	return r
+}
 
 // forensicKeyPair returns a fresh X25519 forensic key pair and its canonical
 // sha256 fingerprint (the value the daemon writes as a recipient kid).
@@ -100,6 +110,8 @@ func TestParseForensicPrivateKey(t *testing.T) {
 		in   []byte
 	}{
 		{"raw", priv},
+		{"raw with trailing newline", append(append([]byte(nil), priv...), '\n')},
+		{"raw with trailing crlf", append(append([]byte(nil), priv...), '\r', '\n')},
 		{"hex", []byte(hex.EncodeToString(priv))},
 		{"hex with whitespace", []byte("  " + hex.EncodeToString(priv) + "\n")},
 		{"base64 std", []byte(base64.StdEncoding.EncodeToString(priv))},
@@ -137,12 +149,12 @@ func TestParseForensicPrivateKey(t *testing.T) {
 
 func TestForensicKeyLoadStatusClear(t *testing.T) {
 	priv, _, fp := forensicKeyPair(t)
-	srv := seedReceipts(t, Config{})
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
 	h := srv.Handler()
 
 	// Load.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("load: got %d, want 200 (body=%s)", w.Code, w.Body)
 	}
@@ -156,7 +168,7 @@ func TestForensicKeyLoadStatusClear(t *testing.T) {
 
 	// Status reflects the loaded key.
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/forensic-key", nil))
+	h.ServeHTTP(w, localReq("GET", "/api/forensic-key", nil))
 	st = forensicKeyStatus{}
 	json.Unmarshal(w.Body.Bytes(), &st)
 	if !st.Loaded || st.Fingerprint != fp || !st.Available {
@@ -165,12 +177,12 @@ func TestForensicKeyLoadStatusClear(t *testing.T) {
 
 	// Clear.
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/forensic-key", nil))
+	h.ServeHTTP(w, localReq("DELETE", "/api/forensic-key", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("clear: got %d", w.Code)
 	}
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/forensic-key", nil))
+	h.ServeHTTP(w, localReq("GET", "/api/forensic-key", nil))
 	st = forensicKeyStatus{}
 	json.Unmarshal(w.Body.Bytes(), &st)
 	if st.Loaded || st.Fingerprint != "" {
@@ -179,9 +191,9 @@ func TestForensicKeyLoadStatusClear(t *testing.T) {
 }
 
 func TestForensicKeyLoadRejectsBadKey(t *testing.T) {
-	srv := seedReceipts(t, Config{})
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader([]byte("nonsense"))))
+	srv.Handler().ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader([]byte("nonsense"))))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", w.Code)
 	}
@@ -190,18 +202,18 @@ func TestForensicKeyLoadRejectsBadKey(t *testing.T) {
 func TestDisclosureDecryptsWithMatchingKey(t *testing.T) {
 	priv, pub, fp := forensicKeyPair(t)
 	params := map[string]any{"command": "rm -rf /tmp/scratch", "cwd": "/home/op"}
-	srv := seedReceipts(t, Config{}, encReceipt(t, "urn:receipt:enc1", pub, fp, params))
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, encReceipt(t, "urn:receipt:enc1", pub, fp, params))
 	h := srv.Handler()
 
 	// Load the key, then decrypt.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("load: %d", w.Code)
 	}
 
 	w = httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/disclosure/"+"urn:receipt:enc1", nil)
+	req := localReq("GET", "/api/disclosure/"+"urn:receipt:enc1", nil)
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("disclosure: %d", w.Code)
@@ -220,10 +232,10 @@ func TestDisclosureDecryptsWithMatchingKey(t *testing.T) {
 
 func TestDisclosureLockedWithoutKey(t *testing.T) {
 	_, pub, fp := forensicKeyPair(t)
-	srv := seedReceipts(t, Config{}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))
 
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/disclosure/urn:receipt:enc1", nil))
+	srv.Handler().ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:enc1", nil))
 	resp := decodeDisclosure(t, w.Body.Bytes())
 	if resp.State != "locked" {
 		t.Fatalf("state = %q, want locked", resp.State)
@@ -236,17 +248,17 @@ func TestDisclosureLockedWithoutKey(t *testing.T) {
 func TestDisclosureMismatchWithWrongKey(t *testing.T) {
 	_, pub, fp := forensicKeyPair(t)
 	wrongPriv, _, _ := forensicKeyPair(t)
-	srv := seedReceipts(t, Config{}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))
 	h := srv.Handler()
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader(wrongPriv)))
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(wrongPriv)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("load: %d", w.Code)
 	}
 
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/disclosure/urn:receipt:enc1", nil))
+	h.ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:enc1", nil))
 	resp := decodeDisclosure(t, w.Body.Bytes())
 	if resp.State != "mismatch" {
 		t.Fatalf("state = %q, want mismatch", resp.State)
@@ -267,17 +279,17 @@ func TestDisclosureFailedWithTamperedCiphertext(t *testing.T) {
 	ctBytes[0] ^= 0xff
 	env.CT = base64.RawURLEncoding.EncodeToString(ctBytes)
 
-	srv := seedReceipts(t, Config{}, r)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, r)
 	h := srv.Handler()
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("load: %d", w.Code)
 	}
 
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/disclosure/urn:receipt:enc1", nil))
+	h.ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:enc1", nil))
 	resp := decodeDisclosure(t, w.Body.Bytes())
 	if resp.State != "failed" {
 		t.Fatalf("state = %q, want failed", resp.State)
@@ -287,10 +299,10 @@ func TestDisclosureFailedWithTamperedCiphertext(t *testing.T) {
 func TestDisclosureNoneForPlainReceipt(t *testing.T) {
 	// A receipt with no parameters_disclosure reports state "none".
 	r := makeReceipt("urn:receipt:plain1", "chain-plain", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-05-01T10:00:00Z", nil)
-	srv := seedReceipts(t, Config{}, r)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, r)
 
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/disclosure/urn:receipt:plain1", nil))
+	srv.Handler().ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:plain1", nil))
 	resp := decodeDisclosure(t, w.Body.Bytes())
 	if resp.State != "none" {
 		t.Fatalf("state = %q, want none", resp.State)
@@ -304,7 +316,7 @@ func TestForensicDisabledOnNonLoopbackBind(t *testing.T) {
 
 	// Status reports unavailable.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/forensic-key", nil))
+	h.ServeHTTP(w, localReq("GET", "/api/forensic-key", nil))
 	var st forensicKeyStatus
 	json.Unmarshal(w.Body.Bytes(), &st)
 	if st.Available {
@@ -313,8 +325,76 @@ func TestForensicDisabledOnNonLoopbackBind(t *testing.T) {
 
 	// Loading a key is refused.
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("load on non-loopback: got %d, want 403", w.Code)
+	}
+}
+
+// An empty bind host binds all interfaces, so it must NOT count as loopback —
+// otherwise the forensic key would be loadable over the network (regression
+// guard for the "" fail-open).
+func TestForensicDisabledOnEmptyHostBind(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	srv := seedReceipts(t, Config{Host: ""})
+
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localReq("GET", "/api/forensic-key", nil))
+	var st forensicKeyStatus
+	json.Unmarshal(w.Body.Bytes(), &st)
+	if st.Available {
+		t.Fatalf("expected Available=false on empty (all-interfaces) bind")
+	}
+
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("load on empty bind: got %d, want 403", w.Code)
+	}
+}
+
+// Requests whose Host header is not loopback are rejected even when the bind is
+// loopback — a DNS-rebinding guard. Covers all forensic endpoints.
+func TestForensicRejectsNonLocalHost(t *testing.T) {
+	priv, pub, fp := forensicKeyPair(t)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))
+	h := srv.Handler()
+
+	// Load a key via a legitimate local request first.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("local load: %d", w.Code)
+	}
+
+	rebind := func(method, target string, body io.Reader) *http.Request {
+		r := httptest.NewRequest(method, target, body)
+		r.Host = "evil.example.com" // attacker domain rebound to 127.0.0.1
+		return r
+	}
+	endpoints := []struct {
+		method, target string
+		body           io.Reader
+	}{
+		{"GET", "/api/forensic-key", nil},
+		{"POST", "/api/forensic-key", bytes.NewReader(priv)},
+		{"DELETE", "/api/forensic-key", nil},
+		{"GET", "/api/disclosure/urn:receipt:enc1", nil},
+	}
+	for _, ep := range endpoints {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, rebind(ep.method, ep.target, ep.body))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%s %s with foreign Host: got %d, want 403", ep.method, ep.target, w.Code)
+		}
+	}
+
+	// The key was not cleared by the rejected DELETE, and a local request still
+	// decrypts — i.e. the foreign-Host requests had no effect on state.
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:enc1", nil))
+	resp := decodeDisclosure(t, w.Body.Bytes())
+	if resp.State != "decrypted" {
+		t.Fatalf("after rejected rebind requests, state = %q, want decrypted", resp.State)
 	}
 }

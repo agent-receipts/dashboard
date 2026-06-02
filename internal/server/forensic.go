@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -116,12 +117,13 @@ type disclosureResponse struct {
 	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
-// isLoopbackHost reports whether the dashboard's bind host keeps the HTTP
-// surface on the local machine. The empty string (the zero Config used in
-// tests) is treated as loopback; an explicit 0.0.0.0 / :: bind is not.
+// isLoopbackHost reports whether host names a loopback address. An empty or
+// unspecified host (e.g. "" or "0.0.0.0"/"::", which bind every interface) is
+// NOT loopback: callers use this to decide whether the HTTP surface is reachable
+// only from the local machine, and an all-interfaces bind is reachable from the
+// network.
 func isLoopbackHost(host string) bool {
-	switch host {
-	case "", "localhost":
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -136,7 +138,52 @@ func (s *Server) forensicAvailable() bool {
 	return isLoopbackHost(s.cfg.Host)
 }
 
+// requestHostIsLocal reports whether the request's Host header names a loopback
+// address. Forensic endpoints reject non-local Host values as a defense against
+// DNS-rebinding, where a remote page resolves its own domain to 127.0.0.1 to
+// reach this loopback-bound server from the operator's browser as if it were
+// same-origin. The bind gate (forensicAvailable) and this per-request Host
+// check are complementary: the former keeps the socket off the network, the
+// latter blocks rebinding when the socket is on loopback.
+func requestHostIsLocal(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	// Strip IPv6 brackets left when there was no port (e.g. "[::1]").
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	return isLoopbackHost(host)
+}
+
+// rejectNonLocalHost writes a 403 and returns true when the request's Host
+// header does not name loopback (the DNS-rebinding guard shared by every
+// forensic endpoint). Returns false when the request may proceed.
+func (s *Server) rejectNonLocalHost(w http.ResponseWriter, r *http.Request) bool {
+	if requestHostIsLocal(r) {
+		return false
+	}
+	writeError(w, http.StatusForbidden, "forensic endpoints are restricted to local (loopback) access")
+	return true
+}
+
+// guardForensic enforces both the Host-header check and the bind gate for
+// endpoints that load or use a forensic key. It returns true when the request
+// may proceed; on rejection it has already written the response.
+func (s *Server) guardForensic(w http.ResponseWriter, r *http.Request) bool {
+	if s.rejectNonLocalHost(w, r) {
+		return false
+	}
+	if !s.forensicAvailable() {
+		writeError(w, http.StatusForbidden, "forensic decryption is only available when the dashboard is bound to a loopback address")
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleForensicKeyGet(w http.ResponseWriter, r *http.Request) {
+	if s.rejectNonLocalHost(w, r) {
+		return
+	}
 	loaded, fp := s.forensic.status()
 	writeJSON(w, http.StatusOK, forensicKeyStatus{
 		Loaded:      loaded,
@@ -146,8 +193,7 @@ func (s *Server) handleForensicKeyGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
-	if !s.forensicAvailable() {
-		writeError(w, http.StatusForbidden, "forensic decryption is only available when the dashboard is bound to a loopback address")
+	if !s.guardForensic(w, r) {
 		return
 	}
 
@@ -182,6 +228,9 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleForensicKeyClear(w http.ResponseWriter, r *http.Request) {
+	if s.rejectNonLocalHost(w, r) {
+		return
+	}
 	s.forensic.clear()
 	writeJSON(w, http.StatusOK, forensicKeyStatus{Loaded: false, Available: s.forensicAvailable()})
 }
@@ -191,6 +240,10 @@ func (s *Server) handleForensicKeyClear(w http.ResponseWriter, r *http.Request) 
 // the receipt view: every outcome — including a missing key, a key mismatch, or
 // a decryption failure — is a 200 with a state field the UI renders inline.
 func (s *Server) handleReceiptDisclosure(w http.ResponseWriter, r *http.Request) {
+	if s.rejectNonLocalHost(w, r) {
+		return
+	}
+
 	id := r.PathValue("id")
 	if !strings.HasPrefix(id, "urn:") {
 		id = "urn:" + id
@@ -225,7 +278,7 @@ func (s *Server) handleReceiptDisclosure(w http.ResponseWriter, r *http.Request)
 	}
 	defer zero(priv)
 
-	if !containsString(kids, fp) {
+	if !slices.Contains(kids, fp) {
 		writeJSON(w, http.StatusOK, disclosureResponse{State: "mismatch", Alg: env.Alg, Kids: kids, Fingerprint: fp})
 		return
 	}
@@ -256,24 +309,16 @@ func recipientKIDs(env *receipt.DisclosureEnvelope) []string {
 	return kids
 }
 
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // parseForensicPrivateKey accepts the forensic private key in any of the forms a
 // solo operator is likely to hand it over:
 //
-//   - the raw 32-byte key exactly as `--init-forensic-key` writes it (file upload),
+//   - the raw 32-byte key as `--init-forensic-key` writes it (file upload),
+//     optionally with surrounding whitespace such as an editor-appended newline,
 //   - hex (64 chars),
 //   - base64 (standard or URL alphabet, padded or unpadded),
 //   - a PKCS#8 PEM wrapper around an X25519 key.
 //
-// It returns the raw 32-byte key. The raw-length check comes first so a binary
+// It returns the raw 32-byte key. The exact-32-byte check comes first so a binary
 // upload is never reinterpreted as text.
 func parseForensicPrivateKey(raw []byte) ([]byte, error) {
 	if len(raw) == 32 {
@@ -292,6 +337,14 @@ func parseForensicPrivateKey(raw []byte) ([]byte, error) {
 			return nil, fmt.Errorf("PEM key is not an X25519 private key")
 		}
 		return xkey.Bytes(), nil
+	}
+
+	// A raw key file commonly arrives with a trailing newline, so the exact-32
+	// check above misses it. If trimming leaves exactly 32 bytes, treat it as
+	// raw: no text encoding of a 32-byte X25519 key is 32 characters long
+	// (hex is 64, base64 is 43/44), so this is unambiguous.
+	if len(trimmed) == 32 {
+		return append([]byte(nil), trimmed...), nil
 	}
 
 	s := string(trimmed)
