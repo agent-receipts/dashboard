@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-03
+
 ### Added
 
 - **Forensic disclosure decryption** — operators can now load their X25519 forensic private key into the dashboard and view decrypted `parameters_disclosure` envelopes inline in the receipt detail view. A header "Forensic key" control accepts the raw 32-byte key (as written by `agent-receipts-daemon --init-forensic-key`), or a hex / base64 / PKCS#8 PEM paste, and shows the loaded key's `sha256:` fingerprint for verification against the daemon's startup log. Receipts encrypted to that key decrypt automatically; non-matching receipts show a clear "key mismatch" state, and receipts decrypt-fail or lock gracefully without ever blocking the receipt view. This closes the detail-view decryption follow-up deferred in 0.3.0.
@@ -130,7 +132,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/agent-receipts/dashboard/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/agent-receipts/dashboard/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/agent-receipts/dashboard/compare/v0.2.0...v0.2.1
