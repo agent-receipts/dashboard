@@ -58,6 +58,9 @@ func VerifyChainLinks(receipts []store.ChainReceipt, publicKeyPEM string) ChainL
 		} else {
 			prevHash, err := receipt.HashRawReceipt(receipts[i-1].Raw)
 			if err != nil {
+				// A hashing failure is not a chain break; log it so the
+				// operator can tell an internal error apart from real tampering.
+				log.Printf("chain hash recompute error for receipt %s: %v", receipts[i-1].Receipt.ID, err)
 				hashValid = false
 			} else {
 				hashValid = chain.PreviousReceiptHash != nil && *chain.PreviousReceiptHash == prevHash

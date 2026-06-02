@@ -289,15 +289,18 @@ func (r *Reader) GetChain(chainID string) ([]ChainReceipt, error) {
 
 	var out []ChainReceipt
 	for rows.Next() {
-		var rJSON string
-		if err := rows.Scan(&rJSON); err != nil {
+		// Scan into []byte (not string): database/sql hands *[]byte a fresh
+		// copy owned by the caller, so we reuse the one allocation for both
+		// Unmarshal and the retained Raw bytes instead of copying twice.
+		var rawJSON []byte
+		if err := rows.Scan(&rawJSON); err != nil {
 			return nil, err
 		}
 		var ar receipt.AgentReceipt
-		if err := json.Unmarshal([]byte(rJSON), &ar); err != nil {
+		if err := json.Unmarshal(rawJSON, &ar); err != nil {
 			return nil, fmt.Errorf("corrupt receipt in chain %s: %w", chainID, err)
 		}
-		out = append(out, ChainReceipt{Receipt: ar, Raw: []byte(rJSON)})
+		out = append(out, ChainReceipt{Receipt: ar, Raw: rawJSON})
 	}
 	return out, rows.Err()
 }
