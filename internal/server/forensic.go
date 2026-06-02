@@ -278,16 +278,22 @@ func (s *Server) handleReceiptDisclosure(w http.ResponseWriter, r *http.Request)
 	}
 	defer zero(priv)
 
-	if !slices.Contains(kids, fp) {
-		writeJSON(w, http.StatusOK, disclosureResponse{State: "mismatch", Alg: env.Alg, Kids: kids, Fingerprint: fp})
-		return
-	}
-
+	// Attempt decryption regardless of the kid value. The kid is
+	// non-authoritative metadata that DecryptDisclosure ignores; an emitter may
+	// legitimately write it in a non-canonical form (e.g. a did:key URL) while
+	// our key is still the correct recipient. Only after a failure do we use the
+	// kid to classify it: if the envelope names our key the ciphertext is
+	// corrupt/tampered (failed); otherwise our key is for a different recipient
+	// (mismatch).
 	params, err := receipt.DecryptDisclosure(env, priv)
 	if err != nil {
-		// Log the failure but never the key or plaintext.
-		log.Printf("disclosure decrypt failed for %s: %v", id, err)
-		writeJSON(w, http.StatusOK, disclosureResponse{State: "failed", Alg: env.Alg, Kids: kids, Fingerprint: fp})
+		if slices.Contains(kids, fp) {
+			// Log the failure but never the key or plaintext.
+			log.Printf("disclosure decrypt failed for %s: %v", id, err)
+			writeJSON(w, http.StatusOK, disclosureResponse{State: "failed", Alg: env.Alg, Kids: kids, Fingerprint: fp})
+			return
+		}
+		writeJSON(w, http.StatusOK, disclosureResponse{State: "mismatch", Alg: env.Alg, Kids: kids, Fingerprint: fp})
 		return
 	}
 

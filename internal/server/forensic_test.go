@@ -230,6 +230,34 @@ func TestDisclosureDecryptsWithMatchingKey(t *testing.T) {
 	}
 }
 
+// A correct key must decrypt even when the envelope's kid is written in a
+// non-canonical form (e.g. a did:key URL) that does not equal our sha256
+// fingerprint — the kid is non-authoritative and DecryptDisclosure ignores it.
+func TestDisclosureDecryptsWithNonCanonicalKid(t *testing.T) {
+	priv, pub, _ := forensicKeyPair(t)
+	params := map[string]any{"command": "whoami"}
+	// Encrypt to the right public key but stamp a did:key-style kid.
+	r := encReceipt(t, "urn:receipt:enc1", pub, "did:key:z6MkExampleForensicRecipientKeyId", params)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, r)
+	h := srv.Handler()
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("load: %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("GET", "/api/disclosure/urn:receipt:enc1", nil))
+	resp := decodeDisclosure(t, w.Body.Bytes())
+	if resp.State != "decrypted" {
+		t.Fatalf("state = %q, want decrypted (kid form must not block a correct key)", resp.State)
+	}
+	if resp.Parameters["command"] != "whoami" {
+		t.Fatalf("decrypted params mismatch: %+v", resp.Parameters)
+	}
+}
+
 func TestDisclosureLockedWithoutKey(t *testing.T) {
 	_, pub, fp := forensicKeyPair(t)
 	srv := seedReceipts(t, Config{Host: "127.0.0.1"}, encReceipt(t, "urn:receipt:enc1", pub, fp, map[string]any{"command": "ls"}))

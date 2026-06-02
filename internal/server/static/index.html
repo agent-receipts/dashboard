@@ -1540,32 +1540,6 @@
     }
 
     // ---------- Parameters disclosure (modal body) ----------
-    const DISCLOSURE_PRIMARY_KEYS = ['input', 'output'];
-    function parametersDisclosureHTML(disclosure) {
-      if (!disclosure || typeof disclosure !== 'object') return '';
-      const keys = Object.keys(disclosure);
-      if (keys.length === 0) return '';
-
-      const primary = DISCLOSURE_PRIMARY_KEYS
-        .filter(k => disclosure[k] != null && String(disclosure[k]) !== '')
-        .map(k => disclosureBlockHTML(k.charAt(0).toUpperCase() + k.slice(1), String(disclosure[k])));
-      const others = keys
-        .filter(k => !DISCLOSURE_PRIMARY_KEYS.includes(k))
-        .map(k => disclosureBlockHTML(k, String(disclosure[k])));
-
-      if (primary.length === 0 && others.length === 0) return '';
-
-      return `
-        <div>
-          <div class="muted text-xs mb-1">Parameters disclosure</div>
-          <div class="space-y-3">
-            ${primary.join('')}
-            ${others.join('')}
-          </div>
-        </div>
-      `;
-    }
-
     // Approximate threshold above which a disclosure block collapses behind
     // a toggle. JS uses character count, CSS uses height, so they won't
     // perfectly align across all fonts and screen sizes.
@@ -1598,23 +1572,27 @@
       return d && typeof d === 'object' && Array.isArray(d.recipients) && typeof d.ct === 'string';
     }
 
+    // Only HPKE envelopes are rendered here. The pre-v0.3.0 plaintext
+    // {input, output} disclosure no longer survives the round-trip through the
+    // SDK's typed *DisclosureEnvelope (which carries only v/alg/recipients/ct),
+    // so there is nothing legacy to render in the detail view.
     function disclosureSectionHTML(d) {
-      if (!d || typeof d !== 'object') return '';
-      if (isHpkeEnvelope(d)) {
-        // Filled by hydrateDisclosure once the receipt modal opens.
-        return `
-          <div>
-            <div class="muted text-xs mb-1">Parameters disclosure</div>
-            <div id="disclosure-panel">
-              <div class="decrypt-panel locked">
-                <div class="decrypt-head">🔒 Encrypted parameters</div>
-                <div class="muted text-xs">Checking…</div>
-              </div>
+      if (!isHpkeEnvelope(d)) return '';
+      // The panel body is filled by hydrateDisclosure once the modal opens.
+      return `
+        <div>
+          <div class="muted text-xs mb-1">Parameters disclosure</div>
+          <div id="disclosure-panel">
+            <div class="decrypt-panel locked">
+              <div class="decrypt-head">🔒 Encrypted parameters</div>
+              <div class="muted text-xs">Checking…</div>
             </div>
-          </div>`;
-      }
-      // Legacy operator-disclosed plaintext ({input, output, …}).
-      return parametersDisclosureHTML(d);
+          </div>
+        </div>`;
+    }
+
+    function envelopeKids(d) {
+      return (d.recipients || []).map(r => r && r.kid).filter(Boolean);
     }
 
     async function hydrateDisclosure(receipt) {
@@ -1622,6 +1600,14 @@
       const d = subj && subj.action && subj.action.parameters_disclosure;
       if (!isHpkeEnvelope(d)) return;
       if (!document.getElementById('disclosure-panel')) return;
+      // No key loaded: the locked state is fully derivable from the envelope the
+      // client already holds, so render it without a server round-trip. Only
+      // decryption needs the server (it alone holds the private key), which also
+      // keeps recovered plaintext confined to the dedicated /api/disclosure route.
+      if (!forensicState.loaded) {
+        setDisclosurePanel(receipt.id, renderDisclosurePanel({ state: 'locked', alg: d.alg, kids: envelopeKids(d) }));
+        return;
+      }
       try {
         const resp = await fetchJSON('/api/disclosure/' + encodeURIComponent(receipt.id));
         setDisclosurePanel(receipt.id, renderDisclosurePanel(resp));
