@@ -358,6 +358,90 @@ func TestChainVerifyEndpoint(t *testing.T) {
 	}
 }
 
+// TestChainVerifyEndpoint_ForwardCompatChain is the end-to-end regression for
+// issue #719. A collector persists receipts via InsertRaw, keeping the verbatim
+// wire bytes (which may carry fields a newer SDK added) and storing the hash
+// computed over those bytes. The verify endpoint must read those raw bytes back
+// and recompute the same hash — reporting the chain as valid, not broken.
+func TestChainVerifyEndpoint_ForwardCompatChain(t *testing.T) {
+	dbPath := t.TempDir() + "/fc-receipts.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// rawWithFutureField marshals r and splices in a top-level field the
+	// AgentReceipt struct does not know about, then returns the bytes and
+	// their canonical (raw) hash.
+	rawWithFutureField := func(r receipt.AgentReceipt) ([]byte, string) {
+		var generic map[string]any
+		b, mErr := json.Marshal(r)
+		if mErr != nil {
+			t.Fatalf("marshal: %v", mErr)
+		}
+		if uErr := json.Unmarshal(b, &generic); uErr != nil {
+			t.Fatalf("unmarshal: %v", uErr)
+		}
+		generic["_future_field"] = "v2"
+		raw, mErr := json.Marshal(generic)
+		if mErr != nil {
+			t.Fatalf("marshal enriched: %v", mErr)
+		}
+		h, hErr := receipt.HashRawReceipt(raw)
+		if hErr != nil {
+			t.Fatalf("hash raw: %v", hErr)
+		}
+		return raw, h
+	}
+
+	r1 := makeReceipt("urn:receipt:f01", "fc-chain", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	raw1, hash1 := rawWithFutureField(r1)
+	r2 := makeReceipt("urn:receipt:f02", "fc-chain", 2, "filesystem.file.modify", receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", &hash1)
+	raw2, hash2 := rawWithFutureField(r2)
+	r3 := makeReceipt("urn:receipt:f03", "fc-chain", 3, "communication.email.send", receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:02:00Z", &hash2)
+	raw3, hash3 := rawWithFutureField(r3)
+
+	for _, rec := range []struct {
+		r   receipt.AgentReceipt
+		raw []byte
+		h   string
+	}{{r1, raw1, hash1}, {r2, raw2, hash2}, {r3, raw3, hash3}} {
+		if err := s.InsertRaw(rec.r, rec.raw, rec.h); err != nil {
+			t.Fatalf("insert raw: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	srv := New(reader, Config{})
+
+	req := httptest.NewRequest("GET", "/api/chains/fc-chain/verify", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var result struct {
+		Valid    bool `json:"valid"`
+		Length   int  `json:"length"`
+		BrokenAt int  `json:"broken_at"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !result.Valid {
+		t.Errorf("forward-compat chain should be valid, broken at %d", result.BrokenAt)
+	}
+	if result.Length != 3 {
+		t.Errorf("got length %d, want 3", result.Length)
+	}
+}
+
 func TestChainVerifyEndpoint_EmptyChain(t *testing.T) {
 	srv := setupServer(t)
 	req := httptest.NewRequest("GET", "/api/chains/nonexistent/verify", nil)
