@@ -100,6 +100,17 @@ func defaultDBPath() string {
 	return filepath.Join(dh, "agent-receipts", "receipts.db")
 }
 
+// defaultForensicKeyPath returns the conventional path where the daemon writes
+// its X25519 forensic private key. Returns "" if the data home directory cannot
+// be resolved.
+func defaultForensicKeyPath() string {
+	dh := xdgDataHome()
+	if dh == "" {
+		return ""
+	}
+	return filepath.Join(dh, "agent-receipts", "forensic.key")
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -159,10 +170,11 @@ func main() {
 		displayDBPath = abs
 	}
 	srv := server.New(reader, server.Config{
-		PollInterval: *pollInterval,
-		DBPath:       displayDBPath,
-		Version:      resolveVersion(),
-		Host:         *host,
+		PollInterval:    *pollInterval,
+		DBPath:          displayDBPath,
+		Version:         resolveVersion(),
+		Host:            *host,
+		ForensicKeyPath: defaultForensicKeyPath(),
 	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)

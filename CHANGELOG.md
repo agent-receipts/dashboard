@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Forensic key: path input and auto-load** — the "Forensic decryption key" modal now accepts a file path in addition to the file picker and paste field. The path input is pre-filled with the default location (`~/.local/share/agent-receipts/forensic.key`) so most operators can load their key with a single click. Leading `~` is expanded to the user's home directory on the server. Additionally, when the dashboard starts on a loopback address and finds a key file at that default location, it loads the key automatically — no UI step required for a standard single-user install. New endpoint: `POST /api/forensic-key/path`.
+- **Decrypted parameter previews on receipt rows** — when the forensic key is loaded, the hover tooltip on encrypted-disclosure rows now shows the decrypted input/output snippets inline, so the operator no longer has to click into the detail modal to read the parameters. Decrypted snippets are cached in the browser tab only and dropped whenever the forensic key state changes.
+
+### Security
+
+- **CSRF guard on `/api/forensic-key/path`** — the endpoint now requires `Content-Type: application/json`, forcing cross-origin browser POSTs through a CORS preflight rather than letting a hostile page issue a "simple" request that would trigger arbitrary server-side file reads. The existing `POST /api/forensic-key` accepts a raw body for compatibility and is not affected by this change; consider a similar guard there in a follow-up.
+
 ## [0.4.0] - 2026-06-03
 
 ### Added
