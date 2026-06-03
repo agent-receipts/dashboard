@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -244,6 +245,17 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 // body and may use a leading ~ for the current user's home directory.
 func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Request) {
 	if !s.guardForensic(w, r) {
+		return
+	}
+
+	// Require Content-Type: application/json so cross-origin browser POSTs
+	// trigger a CORS preflight instead of being treated as "simple" requests.
+	// The existing loopback + Host-header guards block network attackers and
+	// DNS rebinding; this closes the remaining same-browser CSRF gap that
+	// would otherwise let a hostile page drive arbitrary local file reads.
+	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if ct != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return
 	}
 

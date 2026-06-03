@@ -28,6 +28,14 @@ func localReq(method, target string, body io.Reader) *http.Request {
 	return r
 }
 
+// localJSONReq is like localReq but also sets Content-Type: application/json,
+// matching what /api/forensic-key/path requires of legitimate clients.
+func localJSONReq(method, target string, body io.Reader) *http.Request {
+	r := localReq(method, target, body)
+	r.Header.Set("Content-Type", "application/json")
+	return r
+}
+
 // forensicKeyPair returns a fresh X25519 forensic key pair and its canonical
 // sha256 fingerprint (the value the daemon writes as a recipient kid).
 func forensicKeyPair(t *testing.T) (priv, pub []byte, fingerprint string) {
@@ -444,7 +452,7 @@ func TestForensicKeyLoadPath(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"path": keyFile})
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, localReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	h.ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("load from path: got %d, want 200 (body=%s)", w.Code, w.Body)
 	}
@@ -462,7 +470,7 @@ func TestForensicKeyLoadPathNotFound(t *testing.T) {
 	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
 	body, _ := json.Marshal(map[string]string{"path": "/nonexistent/forensic.key"})
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, localReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", w.Code)
 	}
@@ -477,9 +485,48 @@ func TestForensicKeyLoadPathInvalidKey(t *testing.T) {
 	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
 	body, _ := json.Marshal(map[string]string{"path": keyFile})
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, localReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
+// The Content-Type check is the CSRF guard: a cross-origin POST without
+// Content-Type: application/json is "CORS-simple" and would skip preflight,
+// letting a hostile page trigger arbitrary file reads on the loopback API.
+// Reject anything that isn't an explicit application/json content type.
+func TestForensicKeyLoadPathRequiresJSONContentType(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body := []byte(`{"path":"/some/key"}`)
+
+	cases := []struct {
+		name        string
+		contentType string
+	}{
+		{"missing", ""},
+		{"text/plain", "text/plain"},
+		{"form", "application/x-www-form-urlencoded"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := localReq("POST", "/api/forensic-key/path", bytes.NewReader(body))
+			if tc.contentType != "" {
+				r.Header.Set("Content-Type", tc.contentType)
+			}
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("Content-Type %q: got %d, want 415", tc.contentType, w.Code)
+			}
+		})
+	}
+
+	// Sanity-check: the helper that adds Content-Type: application/json reaches
+	// the path-validation branch (400) rather than being bounced at 415.
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("with application/json: got %d, want 400 (file not found)", w.Code)
 	}
 }
 
@@ -488,6 +535,7 @@ func TestForensicKeyLoadPathRejectsNonLocal(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"path": "/some/key"})
 	r := httptest.NewRequest("POST", "/api/forensic-key/path", bytes.NewReader(body))
 	r.Host = "evil.example.com"
+	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
@@ -499,7 +547,7 @@ func TestForensicKeyLoadPathRejectsNonLoopbackBind(t *testing.T) {
 	srv := seedReceipts(t, Config{Host: "0.0.0.0"})
 	body, _ := json.Marshal(map[string]string{"path": "/some/key"})
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, localReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("got %d, want 403", w.Code)
 	}
