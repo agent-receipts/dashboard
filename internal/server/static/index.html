@@ -1156,23 +1156,23 @@
     // and finally a generic "see detail view" fallback.
     function disclosureTooltipInnerHTML(r) {
       const cached = disclosurePreviewCache.get(r.id);
-      let input  = '', output = '', decrypted = false;
       if (cached && cached.state === 'decrypted') {
-        input  = cached.input  || '';
-        output = cached.output || '';
-        decrypted = true;
-      } else {
-        input  = r.parameters_input_preview  || '';
-        output = r.parameters_output_preview || '';
+        const head = '<span class="label">🔓 Decrypted</span>';
+        if (!cached.entries.length) {
+          return head + '<span class="muted text-xs">(empty parameters)</span>';
+        }
+        const body = cached.entries.map(e =>
+          `<span class="label">${escapeHtml(e.key)}</span><span class="value">${escapeHtml(e.value)}</span>`
+        ).join('');
+        return head + body;
       }
+      const input  = r.parameters_input_preview  || '';
+      const output = r.parameters_output_preview || '';
       const parts = [];
-      if (decrypted) parts.push('<span class="label">🔓 Decrypted</span>');
       if (input)  parts.push(`<span class="label">Input</span><span class="value">${escapeHtml(input)}</span>`);
       if (output) parts.push(`<span class="label">Output</span><span class="value">${escapeHtml(output)}</span>`);
-      if (parts.length === (decrypted ? 1 : 0)) {
-        return '<span class="muted text-xs">Additional disclosure fields present — see detail view</span>';
-      }
-      return parts.join('');
+      if (parts.length) return parts.join('');
+      return '<span class="muted text-xs">Additional disclosure fields present — see detail view</span>';
     }
 
     function tbodyIdFor(containerId) { return 'tbody-' + containerId; }
@@ -1266,14 +1266,24 @@
 
     // Extract a compact list-preview entry from the disclosure API response.
     // Returns null for non-decrypted states so the cache only holds usable data.
+    // The two-key cap matches the row tooltip's width budget; we prefer
+    // input/output for parity with the server-side plaintext preview, then
+    // fall back to whatever keys the disclosure actually carries (e.g.
+    // command/arguments/result for MCP tool wrappers).
     function disclosureCacheEntryFromResponse(resp) {
       if (!resp || resp.state !== 'decrypted') return null;
       const p = resp.parameters || {};
-      return {
-        state: 'decrypted',
-        input:  formatDisclosurePreviewValue(p.input),
-        output: formatDisclosurePreviewValue(p.output),
-      };
+      const ordered = Object.keys(p).sort((a, b) => {
+        const rank = k => k === 'input' ? 0 : k === 'output' ? 1 : 2;
+        return rank(a) - rank(b) || a.localeCompare(b);
+      });
+      const entries = [];
+      for (const k of ordered) {
+        const v = formatDisclosurePreviewValue(p[k]);
+        if (v) entries.push({ key: k, value: v });
+        if (entries.length >= 2) break;
+      }
+      return { state: 'decrypted', entries };
     }
 
     // formatDisclosurePreviewValue mirrors the server's truncation rule for
