@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-03
+
 ### Fixed
 
 - **Decrypted row preview now works for arbitrary disclosure schemas** — v0.5.0 only surfaced the `input` and `output` keys in the row tooltip, so MCP tool wrappers that capture parameters under other names (e.g. `command`, `arguments`, `result`) fell back to the generic "Additional disclosure fields present" message even when the forensic key successfully decrypted the envelope. The hydrator now keeps the first two non-empty top-level keys regardless of their names, with `input`/`output` still preferred for parity with the server's plaintext preview.
@@ -147,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/agent-receipts/dashboard/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/agent-receipts/dashboard/compare/v0.2.2...v0.3.0
