@@ -1224,6 +1224,12 @@
       hydrateListDisclosurePreviews(receipts);
     }
 
+    // disclosureHydrationConcurrency caps how many /api/disclosure requests
+    // are in flight at once. Browsers already bottleneck at ~6 concurrent
+    // connections per origin, but each request triggers a server-side HPKE
+    // decrypt, so we keep the burst small to avoid CPU spikes on long lists.
+    const disclosureHydrationConcurrency = 4;
+
     // hydrateListDisclosurePreviews fetches /api/disclosure for each visible
     // row whose disclosure is encrypted (has_parameters_disclosure with no
     // plaintext preview) and which is not yet in the cache, then patches the
@@ -1239,7 +1245,7 @@
       );
       if (todo.length === 0) return;
 
-      await Promise.allSettled(todo.map(async r => {
+      const fetchOne = async r => {
         try {
           const resp = await fetchJSON('/api/disclosure/' + encodeURIComponent(r.id));
           const entry = disclosureCacheEntryFromResponse(resp);
@@ -1250,7 +1256,12 @@
           // Transient errors leave the row with its locked-fallback tooltip;
           // the next render will retry. Don't poison the cache.
         }
-      }));
+      };
+
+      for (let i = 0; i < todo.length; i += disclosureHydrationConcurrency) {
+        const batch = todo.slice(i, i + disclosureHydrationConcurrency);
+        await Promise.allSettled(batch.map(fetchOne));
+      }
     }
 
     // Extract a compact list-preview entry from the disclosure API response.
@@ -1275,14 +1286,18 @@
       return s.length > MAX ? s.slice(0, MAX) + '…' : s;
     }
 
-    // patchDisclosureTooltipFromCache replaces the tooltip inner HTML for a
-    // single receipt using the current cache state. Safe to call when the
-    // tooltip is not in the DOM (no-ops).
+    // patchDisclosureTooltipFromCache replaces the tooltip inner HTML for
+    // every visible row matching the receipt id. The same receipt can appear
+    // in multiple containers (e.g. recent-receipts and receipts-table), which
+    // produces duplicate DOM ids — so iterate the indicator buttons by data
+    // attribute and patch each child tooltip rather than relying on
+    // getElementById, which would only update the first match.
     function patchDisclosureTooltipFromCache(r) {
-      const safeId = r.id.replace(/[^A-Za-z0-9_-]/g, '_');
-      const tooltip = document.getElementById(`disclosure-tooltip-${safeId}`);
-      if (!tooltip) return;
-      tooltip.innerHTML = disclosureTooltipInnerHTML(r);
+      document.querySelectorAll('.disclosure-indicator').forEach(btn => {
+        if (btn.dataset.receiptId !== r.id) return;
+        const tooltip = btn.querySelector('.disclosure-tooltip');
+        if (tooltip) tooltip.innerHTML = disclosureTooltipInnerHTML(r);
+      });
     }
 
     // rerenderAllReceiptTables re-renders every container that has rendered

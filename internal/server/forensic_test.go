@@ -530,6 +530,18 @@ func TestForensicKeyLoadPathRequiresJSONContentType(t *testing.T) {
 	}
 }
 
+// Relative paths would silently resolve against the dashboard's CWD, so the
+// handler rejects anything that isn't absolute (after ~ expansion).
+func TestForensicKeyLoadPathRejectsRelativePath(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": "forensic.key"})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
 func TestForensicKeyLoadPathRejectsNonLocal(t *testing.T) {
 	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
 	body, _ := json.Marshal(map[string]string{"path": "/some/key"})

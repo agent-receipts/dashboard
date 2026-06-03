@@ -242,7 +242,9 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 
 // handleForensicKeyLoadPath loads the forensic private key from an absolute
 // path on the server's filesystem. The path is supplied as JSON in the request
-// body and may use a leading ~ for the current user's home directory.
+// body and may use a leading ~ for the current user's home directory. Relative
+// paths are rejected so a typo like "forensic.key" does not silently resolve
+// against the dashboard's working directory.
 func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Request) {
 	if !s.guardForensic(w, r) {
 		return
@@ -273,6 +275,10 @@ func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Reques
 	}
 
 	expanded := expandHomePath(req.Path)
+	if !filepath.IsAbs(expanded) {
+		writeError(w, http.StatusBadRequest, "path must be absolute (or start with ~/)")
+		return
+	}
 	data, err := readFileLimited(expanded, maxForensicKeyBody)
 	if err != nil {
 		if isNotExist(err) {
