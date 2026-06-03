@@ -6,12 +6,15 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -100,6 +103,10 @@ type forensicKeyStatus struct {
 	// Available is false when the dashboard is not bound to a loopback address,
 	// in which case loading a key is refused (see forensicAvailable).
 	Available bool `json:"available"`
+	// DefaultPath is the conventional path the server probes at startup for an
+	// X25519 forensic private key. The UI pre-fills its path input with this
+	// value so operators can load the key with a single click.
+	DefaultPath string `json:"default_path,omitempty"`
 }
 
 // disclosureResponse is the JSON returned by the per-receipt disclosure endpoint.
@@ -189,6 +196,7 @@ func (s *Server) handleForensicKeyGet(w http.ResponseWriter, r *http.Request) {
 		Loaded:      loaded,
 		Fingerprint: fp,
 		Available:   s.forensicAvailable(),
+		DefaultPath: s.cfg.ForensicKeyPath,
 	})
 }
 
@@ -229,6 +237,68 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, forensicKeyStatus{Loaded: true, Fingerprint: fp, Available: true})
+}
+
+// handleForensicKeyLoadPath loads the forensic private key from an absolute
+// path on the server's filesystem. The path is supplied as JSON in the request
+// body and may use a leading ~ for the current user's home directory.
+func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Request) {
+	if !s.guardForensic(w, r) {
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	expanded := expandHomePath(req.Path)
+	data, err := readFileLimited(expanded, maxForensicKeyBody)
+	if err != nil {
+		if isNotExist(err) {
+			writeError(w, http.StatusBadRequest, "key file not found: "+req.Path)
+		} else {
+			writeError(w, http.StatusBadRequest, "could not read key file: "+err.Error())
+		}
+		return
+	}
+	defer zero(data)
+
+	priv, err := parseForensicPrivateKey(data)
+	if err != nil {
+		log.Printf("forensic key load from path rejected: %v", err)
+		writeError(w, http.StatusBadRequest, "invalid forensic key: provide a 32-byte X25519 private key (raw, hex, base64, or PKCS#8 PEM)")
+		return
+	}
+	defer zero(priv)
+
+	fp, err := s.forensic.load(priv)
+	if err != nil {
+		log.Printf("forensic key load from path failed: %v", err)
+		writeError(w, http.StatusBadRequest, "could not derive a forensic key fingerprint from the supplied key")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, forensicKeyStatus{Loaded: true, Fingerprint: fp, Available: true})
+}
+
+// expandHomePath replaces a leading ~ with the current user's home directory.
+func expandHomePath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, p[1:])
+		}
+	}
+	return p
 }
 
 func (s *Server) handleForensicKeyClear(w http.ResponseWriter, r *http.Request) {

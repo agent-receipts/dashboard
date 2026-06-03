@@ -1736,7 +1736,7 @@
     // happen server-side via /api/forensic-key and /api/disclosure/{id}.
     // available defaults false until the server confirms a loopback bind, so the
     // load form (and any key submission) is never offered before status resolves.
-    const forensicState = { available: false, loaded: false, fingerprint: '' };
+    const forensicState = { available: false, loaded: false, fingerprint: '', defaultPath: '' };
 
     // applyForensicStatus is the single writer of forensicState: every
     // load/clear/status response is the authoritative forensicKeyStatus JSON,
@@ -1746,6 +1746,7 @@
       forensicState.available = !!st.available;
       forensicState.loaded = !!st.loaded;
       forensicState.fingerprint = st.fingerprint || '';
+      if (st.default_path) forensicState.defaultPath = st.default_path;
       renderForensicChip();
     }
 
@@ -1817,11 +1818,22 @@
         return;
       }
 
+      const defaultPath = escapeHtml(forensicState.defaultPath || '');
       body.innerHTML = `
         <p class="text-sm mb-3">Load your X25519 forensic private key to decrypt <code>parameters_disclosure</code> envelopes. The key stays in this dashboard's memory for the session only — it is never persisted or sent elsewhere.</p>
         <div class="space-y-3">
           <div>
-            <label class="muted text-xs" for="forensic-file">Key file (raw 32-byte key from <code>--init-forensic-key</code>)</label>
+            <label class="muted text-xs" for="forensic-path">Key file path</label>
+            <div style="display:flex;gap:0.4rem;align-items:stretch;">
+              <input class="forensic-field" type="text" id="forensic-path" style="flex:1;min-width:0;" value="${defaultPath}" placeholder="~/.local/share/agent-receipts/forensic.key" spellcheck="false" autocomplete="off">
+              <button class="forensic-btn" type="button" onclick="submitForensicKeyPath()" style="white-space:nowrap;flex-shrink:0;">Load from path</button>
+            </div>
+          </div>
+          <div class="muted text-xs" style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="flex:1;border-top:1px solid var(--border);"></span>or<span style="flex:1;border-top:1px solid var(--border);"></span>
+          </div>
+          <div>
+            <label class="muted text-xs" for="forensic-file">Choose file</label>
             <input class="forensic-field" type="file" id="forensic-file">
           </div>
           <div>
@@ -1840,6 +1852,28 @@
       el.hidden = false; el.textContent = msg;
     }
 
+    async function submitForensicKeyPath() {
+      const pathInput = document.getElementById('forensic-path');
+      const path = ((pathInput && pathInput.value) || '').trim();
+      forensicError('');
+      if (!path) { forensicError('Enter a file path.'); return; }
+
+      try {
+        const res = await fetch('/api/forensic-key/path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { forensicError(data.error || ('HTTP ' + res.status)); return; }
+        applyForensicStatus(data);
+        renderForensicModalBody();
+        refreshOpenReceiptDisclosure();
+      } catch (err) {
+        forensicError(err.message || String(err));
+      }
+    }
+
     async function submitForensicKey() {
       const fileInput = document.getElementById('forensic-file');
       const textInput = document.getElementById('forensic-text');
@@ -1851,7 +1885,7 @@
         body = await file.arrayBuffer();
       } else {
         const text = ((textInput && textInput.value) || '').trim();
-        if (!text) { forensicError('Choose a key file or paste a key.'); return; }
+        if (!text) { forensicError('Choose a file or paste a key.'); return; }
         body = text;
       }
 

@@ -7,9 +7,12 @@ import (
 	"embed"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,6 +43,11 @@ type Config struct {
 	// forensicAvailable). An empty or all-interfaces bind (""/"0.0.0.0"/"::")
 	// is not loopback and disables forensic operations.
 	Host string
+	// ForensicKeyPath is the default path probed at startup for an X25519
+	// forensic private key. When non-empty and the file exists, the server
+	// loads it automatically so operators with a single-user install do not
+	// need to paste the key into the UI.
+	ForensicKeyPath string
 }
 
 //go:embed static
@@ -53,12 +61,47 @@ type Server struct {
 }
 
 // New creates a new Server backed by the given reader. A zero PollInterval
-// in cfg falls back to DefaultPollInterval.
+// in cfg falls back to DefaultPollInterval. When cfg.ForensicKeyPath names an
+// existing file and the server is bound to loopback, the forensic key is
+// loaded automatically so solo operators need no manual UI step.
 func New(reader *store.Reader, cfg Config) *Server {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}
-	return &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}}
+	s := &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}}
+	s.tryLoadDefaultForensicKey()
+	return s
+}
+
+// tryLoadDefaultForensicKey probes cfg.ForensicKeyPath at startup and silently
+// loads the key if found. A missing file is a normal condition; any other error
+// or parse failure is logged but never fatal.
+func (s *Server) tryLoadDefaultForensicKey() {
+	if s.cfg.ForensicKeyPath == "" || !s.forensicAvailable() {
+		return
+	}
+	data, err := readFileLimited(s.cfg.ForensicKeyPath, maxForensicKeyBody)
+	if err != nil {
+		if !isNotExist(err) {
+			log.Printf("forensic key: could not read %s: %v", s.cfg.ForensicKeyPath, err)
+		}
+		return
+	}
+	defer zero(data)
+
+	priv, err := parseForensicPrivateKey(data)
+	if err != nil {
+		log.Printf("forensic key: could not parse %s: %v", s.cfg.ForensicKeyPath, err)
+		return
+	}
+	defer zero(priv)
+
+	fp, err := s.forensic.load(priv)
+	if err != nil {
+		log.Printf("forensic key: load failed for %s: %v", s.cfg.ForensicKeyPath, err)
+		return
+	}
+	log.Printf("forensic key loaded from %s (fingerprint %s)", s.cfg.ForensicKeyPath, fp)
 }
 
 // Handler returns the HTTP handler with all routes registered.
@@ -81,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	// further path segment.
 	mux.HandleFunc("GET /api/forensic-key", s.handleForensicKeyGet)
 	mux.HandleFunc("POST /api/forensic-key", s.handleForensicKeyLoad)
+	mux.HandleFunc("POST /api/forensic-key/path", s.handleForensicKeyLoadPath)
 	mux.HandleFunc("DELETE /api/forensic-key", s.handleForensicKeyClear)
 	mux.HandleFunc("GET /api/disclosure/{id...}", s.handleReceiptDisclosure)
 
@@ -256,6 +300,30 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
+}
+
+// readFileLimited reads up to limit+1 bytes from path. Returns an error if the
+// file exceeds limit, so callers can reject oversized inputs without reading
+// the whole file into memory first.
+func readFileLimited(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file exceeds %d byte limit", limit)
+	}
+	return data, nil
+}
+
+// isNotExist reports whether err is a file-not-found error from the os package.
+func isNotExist(err error) bool {
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

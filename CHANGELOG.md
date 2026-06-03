@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Forensic key: path input and auto-load** — the "Forensic decryption key" modal now accepts a file path in addition to the file picker and paste field. The path input is pre-filled with the default location (`~/.local/share/agent-receipts/forensic.key`) so most operators can load their key with a single click. Leading `~` is expanded to the user's home directory on the server. Additionally, when the dashboard starts on a loopback address and finds a key file at that default location, it loads the key automatically — no UI step required for a standard single-user install. New endpoint: `POST /api/forensic-key/path`.
+
 ## [0.4.0] - 2026-06-03
 
 ### Added
