@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-03
+
 ### Added
 
 - **Forensic key: path input and auto-load** — the "Forensic decryption key" modal now accepts a file path in addition to the file picker and paste field. The path input is pre-filled with the default location (`~/.local/share/agent-receipts/forensic.key`) so most operators can load their key with a single click. Leading `~` is expanded to the user's home directory on the server. Additionally, when the dashboard starts on a loopback address and finds a key file at that default location, it loads the key automatically — no UI step required for a standard single-user install. New endpoint: `POST /api/forensic-key/path`.
@@ -14,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **CSRF guard on `/api/forensic-key/path`** — the endpoint now requires `Content-Type: application/json`, forcing cross-origin browser POSTs through a CORS preflight rather than letting a hostile page issue a "simple" request that would trigger arbitrary server-side file reads. The existing `POST /api/forensic-key` accepts a raw body for compatibility and is not affected by this change; consider a similar guard there in a follow-up.
+- **CSRF guard on `/api/forensic-key/path`** — the endpoint now requires `Content-Type: application/json`, forcing cross-origin browser POSTs through a CORS preflight rather than letting a hostile page issue a "simple" request that would trigger arbitrary server-side file reads. The existing `POST /api/forensic-key` accepts a raw body for compatibility and is not affected by this change; tracked in [#79](https://github.com/agent-receipts/dashboard/issues/79).
 
 ## [0.4.0] - 2026-06-03
 
@@ -141,7 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/agent-receipts/dashboard/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/agent-receipts/dashboard/compare/v0.2.1...v0.2.2
