@@ -1,7 +1,8 @@
 # ADR 0001: Wails as Desktop Wrapper
 
-**Status:** Accepted  
-**Date:** 2026-04-24
+**Status:** Superseded  
+**Date:** 2026-04-24  
+**Superseded:** 2026-06-05 — see [issue #38](https://github.com/agent-receipts/dashboard/issues/38)
 
 ## Context
 
