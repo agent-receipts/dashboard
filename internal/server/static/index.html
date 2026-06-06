@@ -1249,7 +1249,9 @@
 
     function currentReceiptFilters() {
       const f = {};
-      const q      = document.getElementById('filter-q').value;
+      // Trim so a whitespace-only search isn't treated as an active filter
+      // (the backend ignores it) — keeps the URL and filter chips clean.
+      const q      = document.getElementById('filter-q').value.trim();
       const risk   = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;

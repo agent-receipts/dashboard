@@ -889,15 +889,16 @@ func TestListReceiptsQ(t *testing.T) {
 		t.Errorf("q=mail+risk=high: got ID %q, want urn:receipt:q3", rows[0].ID)
 	}
 
-	// A term with LIKE metacharacters (%) must be treated as literal, not as a
-	// wildcard. "100%" should match a receipt whose JSON contains the literal
-	// string "100%" and not all receipts.
-	rowsMeta, err := reader.ListReceipts(Filter{Q: strPtr("100%")})
+	// A term with a LIKE metacharacter (%) must be literal, not a wildcard.
+	// "http%" is chosen so the test actually fails if escaping breaks: as a
+	// wildcard it would match the "http_get" tool (JSON contains "http"), but
+	// as a literal it matches nothing — no receipt JSON contains "http%".
+	rowsMeta, err := reader.ListReceipts(Filter{Q: strPtr("http%")})
 	if err != nil {
-		t.Fatalf("list q=100%%: %v", err)
+		t.Fatalf("list q=http%%: %v", err)
 	}
 	if len(rowsMeta) != 0 {
-		t.Errorf("q='100%%': got %d rows, want 0 (percent must not act as wildcard)", len(rowsMeta))
+		t.Errorf("q='http%%': got %d rows, want 0 (percent must not act as wildcard, else it would match http_get)", len(rowsMeta))
 	}
 
 	// Similarly, underscore (_) in the term must be literal.
