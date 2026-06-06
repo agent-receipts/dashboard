@@ -1075,6 +1075,9 @@
         const data = await fetchJSON('/api/stats/servers');
         if (gen !== poller.generation) return;
         renderServersTable(data.servers || []);
+        // Wire keyboard row navigation (j/k/Enter) to the server rows, matching
+        // the other views; Enter expands/collapses a server.
+        nav.setSelector('#servers-table tbody tr.srv-server-row');
       } catch (err) {
         showError('Failed to load servers: ' + err.message);
         container.innerHTML = '<div class="empty-state"><div class="empty-title">Could not load servers</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
@@ -1117,8 +1120,8 @@
           `;
         }).join('');
 
-        // "Unknown" collapsed by default; others collapsed too (expand on click).
-        const collapsed = true;
+        // All server rows render collapsed; the tool sub-table starts hidden and
+        // is revealed by toggleServerRow on click.
         return `
           <tr class="srv-server-row" style="cursor:pointer;" onclick="toggleServerRow('${escapeAttr(expandId)}', this)">
             <td style="padding:8px 12px;">

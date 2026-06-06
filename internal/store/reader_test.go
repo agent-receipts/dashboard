@@ -607,6 +607,72 @@ func TestServerStats(t *testing.T) {
 	}
 }
 
+// A server literally named "Unknown" must not be merged into the
+// missing-server bucket (which is relabelled "Unknown" for display).
+func TestServerStats_LiteralUnknownNotMerged(t *testing.T) {
+	dbPath := t.TempDir() + "/serverstats-unknown.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	receipts := []receipt.AgentReceipt{
+		// A real server whose system name happens to be "Unknown".
+		makeReceiptWithTool("urn:receipt:u1", "chain-u", 1, "tool.call", "tool_u", "Unknown", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:u2", "chain-u", 2, "tool.call", "tool_u", "Unknown", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
+		// A receipt with no server — the missing-server bucket.
+		makeReceiptWithTool("urn:receipt:u3", "chain-u", 3, "tool.call", "", "", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:02:00Z"),
+	}
+	for _, r := range receipts {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	stats, err := reader.ServerStats(nil)
+	if err != nil {
+		t.Fatalf("ServerStats: %v", err)
+	}
+
+	// Two distinct buckets, both displayed as "Unknown": the real server
+	// (2 receipts, 0 failures) and the missing-server bucket (1 failure).
+	if len(stats) != 2 {
+		t.Fatalf("got %d server groups, want 2 (real 'Unknown' must stay separate from missing): %+v", len(stats), stats)
+	}
+	var realTotal, missingFailure int
+	for _, st := range stats {
+		if st.Server != "Unknown" {
+			t.Errorf("unexpected server label %q, want Unknown", st.Server)
+		}
+		if st.Total == 2 {
+			realTotal = st.Total
+			if st.Failure != 0 {
+				t.Errorf("real Unknown server failure = %d, want 0", st.Failure)
+			}
+		}
+		if st.Total == 1 {
+			missingFailure = st.Failure
+		}
+	}
+	if realTotal != 2 {
+		t.Errorf("did not find the real 'Unknown' server bucket with total 2")
+	}
+	if missingFailure != 1 {
+		t.Errorf("missing-server bucket failure = %d, want 1", missingFailure)
+	}
+}
+
 func TestServerStats_Empty(t *testing.T) {
 	dbPath := seedEmptyDB(t)
 	reader, err := OpenReadOnly(dbPath)

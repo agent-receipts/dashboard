@@ -441,16 +441,15 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 		if err := rows.Scan(&rr.server, &rr.tool, &rr.total, &rr.failure); err != nil {
 			return nil, err
 		}
-		// Fold empty server into "Unknown" in Go, keeping the SQL GROUP BY clean.
-		server := rr.server
-		if server == "" {
-			server = "Unknown"
-		}
-		st, ok := serverMap[server]
+		// Key by the raw server value (empty string for a missing target.system)
+		// rather than folding to "Unknown" here — folding now would merge a real
+		// server literally named "Unknown" into the missing-server bucket. The
+		// empty-string bucket is relabelled to "Unknown" for display below.
+		st, ok := serverMap[rr.server]
 		if !ok {
-			st = &ServerStat{Server: server}
-			serverMap[server] = st
-			serverOrder = append(serverOrder, server)
+			st = &ServerStat{Server: rr.server}
+			serverMap[rr.server] = st
+			serverOrder = append(serverOrder, rr.server)
 		}
 		rate := 0.0
 		if rr.total > 0 {
@@ -469,25 +468,34 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 		return nil, err
 	}
 
-	// Compute per-server failure rate and split named vs Unknown.
+	// Compute per-server failure rate and split named vs the missing-server
+	// bucket (keyed by ""), which is relabelled "Unknown" for display.
 	var named []ServerStat
 	var unknown *ServerStat
-	for _, name := range serverOrder {
-		st := serverMap[name]
+	for _, key := range serverOrder {
+		st := serverMap[key]
 		if st.Total > 0 {
 			st.FailureRate = float64(st.Failure) / float64(st.Total)
 		}
-		if name == "Unknown" {
+		if key == "" {
+			st.Server = "Unknown"
 			unknown = st
 		} else {
 			named = append(named, *st)
 		}
 	}
 
-	// Sort named servers DESC by total; insertion sort is fine at dashboard scale.
+	// Sort named servers DESC by total, tie-broken by server name ASC for a
+	// deterministic order (avoids UI jitter across equivalent datasets).
+	// Insertion sort is fine at dashboard scale.
 	for i := 1; i < len(named); i++ {
-		for j := i; j > 0 && named[j].Total > named[j-1].Total; j-- {
-			named[j], named[j-1] = named[j-1], named[j]
+		for j := i; j > 0; j-- {
+			cur, prev := named[j], named[j-1]
+			if cur.Total > prev.Total || (cur.Total == prev.Total && cur.Server < prev.Server) {
+				named[j], named[j-1] = named[j-1], named[j]
+			} else {
+				break
+			}
 		}
 	}
 
