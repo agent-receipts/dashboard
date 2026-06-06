@@ -2706,12 +2706,22 @@
     });
 
     // ---------- Boot ----------
-    loadPollConfig().then(() => {
+    loadPollConfig().then(async () => {
       // If the URL contains ?q=<term>, pre-populate the search box and open
       // the Receipts view with the term applied. Otherwise load the overview.
       const initialQ = new URLSearchParams(location.search).get('q');
       if (initialQ && initialQ.trim()) {
         document.getElementById('filter-q').value = initialQ;
+        // loadOverview() is skipped on this path, so fetch stats here to fill
+        // the header context (receipt count + latest timestamp) — otherwise a
+        // shared ?q= deep link would leave the header blank until Overview is
+        // visited. Failure is non-fatal; the search still loads.
+        try {
+          const stats = await fetchJSON('/api/stats');
+          renderHeaderContext(null, stats);
+        } catch (err) {
+          console.warn('header stats on deep-link boot:', err);
+        }
         showView('receipts');
       } else {
         loadOverview();
