@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Top actions by failure rate** — a new `GET /api/stats/actions` endpoint returns per-action-type failure statistics (total, success, failure counts, and failure rate), filtered to action types with at least 5 receipts. An optional `range` query parameter (Go duration string, e.g. `24h`) restricts the window. Results are sorted by failure rate descending. A new **Actions** tab renders the full sortable table with clickable column headers and a "Show all" toggle; clicking a row pre-filters the Receipts view to that action type's failures. The Overview tab gains a new "Top actions by failure rate" summary card showing the top 5 action types as horizontal bars, with a "View all →" link to the Actions tab.
+
 ## [0.5.1] - 2026-06-03
 
 ### Fixed

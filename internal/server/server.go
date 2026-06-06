@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/stats/actions", s.handleActionStats)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -165,6 +166,32 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
+	var since *string
+	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
+		d, err := time.ParseDuration(rangeStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "range must be a valid Go duration (e.g. 24h, 7d)")
+			return
+		}
+		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
+		since = &t
+	}
+
+	stats, err := s.reader.ActionStats(since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "action stats query failed")
+		log.Printf("action stats error: %v", err)
+		return
+	}
+
+	// Return an empty slice rather than null in JSON.
+	if stats == nil {
+		stats = []store.ActionStat{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"actions": stats})
 }
 
 func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {

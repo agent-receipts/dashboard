@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -817,6 +818,140 @@ func seedEmptyDB(t *testing.T) string {
 	}
 	s.Close()
 	return dbPath
+}
+
+func TestActionStats(t *testing.T) {
+	// Seed: three action types —
+	//   "cmd.exec":    6 receipts (4 failure, 2 success) → 66.7% failure rate
+	//   "file.read":   5 receipts (0 failure, 5 success) → 0% failure rate, all-success
+	//   "tiny.action": 3 receipts (3 failure)            → excluded (< 5)
+	dbPath := t.TempDir() + "/action-stats-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	var recs []receipt.AgentReceipt
+
+	// "cmd.exec": 4 failures + 2 successes (6 total)
+	for i := range 4 {
+		ts := fmt.Sprintf("2026-05-01T10:%02d:00Z", i)
+		recs = append(recs, makeReceipt(
+			fmt.Sprintf("urn:receipt:cmd-fail-%d", i), "chain-cmd", i+1,
+			"cmd.exec", receipt.RiskHigh, receipt.StatusFailure, ts, nil,
+		))
+	}
+	for i := range 2 {
+		ts := fmt.Sprintf("2026-05-01T11:%02d:00Z", i)
+		recs = append(recs, makeReceipt(
+			fmt.Sprintf("urn:receipt:cmd-ok-%d", i), "chain-cmd", i+5,
+			"cmd.exec", receipt.RiskHigh, receipt.StatusSuccess, ts, nil,
+		))
+	}
+
+	// "file.read": 5 successes (0 failures)
+	for i := range 5 {
+		ts := fmt.Sprintf("2026-05-01T12:%02d:00Z", i)
+		recs = append(recs, makeReceipt(
+			fmt.Sprintf("urn:receipt:file-%d", i), "chain-file", i+1,
+			"file.read", receipt.RiskLow, receipt.StatusSuccess, ts, nil,
+		))
+	}
+
+	// "tiny.action": 3 receipts — must be EXCLUDED by HAVING COUNT(*) >= 5
+	for i := range 3 {
+		ts := fmt.Sprintf("2026-05-01T13:%02d:00Z", i)
+		recs = append(recs, makeReceipt(
+			fmt.Sprintf("urn:receipt:tiny-%d", i), "chain-tiny", i+1,
+			"tiny.action", receipt.RiskLow, receipt.StatusFailure, ts, nil,
+		))
+	}
+
+	for _, r := range recs {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// All-time query.
+	stats, err := reader.ActionStats(nil)
+	if err != nil {
+		t.Fatalf("ActionStats: %v", err)
+	}
+
+	// Only "cmd.exec" and "file.read" must be present (tiny.action excluded).
+	if len(stats) != 2 {
+		t.Fatalf("got %d entries, want 2 (tiny.action must be excluded)", len(stats))
+	}
+
+	// Verify exclusion of tiny.action.
+	for _, s := range stats {
+		if s.ActionType == "tiny.action" {
+			t.Errorf("tiny.action (total=3) should be excluded by HAVING COUNT(*) >= 5")
+		}
+	}
+
+	// First entry must be cmd.exec (highest failure rate).
+	first := stats[0]
+	if first.ActionType != "cmd.exec" {
+		t.Errorf("first action: got %q, want cmd.exec", first.ActionType)
+	}
+	if first.Total != 6 {
+		t.Errorf("cmd.exec total: got %d, want 6", first.Total)
+	}
+	if first.Failure != 4 {
+		t.Errorf("cmd.exec failure: got %d, want 4", first.Failure)
+	}
+	if first.Success != 2 {
+		t.Errorf("cmd.exec success: got %d, want 2", first.Success)
+	}
+	wantRate := 4.0 / 6.0 * 100
+	if first.FailureRate < wantRate-0.001 || first.FailureRate > wantRate+0.001 {
+		t.Errorf("cmd.exec failure_rate: got %.4f, want %.4f", first.FailureRate, wantRate)
+	}
+
+	// Second entry must be file.read (0% failure rate).
+	second := stats[1]
+	if second.ActionType != "file.read" {
+		t.Errorf("second action: got %q, want file.read", second.ActionType)
+	}
+	if second.Total != 5 {
+		t.Errorf("file.read total: got %d, want 5", second.Total)
+	}
+	if second.Failure != 0 {
+		t.Errorf("file.read failure: got %d, want 0", second.Failure)
+	}
+	if second.FailureRate != 0 {
+		t.Errorf("file.read failure_rate: got %f, want 0", second.FailureRate)
+	}
+
+	// Test since filter: only include receipts from 2026-05-01T11:00:00Z onward.
+	// cmd.exec: 2 successes in that window (the 4 failures are before 11:00).
+	// file.read: 5 receipts (12:xx) — still included, still 5 total.
+	// => cmd.exec total < 5 after the window cut, so it should be excluded.
+	since := "2026-05-01T11:00:00Z"
+	sinceStats, err := reader.ActionStats(&since)
+	if err != nil {
+		t.Fatalf("ActionStats with since: %v", err)
+	}
+	// Only file.read survives (cmd.exec has only 2 receipts in the window).
+	if len(sinceStats) != 1 {
+		t.Fatalf("since filter: got %d entries, want 1", len(sinceStats))
+	}
+	if sinceStats[0].ActionType != "file.read" {
+		t.Errorf("since filter first: got %q, want file.read", sinceStats[0].ActionType)
+	}
 }
 
 func TestReader_IsReadOnly(t *testing.T) {

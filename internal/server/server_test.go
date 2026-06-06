@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -465,6 +466,148 @@ func TestChainVerifyEndpoint_EmptyChain(t *testing.T) {
 	}
 	if result.Length != 0 {
 		t.Errorf("got length %d, want 0", result.Length)
+	}
+}
+
+func TestActionStatsEndpoint(t *testing.T) {
+	// seedTestDB seeds 3 receipts: filesystem.file.read (success), filesystem.file.modify
+	// (success), communication.email.send (failure). None of these action types has >= 5
+	// receipts, so the endpoint should return an empty actions list.
+	srv := setupServer(t)
+
+	t.Run("200 with empty actions (all types below minimum threshold)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/actions", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200", w.Code)
+		}
+
+		var resp struct {
+			Actions []store.ActionStat `json:"actions"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		// All 3 action types have only 1 receipt each — all excluded by HAVING >= 5.
+		if resp.Actions == nil {
+			t.Error("actions must be [] not null")
+		}
+		if len(resp.Actions) != 0 {
+			t.Errorf("got %d actions, want 0 (all below 5-receipt threshold)", len(resp.Actions))
+		}
+	})
+
+	t.Run("400 on invalid range param", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/actions?range=notaduration", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if resp["error"] == "" {
+			t.Error("expected error message in response body")
+		}
+	})
+
+	t.Run("200 with valid range param", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/actions?range=24h", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("got status %d, want 200", w.Code)
+		}
+	})
+}
+
+func TestActionStatsEndpoint_WithSufficientData(t *testing.T) {
+	// Seed a database with enough receipts (>=5) for one action type so that the
+	// endpoint returns populated action stats.
+	dbPath := t.TempDir() + "/action-stats-server-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Insert 5 receipts for "cmd.exec" (3 failure, 2 success) and 2 for "file.read"
+	// (below threshold).
+	for i := 0; i < 3; i++ {
+		r := makeReceipt(
+			fmt.Sprintf("urn:receipt:exec-fail-%d", i), "chain-cmd", i+1,
+			"cmd.exec", receipt.RiskHigh, receipt.StatusFailure,
+			fmt.Sprintf("2026-05-01T10:%02d:00Z", i), nil,
+		)
+		h, _ := receipt.HashReceipt(r)
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		r := makeReceipt(
+			fmt.Sprintf("urn:receipt:exec-ok-%d", i), "chain-cmd", i+4,
+			"cmd.exec", receipt.RiskHigh, receipt.StatusSuccess,
+			fmt.Sprintf("2026-05-01T11:%02d:00Z", i), nil,
+		)
+		h, _ := receipt.HashReceipt(r)
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		r := makeReceipt(
+			fmt.Sprintf("urn:receipt:file-%d", i), "chain-file", i+1,
+			"file.read", receipt.RiskLow, receipt.StatusSuccess,
+			fmt.Sprintf("2026-05-01T12:%02d:00Z", i), nil,
+		)
+		h, _ := receipt.HashReceipt(r)
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	srv := New(reader, Config{})
+
+	req := httptest.NewRequest("GET", "/api/stats/actions", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+
+	var resp struct {
+		Actions []store.ActionStat `json:"actions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Only cmd.exec (5 receipts) must appear; file.read (2) must be excluded.
+	if len(resp.Actions) != 1 {
+		t.Fatalf("got %d actions, want 1", len(resp.Actions))
+	}
+	if resp.Actions[0].ActionType != "cmd.exec" {
+		t.Errorf("got action_type %q, want cmd.exec", resp.Actions[0].ActionType)
+	}
+	if resp.Actions[0].Total != 5 {
+		t.Errorf("got total %d, want 5", resp.Actions[0].Total)
+	}
+	if resp.Actions[0].Failure != 3 {
+		t.Errorf("got failure %d, want 3", resp.Actions[0].Failure)
 	}
 }
 
