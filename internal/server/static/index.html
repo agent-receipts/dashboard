@@ -1047,7 +1047,9 @@
     function renderServerActivityChart(servers) {
       const el = document.getElementById('server-activity-chart');
       if (!el) return;
-      const top = servers.filter(s => s.server !== 'Unknown').slice(0, 5);
+      // Exclude the missing-server bucket (server === '') from the named-server
+      // activity summary; a real server named "Unknown" is kept.
+      const top = servers.filter(s => s.server !== '').slice(0, 5);
       if (top.length === 0) {
         el.innerHTML = '<div class="muted text-sm">No data</div>';
         return;
@@ -1097,7 +1099,9 @@
       }
 
       const rows = servers.map((srv, idx) => {
-        const isUnknown = srv.server === 'Unknown';
+        // The missing-server bucket arrives with an empty server string and is
+        // displayed as "Unknown"; a real server named "Unknown" is not special.
+        const isUnknown = srv.server === '';
         const expandId = 'srv-expand-' + idx;
         const rateBar = failureRateBarHTML(srv.failure_rate);
         const toolRows = (srv.tools || []).map(tool => {
@@ -1107,8 +1111,8 @@
             : '<span class="subtle">—</span>';
           // Carry server/tool via data-* attributes (the repo idiom) rather
           // than inlining JSON into the onclick — inlined double quotes would
-          // terminate the attribute. For "Unknown", server is left empty so
-          // only the tool filter is applied.
+          // terminate the attribute. For the missing-server bucket, server is
+          // left empty so only the tool filter is applied.
           const toolServerAttr = isUnknown ? '' : srv.server;
           return `
             <tr class="srv-tool-row" style="cursor:pointer;" data-server="${escapeAttr(toolServerAttr)}" data-tool="${escapeAttr(toolName)}" onclick="filterByTool(this.dataset.server, this.dataset.tool)">

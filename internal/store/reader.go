@@ -108,11 +108,16 @@ type ToolStat struct {
 
 // ServerStat holds per-server aggregates with a breakdown by tool.
 type ServerStat struct {
+	// Server is the target.system value. An empty string denotes the
+	// missing-server bucket (receipts with no target.system); the frontend
+	// renders it as "Unknown". Keeping it empty rather than the literal string
+	// "Unknown" avoids colliding with a real server named "Unknown".
 	Server      string     `json:"server"`
 	Tools       []ToolStat `json:"tools"`
 	Total       int        `json:"total"`
 	Failure     int        `json:"failure"`
-	FailureRate float64    `json:"failure_rate"`
+	// FailureRate is the fraction of receipts that failed, in [0,1].
+	FailureRate float64 `json:"failure_rate"`
 }
 
 // Filter controls which receipts are returned by ListReceipts.
@@ -397,8 +402,8 @@ func (r *Reader) Stats() (Stats, error) {
 // ServerStats returns per-server, per-tool receipt counts and failure rates.
 // The optional since parameter (ISO-8601 inclusive) restricts results to
 // receipts at or after that timestamp; nil means all-time.
-// Rows whose extracted server value is empty are folded into an "Unknown" bucket
-// and placed after all named servers in the result slice.
+// Rows whose extracted server value is empty are grouped into a missing-server
+// bucket (Server == "") placed after all named servers in the result slice.
 func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 	var args []any
 	where := ""
@@ -469,7 +474,9 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 	}
 
 	// Compute per-server failure rate and split named vs the missing-server
-	// bucket (keyed by ""), which is relabelled "Unknown" for display.
+	// bucket (keyed by ""). The missing bucket keeps an empty server string in
+	// the response so a real server literally named "Unknown" stays
+	// distinguishable; the frontend renders "" as the "Unknown" label.
 	var named []ServerStat
 	var unknown *ServerStat
 	for _, key := range serverOrder {
@@ -478,7 +485,6 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 			st.FailureRate = float64(st.Failure) / float64(st.Total)
 		}
 		if key == "" {
-			st.Server = "Unknown"
 			unknown = st
 		} else {
 			named = append(named, *st)

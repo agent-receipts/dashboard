@@ -493,7 +493,7 @@ func TestServerStats(t *testing.T) {
 
 	// Server A: 3 calls (2 success, 1 failure), 2 tools.
 	// Server B: 2 calls (1 success, 1 failure), 1 tool.
-	// No server: 1 call (1 failure) — should become "Unknown".
+	// No server: 1 call (1 failure) — the missing-server bucket (Server == "").
 	receipts := []receipt.AgentReceipt{
 		makeReceiptWithTool("urn:receipt:ss1", "chain-ss", 1, "tool.call", "tool_a1", "server-a", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
 		makeReceiptWithTool("urn:receipt:ss2", "chain-ss", 2, "tool.call", "tool_a1", "server-a", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
@@ -572,18 +572,18 @@ func TestServerStats(t *testing.T) {
 		t.Errorf("server-b failure_rate = %f, want 0.5", stats[1].FailureRate)
 	}
 
-	// Unknown must be last.
-	if stats[2].Server != "Unknown" {
-		t.Errorf("stats[2].Server = %q, want Unknown", stats[2].Server)
+	// The missing-server bucket (Server == "") must be last.
+	if stats[2].Server != "" {
+		t.Errorf("stats[2].Server = %q, want \"\" (missing-server bucket)", stats[2].Server)
 	}
 	if stats[2].Total != 1 {
-		t.Errorf("Unknown total = %d, want 1", stats[2].Total)
+		t.Errorf("missing-server total = %d, want 1", stats[2].Total)
 	}
 	if stats[2].Failure != 1 {
-		t.Errorf("Unknown failure = %d, want 1", stats[2].Failure)
+		t.Errorf("missing-server failure = %d, want 1", stats[2].Failure)
 	}
 	if diff := stats[2].FailureRate - 1.0; diff < -1e-9 || diff > 1e-9 {
-		t.Errorf("Unknown failure_rate = %f, want 1.0", stats[2].FailureRate)
+		t.Errorf("missing-server failure_rate = %f, want 1.0", stats[2].FailureRate)
 	}
 
 	// Since filter — only receipts from 10:03 onward: ss4 (server-b success), ss5 (server-b failure), ss6 (unknown failure).
@@ -592,7 +592,7 @@ func TestServerStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServerStats since: %v", err)
 	}
-	// 2 servers: server-b (2) and Unknown (1).
+	// 2 servers: server-b (2) and the missing-server bucket (1).
 	if len(filtered) != 2 {
 		t.Fatalf("since filter: got %d servers, want 2: %+v", len(filtered), filtered)
 	}
@@ -602,13 +602,14 @@ func TestServerStats(t *testing.T) {
 	if filtered[0].Total != 2 {
 		t.Errorf("since filter server-b total = %d, want 2", filtered[0].Total)
 	}
-	if filtered[1].Server != "Unknown" {
-		t.Errorf("since filter stats[1].Server = %q, want Unknown", filtered[1].Server)
+	if filtered[1].Server != "" {
+		t.Errorf("since filter stats[1].Server = %q, want \"\" (missing-server bucket)", filtered[1].Server)
 	}
 }
 
-// A server literally named "Unknown" must not be merged into the
-// missing-server bucket (which is relabelled "Unknown" for display).
+// A server literally named "Unknown" must not be merged into the missing-server
+// bucket. The missing bucket is returned with an empty Server string; only the
+// frontend renders "" as the "Unknown" label.
 func TestServerStats_LiteralUnknownNotMerged(t *testing.T) {
 	dbPath := t.TempDir() + "/serverstats-unknown.db"
 	s, err := sdkstore.Open(dbPath)
@@ -645,31 +646,34 @@ func TestServerStats_LiteralUnknownNotMerged(t *testing.T) {
 		t.Fatalf("ServerStats: %v", err)
 	}
 
-	// Two distinct buckets, both displayed as "Unknown": the real server
-	// (2 receipts, 0 failures) and the missing-server bucket (1 failure).
+	// Two distinct buckets: the real server keeps Server == "Unknown"
+	// (2 receipts, 0 failures); the missing-server bucket keeps Server == ""
+	// (1 receipt, 1 failure). They must not be conflated.
 	if len(stats) != 2 {
 		t.Fatalf("got %d server groups, want 2 (real 'Unknown' must stay separate from missing): %+v", len(stats), stats)
 	}
-	var realTotal, missingFailure int
+	var foundReal, foundMissing bool
 	for _, st := range stats {
-		if st.Server != "Unknown" {
-			t.Errorf("unexpected server label %q, want Unknown", st.Server)
-		}
-		if st.Total == 2 {
-			realTotal = st.Total
-			if st.Failure != 0 {
-				t.Errorf("real Unknown server failure = %d, want 0", st.Failure)
+		switch st.Server {
+		case "Unknown":
+			foundReal = true
+			if st.Total != 2 || st.Failure != 0 {
+				t.Errorf("real 'Unknown' server = {total %d, failure %d}, want {2, 0}", st.Total, st.Failure)
 			}
-		}
-		if st.Total == 1 {
-			missingFailure = st.Failure
+		case "":
+			foundMissing = true
+			if st.Total != 1 || st.Failure != 1 {
+				t.Errorf("missing-server bucket = {total %d, failure %d}, want {1, 1}", st.Total, st.Failure)
+			}
+		default:
+			t.Errorf("unexpected server label %q", st.Server)
 		}
 	}
-	if realTotal != 2 {
-		t.Errorf("did not find the real 'Unknown' server bucket with total 2")
+	if !foundReal {
+		t.Error("did not find the real 'Unknown' server bucket (Server == \"Unknown\")")
 	}
-	if missingFailure != 1 {
-		t.Errorf("missing-server bucket failure = %d, want 1", missingFailure)
+	if !foundMissing {
+		t.Error("did not find the missing-server bucket (Server == \"\")")
 	}
 }
 
