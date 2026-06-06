@@ -807,6 +807,124 @@ func TestReader_Stats_EmptyStore(t *testing.T) {
 	}
 }
 
+func TestListReceiptsQ(t *testing.T) {
+	dbPath := t.TempDir() + "/q-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Receipts differ in action_type so we can search by a unique substring of
+	// their JSON, and in risk_level so we can combine Q with another filter.
+	recs := []receipt.AgentReceipt{
+		makeReceiptWithTool("urn:receipt:q1", "chain-q", 1, "filesystem.file.read", "read_file", "fs-server", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:q2", "chain-q", 2, "network.http.request", "http_get", "net-server", receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
+		makeReceiptWithTool("urn:receipt:q3", "chain-q", 3, "communication.email.send", "send_mail", "mail-server", receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:02:00Z"),
+	}
+	for _, r := range recs {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// A term matching a single receipt returns only that receipt.
+	rows, err := reader.ListReceipts(Filter{Q: strPtr("http_get")})
+	if err != nil {
+		t.Fatalf("list q=http_get: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("q=http_get: got %d rows, want 1", len(rows))
+	}
+	if rows[0].ID != "urn:receipt:q2" {
+		t.Errorf("q=http_get: got ID %q, want urn:receipt:q2", rows[0].ID)
+	}
+
+	// A pointer to empty string returns all rows (same as nil).
+	rowsAll, err := reader.ListReceipts(Filter{Q: strPtr("")})
+	if err != nil {
+		t.Fatalf("list q='': %v", err)
+	}
+	if len(rowsAll) != 3 {
+		t.Errorf("q='': got %d rows, want 3 (same as nil)", len(rowsAll))
+	}
+
+	// nil Q also returns all rows.
+	rowsNil, err := reader.ListReceipts(Filter{Q: nil})
+	if err != nil {
+		t.Fatalf("list q=nil: %v", err)
+	}
+	if len(rowsNil) != 3 {
+		t.Errorf("q=nil: got %d rows, want 3", len(rowsNil))
+	}
+
+	// Whitespace-only Q returns all rows (trimmed before matching).
+	rowsWS, err := reader.ListReceipts(Filter{Q: strPtr("   ")})
+	if err != nil {
+		t.Fatalf("list q=whitespace: %v", err)
+	}
+	if len(rowsWS) != 3 {
+		t.Errorf("q=whitespace: got %d rows, want 3", len(rowsWS))
+	}
+
+	// Q combined with another filter narrows to the intersection.
+	rows, err = reader.ListReceipts(Filter{Q: strPtr("mail"), RiskLevel: strPtr("high")})
+	if err != nil {
+		t.Fatalf("list q=mail + risk=high: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("q=mail+risk=high: got %d rows, want 1", len(rows))
+	}
+	if rows[0].ID != "urn:receipt:q3" {
+		t.Errorf("q=mail+risk=high: got ID %q, want urn:receipt:q3", rows[0].ID)
+	}
+
+	// A term with LIKE metacharacters (%) must be treated as literal, not as a
+	// wildcard. "100%" should match a receipt whose JSON contains the literal
+	// string "100%" and not all receipts.
+	rowsMeta, err := reader.ListReceipts(Filter{Q: strPtr("100%")})
+	if err != nil {
+		t.Fatalf("list q=100%%: %v", err)
+	}
+	if len(rowsMeta) != 0 {
+		t.Errorf("q='100%%': got %d rows, want 0 (percent must not act as wildcard)", len(rowsMeta))
+	}
+
+	// Similarly, underscore (_) in the term must be literal.
+	rowsUnderscore, err := reader.ListReceipts(Filter{Q: strPtr("q_")})
+	if err != nil {
+		t.Fatalf("list q=q_: %v", err)
+	}
+	// "q_" with a literal underscore would not match any action_type or tool_name
+	// in the seeded data (the chain_id is "chain-q", not "chain_q").
+	if len(rowsUnderscore) != 0 {
+		t.Errorf("q='q_': got %d rows, want 0 (underscore must not act as wildcard)", len(rowsUnderscore))
+	}
+
+	// Search is case-insensitive (SQLite LIKE folds ASCII case): an uppercase
+	// term matches lowercase JSON content.
+	rowsCase, err := reader.ListReceipts(Filter{Q: strPtr("EMAIL")})
+	if err != nil {
+		t.Fatalf("list q=EMAIL: %v", err)
+	}
+	if len(rowsCase) != 1 {
+		t.Fatalf("q=EMAIL: got %d rows, want 1 (case-insensitive match of communication.email.send)", len(rowsCase))
+	}
+	if rowsCase[0].ID != "urn:receipt:q3" {
+		t.Errorf("q=EMAIL: got ID %q, want urn:receipt:q3", rowsCase[0].ID)
+	}
+}
+
 // seedEmptyDB creates a temporary SQLite file with the receipts schema in
 // place but no rows — used to exercise empty-store paths like NULL MAX().
 func seedEmptyDB(t *testing.T) string {

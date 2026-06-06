@@ -639,6 +639,10 @@
     <div id="view-receipts" class="hidden">
       <div class="flex flex-wrap gap-3 mb-2">
         <div class="form-field">
+          <label class="form-label" for="filter-q">Search</label>
+          <input type="text" id="filter-q" placeholder="Search receipts…" oninput="debounceLoadReceipts()">
+        </div>
+        <div class="form-field">
           <label class="form-label" for="filter-risk">Risk</label>
           <select id="filter-risk" onchange="loadReceipts()">
             <option value="">All</option>
@@ -1245,10 +1249,12 @@
 
     function currentReceiptFilters() {
       const f = {};
+      const q      = document.getElementById('filter-q').value;
       const risk   = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
       const chain  = document.getElementById('filter-chain').value;
+      if (q)      f.q           = q;
       if (risk)   f.risk_level  = risk;
       if (status) f.status      = status;
       if (action) f.action_type = action;
@@ -1260,6 +1266,17 @@
       const filters = currentReceiptFilters();
       const params = new URLSearchParams(filters);
 
+      // Sync active q into the URL so the user can share or bookmark a search.
+      // Full filter URL-sync (risk, status, action, chain) is a possible follow-up.
+      const qVal = filters.q || '';
+      const url = new URL(location.href);
+      if (qVal) {
+        url.searchParams.set('q', qVal);
+      } else {
+        url.searchParams.delete('q');
+      }
+      history.replaceState(null, '', url.toString());
+
       renderFilterChips(filters);
       document.getElementById('receipts-table').innerHTML = skeletonRows(8);
       document.getElementById('match-count').textContent = '';
@@ -1270,7 +1287,7 @@
         const receipts = await fetchJSON('/api/receipts?' + params.toString());
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
-        renderMatchCount(receipts.length);
+        renderMatchCount(receipts.length, qVal);
         startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
         nav.setSelector('#receipts-table tbody tr');
       } catch (err) {
@@ -1280,13 +1297,14 @@
       }
     }
 
-    function renderMatchCount(n) {
+    function renderMatchCount(n, q) {
       const el = document.getElementById('match-count');
-      el.textContent = n === 1 ? '1 match' : `${n.toLocaleString()} matches`;
+      const noun = n === 1 ? '1 receipt' : `${n.toLocaleString()} receipts`;
+      el.textContent = q ? `${noun} matching '${q}'` : (n === 1 ? '1 match' : `${n.toLocaleString()} matches`);
     }
 
     function renderFilterChips(filters) {
-      const labels = { risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain' };
+      const labels = { q: 'search', risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain' };
       const entries = Object.entries(filters);
       const chips = entries.map(([k, v]) => `
         <span class="chip">
@@ -1302,13 +1320,13 @@
     }
 
     function clearFilter(key) {
-      const map = { risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain' };
+      const map = { q: 'filter-q', risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain' };
       const el = document.getElementById(map[key]);
       if (el) { el.value = ''; loadReceipts(); }
     }
 
     function clearAllFilters() {
-      ['filter-risk', 'filter-status', 'filter-action', 'filter-chain'].forEach(id => {
+      ['filter-q', 'filter-risk', 'filter-status', 'filter-action', 'filter-chain'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
@@ -2461,7 +2479,7 @@
       } else if (poller.activeView === 'receipts') {
         // Refresh match count when new rows arrive.
         const tableRows = tbody.rows.length;
-        renderMatchCount(tableRows);
+        renderMatchCount(tableRows, currentReceiptFilters().q || '');
       }
 
       showLiveToast(fresh.length);
@@ -2686,7 +2704,17 @@
     });
 
     // ---------- Boot ----------
-    loadPollConfig().then(loadOverview);
+    loadPollConfig().then(() => {
+      // If the URL contains ?q=<term>, pre-populate the search box and open
+      // the Receipts view with the term applied. Otherwise load the overview.
+      const initialQ = new URLSearchParams(location.search).get('q');
+      if (initialQ && initialQ.trim()) {
+        document.getElementById('filter-q').value = initialQ;
+        showView('receipts');
+      } else {
+        loadOverview();
+      }
+    });
     loadForensicStatus();
   </script>
 </body>
