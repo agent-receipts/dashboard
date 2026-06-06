@@ -1063,6 +1063,9 @@
         actionsSortAsc = false;
         actionsShowAll = false;
         renderActionsTable();
+        // Wire keyboard row navigation (j/k/Enter) for the Actions table,
+        // mirroring the receipts/chains views.
+        nav.setSelector('#actions-table-container tbody tr');
       } catch (err) {
         showError('Failed to load actions: ' + err.message);
         document.getElementById('actions-table-container').innerHTML =
@@ -1105,6 +1108,7 @@
             <div class="empty-title">No action data</div>
             <div class="empty-hint">Action types appear here once they have at least 5 receipts.</div>
           </div>`;
+        nav.refresh();
         return;
       }
 
@@ -1157,6 +1161,9 @@
           </div>
           ${showAllToggle}
         </div>`;
+      // Re-renders (sort / show-all) replace the table DOM, so refresh the
+      // keyboard-nav row list to keep j/k/Enter targeting the current rows.
+      nav.refresh();
     }
 
     function toggleActionsSort(key) {
