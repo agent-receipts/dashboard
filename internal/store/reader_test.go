@@ -916,8 +916,8 @@ func TestActionStats(t *testing.T) {
 	if first.Success != 2 {
 		t.Errorf("cmd.exec success: got %d, want 2", first.Success)
 	}
-	wantRate := 4.0 / 6.0 * 100
-	if first.FailureRate < wantRate-0.001 || first.FailureRate > wantRate+0.001 {
+	wantRate := 4.0 / 6.0 // failure_rate is a 0–1 ratio
+	if first.FailureRate < wantRate-0.0001 || first.FailureRate > wantRate+0.0001 {
 		t.Errorf("cmd.exec failure_rate: got %.4f, want %.4f", first.FailureRate, wantRate)
 	}
 

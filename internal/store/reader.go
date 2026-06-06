@@ -370,10 +370,12 @@ func (r *Reader) Stats() (Stats, error) {
 
 // ActionStat holds aggregate statistics for a single action type.
 type ActionStat struct {
-	ActionType  string  `json:"action_type"`
-	Total       int     `json:"total"`
-	Success     int     `json:"success"`
-	Failure     int     `json:"failure"`
+	ActionType string `json:"action_type"`
+	Total      int    `json:"total"`
+	Success    int    `json:"success"`
+	Failure    int    `json:"failure"`
+	// FailureRate is the fraction of receipts that failed, in [0,1] (e.g. 0.05
+	// is 5%). Matches the ratio convention used by ServerStats.
 	FailureRate float64 `json:"failure_rate"`
 }
 
@@ -420,7 +422,7 @@ func (r *Reader) ActionStats(since *string) ([]ActionStat, error) {
 			return nil, err
 		}
 		if s.Total > 0 {
-			s.FailureRate = float64(s.Failure) / float64(s.Total) * 100
+			s.FailureRate = float64(s.Failure) / float64(s.Total)
 		}
 		out = append(out, s)
 	}

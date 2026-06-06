@@ -1015,8 +1015,8 @@
     }
 
     // Render up to 5 action types as horizontal bars in the Overview summary card.
-    // Bar width is proportional to failure_rate (0–100%). Row click navigates to
-    // the Actions tab, mirroring the "View all →" button.
+    // failure_rate is a 0–1 ratio; the bar width and label render it as a percent.
+    // Each row navigates to the Actions tab (mouse + keyboard), mirroring "View all →".
     function renderTopActionsChart(actions) {
       const el = document.getElementById('top-actions-chart');
       if (!el) return;
@@ -1025,13 +1025,15 @@
         el.innerHTML = '<div class="muted text-sm">No data — action types with fewer than 5 receipts are excluded.</div>';
         return;
       }
-      el.innerHTML = top5.map(a => `
-        <div class="bar-row" style="cursor:pointer;" onclick="showView('actions')" title="${escapeAttr(a.action_type)} — ${a.failure_rate.toFixed(1)}% failure rate">
+      el.innerHTML = top5.map(a => {
+        const pct = (a.failure_rate * 100);
+        return `
+        <div class="bar-row" style="cursor:pointer;" role="button" tabindex="0" onclick="showView('actions')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showView('actions')}" title="${escapeAttr(a.action_type)} — ${pct.toFixed(1)}% failure rate" aria-label="${escapeAttr(a.action_type)}, ${pct.toFixed(1)}% failure rate. View all actions.">
           <span class="bar-label" style="width:160px;min-width:160px;" title="${escapeAttr(a.action_type)}"><span class="badge badge-failure" style="max-width:156px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(a.action_type)}</span></span>
-          <div class="bar-track"><div class="bar-fill bar-failure" style="width:${Math.min(a.failure_rate, 100)}%"></div></div>
-          <span class="bar-count">${a.failure_rate.toFixed(1)}%</span>
-        </div>
-      `).join('');
+          <div class="bar-track"><div class="bar-fill bar-failure" style="width:${Math.min(pct, 100)}%"></div></div>
+          <span class="bar-count">${pct.toFixed(1)}%</span>
+        </div>`;
+      }).join('');
     }
 
     // ---------- Actions tab ----------
@@ -1118,14 +1120,17 @@
       function thHTML(key, label) {
         const active = actionsSortKey === key;
         const arrow = active ? (actionsSortAsc ? ' ↑' : ' ↓') : '';
-        return `<th style="cursor:pointer;user-select:none;" onclick="toggleActionsSort('${key}')">${escapeHtml(label)}${arrow}</th>`;
+        const ariaSort = active ? (actionsSortAsc ? 'ascending' : 'descending') : 'none';
+        // Sort control is a real <button> so it is keyboard-focusable and
+        // operable with Enter/Space, not just mouse click on the <th>.
+        return `<th style="user-select:none;" aria-sort="${ariaSort}"><button type="button" onclick="toggleActionsSort('${key}')" style="background:none;border:none;color:inherit;font:inherit;cursor:pointer;padding:0;">${escapeHtml(label)}${arrow}</button></th>`;
       }
 
       const rows = visible.map(a => {
-        const pct = Math.min(a.failure_rate, 100);
+        const pct = Math.min(a.failure_rate * 100, 100); // failure_rate is a 0–1 ratio
         const rateBar = `<div style="display:inline-flex;align-items:center;gap:8px;width:100%;">
           <div class="bar-track" style="flex:1;"><div class="bar-fill bar-failure" style="width:${pct}%"></div></div>
-          <span style="width:40px;text-align:right;font-size:0.8rem;color:var(--muted);font-variant-numeric:tabular-nums;">${a.failure_rate.toFixed(1)}%</span>
+          <span style="width:40px;text-align:right;font-size:0.8rem;color:var(--muted);font-variant-numeric:tabular-nums;">${(a.failure_rate * 100).toFixed(1)}%</span>
         </div>`;
         return `
           <tr style="cursor:pointer;" data-action="${escapeAttr(a.action_type)}" onclick="filterToActionFailures(this.dataset.action)" title="Click to view failure receipts for ${escapeAttr(a.action_type)}">
