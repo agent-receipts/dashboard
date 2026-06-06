@@ -98,12 +98,31 @@ type GroupCount struct {
 	Count int    `json:"count"`
 }
 
+// ToolStat holds per-tool aggregates within a server group.
+type ToolStat struct {
+	ToolName    string  `json:"tool_name"`
+	Total       int     `json:"total"`
+	Failure     int     `json:"failure"`
+	FailureRate float64 `json:"failure_rate"`
+}
+
+// ServerStat holds per-server aggregates with a breakdown by tool.
+type ServerStat struct {
+	Server      string     `json:"server"`
+	Tools       []ToolStat `json:"tools"`
+	Total       int        `json:"total"`
+	Failure     int        `json:"failure"`
+	FailureRate float64    `json:"failure_rate"`
+}
+
 // Filter controls which receipts are returned by ListReceipts.
 type Filter struct {
 	ChainID    *string
 	ActionType *string
 	RiskLevel  *string
 	Status     *string
+	Server     *string // target.system value (exact match)
+	ToolName   *string // tool_name column (exact match)
 	After      *string // ISO 8601 timestamp, inclusive
 	Before     *string // ISO 8601 timestamp, inclusive
 	Since      *string // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
@@ -180,6 +199,14 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	if f.Status != nil {
 		conds = append(conds, "status = ?")
 		args = append(args, *f.Status)
+	}
+	if f.ToolName != nil {
+		conds = append(conds, "tool_name = ?")
+		args = append(args, *f.ToolName)
+	}
+	if f.Server != nil {
+		conds = append(conds, "json_extract(receipt_json, '$.credentialSubject.action.target.system') = ?")
+		args = append(args, *f.Server)
 	}
 	if f.After != nil {
 		conds = append(conds, "timestamp >= ?")
@@ -365,6 +392,129 @@ func (r *Reader) Stats() (Stats, error) {
 	}
 
 	return st, nil
+}
+
+// ServerStats returns per-server, per-tool receipt counts and failure rates.
+// The optional since parameter (ISO-8601 inclusive) restricts results to
+// receipts at or after that timestamp; nil means all-time.
+// Rows whose extracted server value is empty are folded into an "Unknown" bucket
+// and placed after all named servers in the result slice.
+func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
+	var args []any
+	where := ""
+	if since != nil {
+		where = "WHERE timestamp >= ?"
+		args = append(args, *since)
+	}
+
+	// Group by both server and tool in one pass. We COALESCE empty/NULL values
+	// so Go sees a plain empty string rather than a SQL NULL.
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.system'), '') AS server,
+			COALESCE(tool_name, '') AS tool,
+			COUNT(*) AS total,
+			SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) AS failure
+		FROM receipts
+		%s
+		GROUP BY server, tool
+		ORDER BY total DESC, tool ASC
+	`, where)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type rawRow struct {
+		server  string
+		tool    string
+		total   int
+		failure int
+	}
+	serverMap := map[string]*ServerStat{}
+	var serverOrder []string // insertion order
+
+	for rows.Next() {
+		var rr rawRow
+		if err := rows.Scan(&rr.server, &rr.tool, &rr.total, &rr.failure); err != nil {
+			return nil, err
+		}
+		// Fold empty server into "Unknown" in Go, keeping the SQL GROUP BY clean.
+		server := rr.server
+		if server == "" {
+			server = "Unknown"
+		}
+		st, ok := serverMap[server]
+		if !ok {
+			st = &ServerStat{Server: server}
+			serverMap[server] = st
+			serverOrder = append(serverOrder, server)
+		}
+		rate := 0.0
+		if rr.total > 0 {
+			rate = float64(rr.failure) / float64(rr.total)
+		}
+		st.Tools = append(st.Tools, ToolStat{
+			ToolName:    rr.tool,
+			Total:       rr.total,
+			Failure:     rr.failure,
+			FailureRate: rate,
+		})
+		st.Total += rr.total
+		st.Failure += rr.failure
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Compute per-server failure rate and split named vs Unknown.
+	var named []ServerStat
+	var unknown *ServerStat
+	for _, name := range serverOrder {
+		st := serverMap[name]
+		if st.Total > 0 {
+			st.FailureRate = float64(st.Failure) / float64(st.Total)
+		}
+		if name == "Unknown" {
+			unknown = st
+		} else {
+			named = append(named, *st)
+		}
+	}
+
+	// Sort named servers DESC by total; insertion sort is fine at dashboard scale.
+	for i := 1; i < len(named); i++ {
+		for j := i; j > 0 && named[j].Total > named[j-1].Total; j-- {
+			named[j], named[j-1] = named[j-1], named[j]
+		}
+	}
+
+	// Sort each server's tools DESC by total, tie-break tool_name ASC.
+	sortTools := func(tools []ToolStat) {
+		for i := 1; i < len(tools); i++ {
+			for j := i; j > 0; j-- {
+				a, b := tools[j-1], tools[j]
+				less := a.Total < b.Total || (a.Total == b.Total && a.ToolName > b.ToolName)
+				if less {
+					tools[j-1], tools[j] = tools[j], tools[j-1]
+				} else {
+					break
+				}
+			}
+		}
+	}
+	for i := range named {
+		sortTools(named[i].Tools)
+	}
+
+	out := named
+	if unknown != nil {
+		sortTools(unknown.Tools)
+		out = append(out, *unknown)
+	}
+	return out, nil
 }
 
 // Close closes the database connection.

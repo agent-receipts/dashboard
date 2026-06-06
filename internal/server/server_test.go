@@ -468,6 +468,214 @@ func TestChainVerifyEndpoint_EmptyChain(t *testing.T) {
 	}
 }
 
+func makeReceiptWithTool(id, chainID string, seq int, actionType, toolName, server string, risk receipt.RiskLevel, status receipt.OutcomeStatus, ts string) receipt.AgentReceipt {
+	ar := makeReceipt(id, chainID, seq, actionType, risk, status, ts, nil)
+	ar.CredentialSubject.Action.ToolName = toolName
+	if server != "" {
+		ar.CredentialSubject.Action.Target = &receipt.ActionTarget{System: server}
+	}
+	return ar
+}
+
+func setupServerWithTools(t *testing.T) *Server {
+	t.Helper()
+	dbPath := t.TempDir() + "/tools-receipts.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceiptWithTool("urn:receipt:st1", "chain-st", 1, "tool.call", "read_file", "server-a", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:st2", "chain-st", 2, "tool.call", "read_file", "server-a", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:01:00Z"),
+		makeReceiptWithTool("urn:receipt:st3", "chain-st", 3, "tool.call", "write_file", "server-b", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z"),
+	}
+	for _, r := range recs {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return New(reader, Config{})
+}
+
+func TestServerStatsEndpoint(t *testing.T) {
+	srv := setupServerWithTools(t)
+	req := httptest.NewRequest("GET", "/api/stats/servers", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Servers []store.ServerStat `json:"servers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// 2 named servers: server-a (2 receipts), server-b (1 receipt).
+	if len(body.Servers) != 2 {
+		t.Fatalf("got %d servers, want 2: %+v", len(body.Servers), body.Servers)
+	}
+	if body.Servers[0].Server != "server-a" {
+		t.Errorf("servers[0].Server = %q, want server-a", body.Servers[0].Server)
+	}
+	if body.Servers[0].Total != 2 {
+		t.Errorf("server-a total = %d, want 2", body.Servers[0].Total)
+	}
+	if body.Servers[0].Failure != 1 {
+		t.Errorf("server-a failure = %d, want 1", body.Servers[0].Failure)
+	}
+	if len(body.Servers[0].Tools) != 1 {
+		t.Errorf("server-a tools count = %d, want 1", len(body.Servers[0].Tools))
+	}
+}
+
+func TestServerStatsEndpoint_EmptySlice(t *testing.T) {
+	// An empty store must return {"servers":[]} not {"servers":null}.
+	dbPath := t.TempDir() + "/empty-stats.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	s.Close()
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	srv := New(reader, Config{})
+
+	req := httptest.NewRequest("GET", "/api/stats/servers", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(body["servers"]) != "[]" {
+		t.Errorf("empty store: servers = %s, want []", body["servers"])
+	}
+}
+
+func TestServerStatsEndpoint_InvalidRange(t *testing.T) {
+	srv := setupServer(t)
+	req := httptest.NewRequest("GET", "/api/stats/servers?range=notaduration", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got status %d, want 400", w.Code)
+	}
+}
+
+func TestServerStatsEndpoint_ValidRange(t *testing.T) {
+	srv := setupServerWithTools(t)
+	req := httptest.NewRequest("GET", "/api/stats/servers?range=24h", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var body struct {
+		Servers []store.ServerStat `json:"servers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// All receipts are in the past (2026) so they won't be in a 24h window
+	// relative to the test's wall clock. We just check the shape is valid.
+	if body.Servers == nil {
+		t.Error("servers must not be nil (empty slice expected)")
+	}
+}
+
+func TestReceiptsEndpoint_FilterByServer(t *testing.T) {
+	srv := setupServerWithTools(t)
+	req := httptest.NewRequest("GET", "/api/receipts?server=server-a", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("got %d rows for server=server-a, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.Server != "server-a" {
+			t.Errorf("row server = %q, want server-a", row.Server)
+		}
+	}
+}
+
+func TestReceiptsEndpoint_FilterByToolName(t *testing.T) {
+	srv := setupServerWithTools(t)
+	req := httptest.NewRequest("GET", "/api/receipts?tool_name=write_file", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows for tool_name=write_file, want 1", len(rows))
+	}
+	if len(rows) == 1 && rows[0].ToolName != "write_file" {
+		t.Errorf("row tool_name = %q, want write_file", rows[0].ToolName)
+	}
+}
+
+func TestReceiptsEndpoint_FilterByServerAndTool(t *testing.T) {
+	srv := setupServerWithTools(t)
+	req := httptest.NewRequest("GET", "/api/receipts?server=server-a&tool_name=read_file", nil)
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("got %d rows for server-a+read_file, want 2", len(rows))
+	}
+}
+
 func TestIndexPage(t *testing.T) {
 	srv := setupServer(t)
 	req := httptest.NewRequest("GET", "/", nil)

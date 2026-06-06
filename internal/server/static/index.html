@@ -585,6 +585,7 @@
     <nav class="tab-bar">
       <button class="tab active" onclick="showView('overview')" id="tab-overview">Overview</button>
       <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
+      <button class="tab" onclick="showView('servers')" id="tab-servers">Servers</button>
       <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
     </nav>
   </header>
@@ -615,6 +616,14 @@
           <h3 class="text-sm font-medium muted mb-3">Action distribution</h3>
           <div id="action-chart" class="space-y-2"></div>
         </div>
+      </div>
+
+      <div class="card p-4" id="server-activity-card">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium muted">Server activity</h3>
+          <button class="text-xs accent" onclick="showView('servers')" style="background:none;border:none;cursor:pointer;">View all →</button>
+        </div>
+        <div id="server-activity-chart"></div>
       </div>
 
       <div class="card p-4">
@@ -656,6 +665,14 @@
           <label class="form-label" for="filter-chain">Chain ID</label>
           <input type="text" id="filter-chain" placeholder="urn:chain:…" oninput="debounceLoadReceipts()">
         </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-server">Server</label>
+          <input type="text" id="filter-server" placeholder="mcp.github" oninput="debounceLoadReceipts()">
+        </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-tool">Tool</label>
+          <input type="text" id="filter-tool" placeholder="list_pull_requests" oninput="debounceLoadReceipts()">
+        </div>
       </div>
 
       <div class="filter-bar-meta">
@@ -664,6 +681,11 @@
       </div>
 
       <div id="receipts-table"></div>
+    </div>
+
+    <!-- Servers view -->
+    <div id="view-servers" class="hidden">
+      <div id="servers-table"></div>
     </div>
 
     <!-- Chains view -->
@@ -825,7 +847,8 @@
       stopPolling();
       if (view === 'overview') loadOverview();
       if (view === 'receipts') loadReceipts();
-      if (view === 'chains') loadChains();
+      if (view === 'servers')  loadServers();
+      if (view === 'chains')   loadChains();
     }
 
     // ---------- Header context ----------
@@ -856,6 +879,7 @@
     async function loadOverview() {
       const gen = ++poller.generation;
       renderStatsSkeleton();
+      renderServerActivitySkeleton();
       renderRecentSkeleton();
       try {
         const stats = await fetchJSON('/api/stats');
@@ -872,6 +896,18 @@
         // Wire keyboard nav after startPolling so the j/k/Enter row list is
         // initialised even though stopPolling() cleared activeView above.
         nav.setSelector('#recent-receipts tbody tr');
+
+        // The server-activity card is non-essential: load it separately and
+        // isolate failures so a /api/stats/servers error can't take down
+        // recent-receipts polling or keyboard nav.
+        try {
+          const serverData = await fetchJSON('/api/stats/servers');
+          if (gen !== poller.generation) return;
+          renderServerActivityChart(serverData.servers || []);
+        } catch (err) {
+          console.warn('server activity summary:', err);
+          renderServerActivityChart([]);
+        }
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
       }
@@ -1003,6 +1039,165 @@
       document.getElementById('recent-receipts').innerHTML = skeletonRows(6);
     }
 
+    function renderServerActivitySkeleton() {
+      const el = document.getElementById('server-activity-chart');
+      if (el) el.innerHTML = skeletonBars(4);
+    }
+
+    function renderServerActivityChart(servers) {
+      const el = document.getElementById('server-activity-chart');
+      if (!el) return;
+      const top = servers.filter(s => s.server !== 'Unknown').slice(0, 5);
+      if (top.length === 0) {
+        el.innerHTML = '<div class="muted text-sm">No data</div>';
+        return;
+      }
+      const maxTotal = Math.max(...top.map(s => s.total), 1);
+      el.innerHTML = top.map(s => `
+        <div class="bar-row">
+          <span class="bar-label" style="width:120px;min-width:120px;" title="${escapeAttr(s.server)}"><span class="badge" style="max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(s.server)}</span></span>
+          <div class="bar-track"><div class="bar-fill bar-action" style="width:${(s.total / maxTotal * 100)}%"></div></div>
+          <span class="bar-count">${s.total}</span>
+        </div>
+      `).join('');
+    }
+
+    // ---------- Servers view ----------
+    async function loadServers() {
+      const gen = ++poller.generation;
+      const container = document.getElementById('servers-table');
+      container.innerHTML = `
+        <div class="card p-4">
+          <div class="space-y-2">${skeletonBars(5)}</div>
+        </div>
+      `;
+      try {
+        const data = await fetchJSON('/api/stats/servers');
+        if (gen !== poller.generation) return;
+        renderServersTable(data.servers || []);
+      } catch (err) {
+        showError('Failed to load servers: ' + err.message);
+        container.innerHTML = '<div class="empty-state"><div class="empty-title">Could not load servers</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    function renderServersTable(servers) {
+      const container = document.getElementById('servers-table');
+      if (!servers || servers.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-title">No server data yet</div>
+            <div class="empty-hint">Server activity appears here once receipts with a target system are stored.</div>
+          </div>
+        `;
+        return;
+      }
+
+      const rows = servers.map((srv, idx) => {
+        const isUnknown = srv.server === 'Unknown';
+        const expandId = 'srv-expand-' + idx;
+        const rateBar = failureRateBarHTML(srv.failure_rate);
+        const toolRows = (srv.tools || []).map(tool => {
+          const toolName = tool.tool_name || '';
+          const toolDisplay = toolName
+            ? escapeHtml(toolName)
+            : '<span class="subtle">—</span>';
+          // Carry server/tool via data-* attributes (the repo idiom) rather
+          // than inlining JSON into the onclick — inlined double quotes would
+          // terminate the attribute. For "Unknown", server is left empty so
+          // only the tool filter is applied.
+          const toolServerAttr = isUnknown ? '' : srv.server;
+          return `
+            <tr class="srv-tool-row" style="cursor:pointer;" data-server="${escapeAttr(toolServerAttr)}" data-tool="${escapeAttr(toolName)}" onclick="filterByTool(this.dataset.server, this.dataset.tool)">
+              <td style="padding:6px 12px 6px 40px;" class="font-mono text-xs">${toolDisplay}</td>
+              <td style="padding:6px 12px;" class="muted text-xs">${tool.total}</td>
+              <td style="padding:6px 12px;" class="muted text-xs">${tool.failure}</td>
+              <td style="padding:6px 12px;">${failureRateBarHTML(tool.failure_rate)}</td>
+            </tr>
+          `;
+        }).join('');
+
+        // "Unknown" collapsed by default; others collapsed too (expand on click).
+        const collapsed = true;
+        return `
+          <tr class="srv-server-row" style="cursor:pointer;" onclick="toggleServerRow('${escapeAttr(expandId)}', this)">
+            <td style="padding:8px 12px;">
+              <span class="expand-icon" style="display:inline-block;width:14px;color:var(--muted);font-size:0.75rem;transition:transform 0.15s;">▶</span>
+              ${isUnknown
+                ? '<span class="muted font-mono text-sm">Unknown</span>'
+                : `<span class="font-mono text-sm">${escapeHtml(srv.server)}</span>`}
+            </td>
+            <td style="padding:8px 12px;" class="muted text-sm">${srv.total}</td>
+            <td style="padding:8px 12px;" class="muted text-sm">${srv.failure}</td>
+            <td style="padding:8px 12px;min-width:160px;">${rateBar}</td>
+          </tr>
+          <tr id="${escapeAttr(expandId)}" class="hidden">
+            <td colspan="4" style="padding:0;">
+              <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                  <tr>
+                    <th style="padding:4px 12px 4px 40px;text-align:left;color:var(--muted);font-size:0.75rem;font-weight:500;">Tool</th>
+                    <th style="padding:4px 12px;text-align:left;color:var(--muted);font-size:0.75rem;font-weight:500;">Total</th>
+                    <th style="padding:4px 12px;text-align:left;color:var(--muted);font-size:0.75rem;font-weight:500;">Failures</th>
+                    <th style="padding:4px 12px;text-align:left;color:var(--muted);font-size:0.75rem;font-weight:500;">Failure rate</th>
+                  </tr>
+                </thead>
+                <tbody>${toolRows}</tbody>
+              </table>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll" style="max-height:calc(100vh - 180px);">
+            <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
+              <thead>
+                <tr>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Server</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Total</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Failures</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Failure rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function failureRateBarHTML(rate) {
+      const pct = Math.round((rate || 0) * 100);
+      const color = pct === 0 ? 'var(--risk-low)' : pct < 25 ? 'var(--risk-medium)' : 'var(--risk-high)';
+      return `
+        <div style="display:flex;align-items:center;gap:8px;min-width:120px;">
+          <div class="bar-track" style="flex:1;"><div class="bar-fill" style="width:${pct}%;background:${color};"></div></div>
+          <span style="width:36px;text-align:right;font-size:0.78rem;color:var(--muted);font-variant-numeric:tabular-nums;">${pct}%</span>
+        </div>
+      `;
+    }
+
+    function toggleServerRow(expandId, headerRow) {
+      const row = document.getElementById(expandId);
+      if (!row) return;
+      const icon = headerRow.querySelector('.expand-icon');
+      const hidden = row.classList.toggle('hidden');
+      if (icon) icon.style.transform = hidden ? '' : 'rotate(90deg)';
+    }
+
+    function filterByTool(server, toolName) {
+      const serverEl = document.getElementById('filter-server');
+      const toolEl   = document.getElementById('filter-tool');
+      // For "Unknown" group, don't set server filter (server is empty in DB).
+      if (serverEl) serverEl.value = server;
+      if (toolEl)   toolEl.value   = toolName;
+      showView('receipts');
+    }
+
     function skeletonBars(n) {
       return Array(n).fill(0).map(() => `
         <div class="bar-row">
@@ -1041,10 +1236,14 @@
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
       const chain  = document.getElementById('filter-chain').value;
+      const server = document.getElementById('filter-server').value;
+      const tool   = document.getElementById('filter-tool').value;
       if (risk)   f.risk_level  = risk;
       if (status) f.status      = status;
       if (action) f.action_type = action;
       if (chain)  f.chain_id    = chain;
+      if (server) f.server      = server;
+      if (tool)   f.tool_name   = tool;
       return f;
     }
 
@@ -1078,7 +1277,7 @@
     }
 
     function renderFilterChips(filters) {
-      const labels = { risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain' };
+      const labels = { risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain', server: 'server', tool_name: 'tool' };
       const entries = Object.entries(filters);
       const chips = entries.map(([k, v]) => `
         <span class="chip">
@@ -1094,13 +1293,13 @@
     }
 
     function clearFilter(key) {
-      const map = { risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain' };
+      const map = { risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain', server: 'filter-server', tool_name: 'filter-tool' };
       const el = document.getElementById(map[key]);
       if (el) { el.value = ''; loadReceipts(); }
     }
 
     function clearAllFilters() {
-      ['filter-risk', 'filter-status', 'filter-action', 'filter-chain'].forEach(id => {
+      ['filter-risk', 'filter-status', 'filter-action', 'filter-chain', 'filter-server', 'filter-tool'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });

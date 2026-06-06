@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/stats/servers", s.handleServerStats)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -167,6 +168,30 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
+	var since *string
+	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
+		d, err := time.ParseDuration(rangeStr)
+		if err != nil || d <= 0 {
+			writeError(w, http.StatusBadRequest, "range must be a valid Go duration (e.g. 24h)")
+			return
+		}
+		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
+		since = &t
+	}
+
+	stats, err := s.reader.ServerStats(since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server stats query failed")
+		log.Printf("server stats error: %v", err)
+		return
+	}
+	if stats == nil {
+		stats = []store.ServerStat{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"servers": stats})
+}
+
 func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.Filter{}
@@ -191,6 +216,12 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("since"); v != "" {
 		f.Since = &v
+	}
+	if v := q.Get("server"); v != "" {
+		f.Server = &v
+	}
+	if v := q.Get("tool_name"); v != "" {
+		f.ToolName = &v
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
