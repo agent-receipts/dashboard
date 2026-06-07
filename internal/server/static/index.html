@@ -911,15 +911,10 @@
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
 
-        // Seed polling from the full fetch, not the displayed slice.
-        startPolling('overview', 'recent-receipts', receipts, () => ({}));
-        // Wire keyboard nav after startPolling so the j/k/Enter row list is
-        // initialised even though stopPolling() cleared activeView above.
-        nav.setSelector('#recent-receipts tbody tr');
-
-        // The top-actions summary card is non-essential: load it after core
-        // overview is wired and isolate failures so a /api/stats/actions error
-        // can't take down recent-receipts polling or keyboard nav.
+        // Summary cards (non-essential, each isolated so a stats error can't
+        // break the rest of the overview). Load them BEFORE startPolling, which
+        // increments poller.generation — running them afterwards would make the
+        // gen guard below always bail, leaving the cards stuck on skeletons.
         try {
           const actionData = await fetchJSON('/api/stats/actions');
           if (gen !== poller.generation) return;
@@ -929,7 +924,6 @@
           renderTopActionsChart([]);
         }
 
-        // The server-activity card is likewise non-essential and isolated.
         try {
           const serverData = await fetchJSON('/api/stats/servers');
           if (gen !== poller.generation) return;
@@ -938,6 +932,12 @@
           console.warn('server activity summary:', err);
           renderServerActivityChart([]);
         }
+
+        // Seed polling from the full fetch, not the displayed slice.
+        startPolling('overview', 'recent-receipts', receipts, () => ({}));
+        // Wire keyboard nav after startPolling so the j/k/Enter row list is
+        // initialised even though stopPolling() cleared activeView above.
+        nav.setSelector('#recent-receipts tbody tr');
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
       }
