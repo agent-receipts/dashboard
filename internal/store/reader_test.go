@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
@@ -1036,7 +1037,7 @@ func TestReader_Stats(t *testing.T) {
 	}
 	defer r.Close()
 
-	stats, err := r.Stats()
+	stats, err := r.Stats(nil, nil)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -1092,7 +1093,7 @@ func TestReader_Stats_ByAction(t *testing.T) {
 	}
 	defer reader.Close()
 
-	stats, err := reader.Stats()
+	stats, err := reader.Stats(nil, nil)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -1120,7 +1121,7 @@ func TestReader_Stats_EmptyStore(t *testing.T) {
 	}
 	defer r.Close()
 
-	stats, err := r.Stats()
+	stats, err := r.Stats(nil, nil)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -1414,6 +1415,239 @@ func TestReader_IsReadOnly(t *testing.T) {
 		"urn:receipt:evil", "chain-x", 1, "test", "low", "success", "2026-01-01T00:00:00Z", "did:agent:x", "{}", "sha256:x")
 	if err == nil {
 		t.Fatal("expected write to fail on read-only connection")
+	}
+}
+
+// TestTimeseriesStats tests the TimeseriesStats method.
+func TestTimeseriesStats(t *testing.T) {
+	// Seed receipts across three hours with mixed status/risk.
+	// Hour 1 (10:00–10:59): 2 success/low, 1 failure/high
+	// Hour 2 (11:00–11:59): 1 success/medium
+	// Hour 3 (12:00–12:59): 0 receipts (empty bucket)
+	// to covers hour 4 (13:00) — so 4 buckets total.
+	dbPath := t.TempDir() + "/ts-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceipt("urn:receipt:ts1", "chain-ts", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-05-01T10:05:00Z", nil),
+		makeReceipt("urn:receipt:ts2", "chain-ts", 2, "filesystem.file.modify", receipt.RiskLow, receipt.StatusSuccess, "2026-05-01T10:30:00Z", nil),
+		makeReceipt("urn:receipt:ts3", "chain-ts", 3, "communication.email.send", receipt.RiskHigh, receipt.StatusFailure, "2026-05-01T10:50:00Z", nil),
+		makeReceipt("urn:receipt:ts4", "chain-ts", 4, "filesystem.file.read", receipt.RiskMedium, receipt.StatusSuccess, "2026-05-01T11:15:00Z", nil),
+	}
+	for _, r := range recs {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	from := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
+	bucket := time.Hour
+
+	buckets, err := reader.TimeseriesStats(from, to, bucket)
+	if err != nil {
+		t.Fatalf("TimeseriesStats: %v", err)
+	}
+
+	// Expect 3 buckets: 10:00, 11:00, 12:00 (to=13:00 is exclusive).
+	if len(buckets) != 3 {
+		t.Fatalf("got %d buckets, want 3; buckets: %+v", len(buckets), buckets)
+	}
+
+	// Bucket 0: 10:00 — 3 receipts (2 success/low, 1 failure/high).
+	b0 := buckets[0]
+	if b0.Ts != "2026-05-01T10:00:00Z" {
+		t.Errorf("bucket[0].Ts = %q, want 2026-05-01T10:00:00Z", b0.Ts)
+	}
+	if b0.Total != 3 {
+		t.Errorf("bucket[0].Total = %d, want 3", b0.Total)
+	}
+	if b0.ByStatus["success"] != 2 {
+		t.Errorf("bucket[0].ByStatus[success] = %d, want 2", b0.ByStatus["success"])
+	}
+	if b0.ByStatus["failure"] != 1 {
+		t.Errorf("bucket[0].ByStatus[failure] = %d, want 1", b0.ByStatus["failure"])
+	}
+	if b0.ByRisk["low"] != 2 {
+		t.Errorf("bucket[0].ByRisk[low] = %d, want 2", b0.ByRisk["low"])
+	}
+	if b0.ByRisk["high"] != 1 {
+		t.Errorf("bucket[0].ByRisk[high] = %d, want 1", b0.ByRisk["high"])
+	}
+
+	// Bucket 1: 11:00 — 1 receipt (1 success/medium).
+	b1 := buckets[1]
+	if b1.Ts != "2026-05-01T11:00:00Z" {
+		t.Errorf("bucket[1].Ts = %q, want 2026-05-01T11:00:00Z", b1.Ts)
+	}
+	if b1.Total != 1 {
+		t.Errorf("bucket[1].Total = %d, want 1", b1.Total)
+	}
+	if b1.ByStatus["success"] != 1 {
+		t.Errorf("bucket[1].ByStatus[success] = %d, want 1", b1.ByStatus["success"])
+	}
+	if b1.ByRisk["medium"] != 1 {
+		t.Errorf("bucket[1].ByRisk[medium] = %d, want 1", b1.ByRisk["medium"])
+	}
+
+	// Bucket 2: 12:00 — empty bucket.
+	b2 := buckets[2]
+	if b2.Ts != "2026-05-01T12:00:00Z" {
+		t.Errorf("bucket[2].Ts = %q, want 2026-05-01T12:00:00Z", b2.Ts)
+	}
+	if b2.Total != 0 {
+		t.Errorf("bucket[2].Total = %d, want 0 (empty bucket)", b2.Total)
+	}
+	if len(b2.ByStatus) != 0 {
+		t.Errorf("bucket[2].ByStatus = %v, want empty", b2.ByStatus)
+	}
+	if len(b2.ByRisk) != 0 {
+		t.Errorf("bucket[2].ByRisk = %v, want empty", b2.ByRisk)
+	}
+
+	t.Run("from-zero resolves to earliest receipt", func(t *testing.T) {
+		// Pass zero Time — should start from the earliest receipt timestamp.
+		toTs := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
+		bkts, err := reader.TimeseriesStats(time.Time{}, toTs, time.Hour)
+		if err != nil {
+			t.Fatalf("TimeseriesStats with zero from: %v", err)
+		}
+		// Earliest receipt is at 10:05 → floors to 10:00. So we should get 10:00, 11:00, 12:00.
+		if len(bkts) < 1 {
+			t.Fatalf("got %d buckets, want at least 1", len(bkts))
+		}
+		// First bucket must start at or before the first receipt.
+		if bkts[0].Ts > "2026-05-01T10:05:00Z" {
+			t.Errorf("first bucket Ts %q is after earliest receipt 10:05", bkts[0].Ts)
+		}
+		// Total across all buckets must equal 4.
+		total := 0
+		for _, b := range bkts {
+			total += b.Total
+		}
+		if total != 4 {
+			t.Errorf("all-time total across buckets = %d, want 4", total)
+		}
+	})
+
+	t.Run("empty store returns empty slice", func(t *testing.T) {
+		emptyPath := seedEmptyDB(t)
+		emptyReader, err := OpenReadOnly(emptyPath)
+		if err != nil {
+			t.Fatalf("open empty reader: %v", err)
+		}
+		defer emptyReader.Close()
+
+		bkts, err := emptyReader.TimeseriesStats(time.Time{}, time.Now(), time.Hour)
+		if err != nil {
+			t.Fatalf("TimeseriesStats on empty store: %v", err)
+		}
+		if len(bkts) != 0 {
+			t.Errorf("empty store: got %d buckets, want 0", len(bkts))
+		}
+	})
+
+	t.Run("too many buckets returns error", func(t *testing.T) {
+		// 3 years at 1-minute intervals → far exceeds 2000 buckets.
+		bigFrom := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+		bigTo := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		_, err := reader.TimeseriesStats(bigFrom, bigTo, time.Minute)
+		if err == nil {
+			t.Error("expected error for too many buckets, got nil")
+		}
+	})
+}
+
+// TestStatsWithRange tests the range-aware Stats method.
+func TestStatsWithRange(t *testing.T) {
+	// Seed: 3 receipts spread across two hours.
+	// 10:00 low/success, 10:01 medium/success, 11:00 high/failure
+	dbPath := t.TempDir() + "/stats-range-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceipt("urn:receipt:r1", "chain-r", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-06-01T10:00:00Z", nil),
+		makeReceipt("urn:receipt:r2", "chain-r", 2, "filesystem.file.modify", receipt.RiskMedium, receipt.StatusSuccess, "2026-06-01T10:01:00Z", nil),
+		makeReceipt("urn:receipt:r3", "chain-r", 3, "communication.email.send", receipt.RiskHigh, receipt.StatusFailure, "2026-06-01T11:00:00Z", nil),
+	}
+	for _, r := range recs {
+		hash, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, hash); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// nil/nil — all-time.
+	allTime, err := reader.Stats(nil, nil)
+	if err != nil {
+		t.Fatalf("Stats nil/nil: %v", err)
+	}
+	if allTime.Total != 3 {
+		t.Errorf("all-time total = %d, want 3", allTime.Total)
+	}
+
+	// after= cuts to the 11:00 receipt only.
+	after := "2026-06-01T11:00:00Z"
+	filtered, err := reader.Stats(&after, nil)
+	if err != nil {
+		t.Fatalf("Stats after: %v", err)
+	}
+	if filtered.Total != 1 {
+		t.Errorf("filtered total = %d, want 1", filtered.Total)
+	}
+	if len(filtered.ByStatus) != 1 {
+		t.Errorf("filtered by_status len = %d, want 1", len(filtered.ByStatus))
+	}
+	if filtered.ByStatus[0].Label != "failure" {
+		t.Errorf("filtered by_status[0].Label = %q, want failure", filtered.ByStatus[0].Label)
+	}
+	// ByRisk should only contain high.
+	riskMap := map[string]int{}
+	for _, gc := range filtered.ByRisk {
+		riskMap[gc.Label] = gc.Count
+	}
+	if riskMap["high"] != 1 {
+		t.Errorf("filtered by_risk[high] = %d, want 1", riskMap["high"])
+	}
+	if riskMap["low"] != 0 {
+		t.Errorf("filtered by_risk[low] = %d, want 0", riskMap["low"])
+	}
+
+	// before= cuts to the 10:00 and 10:01 receipts.
+	before := "2026-06-01T10:30:00Z"
+	beforeFiltered, err := reader.Stats(nil, &before)
+	if err != nil {
+		t.Fatalf("Stats before: %v", err)
+	}
+	if beforeFiltered.Total != 2 {
+		t.Errorf("before-filtered total = %d, want 2", beforeFiltered.Total)
 	}
 }
 
