@@ -937,8 +937,9 @@ func TestTimeseriesStatsEndpoint(t *testing.T) {
 		if len(resp.Buckets) != 3 {
 			t.Errorf("got %d buckets, want 3", len(resp.Buckets))
 		}
-		if resp.BucketDuration == "" {
-			t.Error("bucket_duration must not be empty")
+		// bucket_duration is rendered cleanly, not as "1h0m0s".
+		if resp.BucketDuration != "1h" {
+			t.Errorf("bucket_duration = %q, want \"1h\"", resp.BucketDuration)
 		}
 		if resp.RangeFrom == "" || resp.RangeTo == "" {
 			t.Error("range_from and range_to must not be empty")
@@ -946,6 +947,26 @@ func TestTimeseriesStatsEndpoint(t *testing.T) {
 		// Bucket[0] should have 2 receipts (10:00 and 10:30).
 		if len(resp.Buckets) >= 1 && resp.Buckets[0].Total != 2 {
 			t.Errorf("bucket[0].Total = %d, want 2", resp.Buckets[0].Total)
+		}
+	})
+
+	t.Run("to= alone is honored without from", func(t *testing.T) {
+		// from omitted → earliest receipt; to= must still bound the upper edge
+		// rather than defaulting to now.
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?to=2026-04-01T11:00:00Z", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			RangeTo string `json:"range_to"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.RangeTo != "2026-04-01T11:00:00Z" {
+			t.Errorf("range_to = %q, want 2026-04-01T11:00:00Z (to must be honored without from)", resp.RangeTo)
 		}
 	})
 

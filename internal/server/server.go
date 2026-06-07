@@ -192,6 +192,25 @@ func parseFlexibleDuration(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
+// formatBucketDuration renders a bucket duration without the redundant zero
+// units time.Duration.String() emits (e.g. "1h" not "1h0m0s", "1d" not "24h0m0s").
+func formatBucketDuration(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "0s"
+	case d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
+	default:
+		return d.String()
+	}
+}
+
 // autoBucket selects a sensible bucket duration for the given window duration.
 // Thresholds: ≤2h → 5m, ≤24h → 1h, ≤7d → 6h, else → 1d.
 func autoBucket(window time.Duration) time.Duration {
@@ -226,13 +245,17 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		from = now.Add(-d)
-	} else if fromStr != "" {
-		t, err := time.Parse(time.RFC3339, fromStr)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "from must be an ISO-8601 / RFC3339 timestamp")
-			return
+	} else {
+		// from and to are honoured independently: `to=` alone bounds the upper
+		// edge while from stays zero (earliest receipt); `from=` alone runs to now.
+		if fromStr != "" {
+			t, err := time.Parse(time.RFC3339, fromStr)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "from must be an ISO-8601 / RFC3339 timestamp")
+				return
+			}
+			from = t
 		}
-		from = t
 		if toStr != "" {
 			t2, err := time.Parse(time.RFC3339, toStr)
 			if err != nil {
@@ -293,7 +316,7 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"buckets":         buckets,
-		"bucket_duration": bucket.String(),
+		"bucket_duration": formatBucketDuration(bucket),
 		"range_from":      rangeFrom,
 		"range_to":        to.UTC().Format(time.RFC3339),
 	})

@@ -885,8 +885,11 @@
     // /api/stats/timeseries with the active range.
     function overviewRangeParams() {
       const durationMs = OVERVIEW_RANGE_DURATIONS[overviewRange];
+      // Second-resolution RFC3339 to match the backend's timestamps (which it
+      // compares lexicographically) — millisecond precision could skew the
+      // boundary within a second.
       const after = durationMs != null
-        ? new Date(Date.now() - durationMs).toISOString()
+        ? new Date(Date.now() - durationMs).toISOString().replace(/\.\d{3}Z$/, 'Z')
         : null;
       return { preset: overviewRange, after };
     }
