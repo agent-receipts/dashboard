@@ -540,6 +540,35 @@
     .shortcut-keys { display: inline-flex; gap: 4px; }
     .shortcut-desc { color: var(--muted); font-size: 0.85rem; }
 
+    /* ---------- Range picker ---------- */
+    .range-bar {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 16px;
+    }
+    .range-bar-label {
+      color: var(--muted); font-size: 0.75rem;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      margin-right: 4px;
+    }
+    .range-btn {
+      cursor: pointer;
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-family: inherit;
+      transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    }
+    .range-btn:hover { color: var(--text); border-color: var(--border-strong); }
+    .range-btn.active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(88,166,255,0.1);
+    }
+    .range-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
     /* ---------- Layout helpers ---------- */
     main.app-main { padding: 24px; max-width: 1280px; margin: 0 auto; }
     @media (max-width: 720px) {
@@ -618,6 +647,17 @@
 
     <!-- Overview view -->
     <div id="view-overview">
+      <!-- Time range picker: drives every Overview panel. -->
+      <div class="range-bar" id="overview-range-bar" role="group" aria-label="Time range">
+        <span class="range-bar-label">Range</span>
+        <button class="range-btn" data-range="1h"  onclick="setOverviewRange('1h')" type="button">1h</button>
+        <button class="range-btn" data-range="6h"  onclick="setOverviewRange('6h')" type="button">6h</button>
+        <button class="range-btn active" data-range="24h" onclick="setOverviewRange('24h')" type="button">24h</button>
+        <button class="range-btn" data-range="7d"  onclick="setOverviewRange('7d')" type="button">7d</button>
+        <button class="range-btn" data-range="30d" onclick="setOverviewRange('30d')" type="button">30d</button>
+        <button class="range-btn" data-range="All" onclick="setOverviewRange('All')" type="button">All</button>
+      </div>
+
       <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"></div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -824,6 +864,69 @@
     // so we prefer critical when any exist (more severe), else high.
     let highRiskPreferredFilter = 'high';
 
+    // ---------- Overview time range picker ----------
+    // The preset→duration map. Used by overviewRangeParams() so #84/#85 can
+    // compute the right after= timestamp without reimplementing it.
+    const OVERVIEW_RANGE_DURATIONS = {
+      '1h':  1  * 60 * 60 * 1000,
+      '6h':  6  * 60 * 60 * 1000,
+      '24h': 24 * 60 * 60 * 1000,
+      '7d':  7  * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
+      'All': null, // no lower bound
+    };
+    const OVERVIEW_VALID_PRESETS = new Set(Object.keys(OVERVIEW_RANGE_DURATIONS));
+
+    // Active preset — default 24h, overridden by URL hash on boot.
+    let overviewRange = '24h';
+
+    // overviewRangeParams returns { preset, after } where after is an ISO-8601
+    // lower-bound string (null for "All"). #84/#85 can call this to fetch
+    // /api/stats/timeseries with the active range.
+    function overviewRangeParams() {
+      const durationMs = OVERVIEW_RANGE_DURATIONS[overviewRange];
+      // Second-resolution RFC3339 to match the backend's timestamps (which it
+      // compares lexicographically) — millisecond precision could skew the
+      // boundary within a second.
+      const after = durationMs != null
+        ? new Date(Date.now() - durationMs).toISOString().replace(/\.\d{3}Z$/, 'Z')
+        : null;
+      return { preset: overviewRange, after };
+    }
+
+    // setOverviewRange updates the active preset, persists it to the URL hash
+    // (without adding a history entry), highlights the correct button, and
+    // re-loads the Overview so all panels reflect the new window.
+    function setOverviewRange(preset) {
+      if (!OVERVIEW_VALID_PRESETS.has(preset)) return;
+      overviewRange = preset;
+      // Persist to hash without pushing a history entry.
+      const hashVal = preset === '24h' ? '' : '#range=' + preset;
+      history.replaceState(null, '', location.pathname + location.search + hashVal);
+      applyRangeButtonState();
+      loadOverview();
+    }
+
+    // applyRangeButtonState highlights the active button in the range bar.
+    function applyRangeButtonState() {
+      document.querySelectorAll('#overview-range-bar .range-btn').forEach(btn => {
+        const active = btn.dataset.range === overviewRange;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    // readOverviewRangeFromHash reads the #range=<preset> fragment and sets
+    // overviewRange if the preset is valid. Called once on boot.
+    function readOverviewRangeFromHash() {
+      const hash = location.hash; // e.g. "#range=7d"
+      if (!hash.startsWith('#range=')) return;
+      const preset = hash.slice('#range='.length);
+      if (OVERVIEW_VALID_PRESETS.has(preset)) {
+        overviewRange = preset;
+      }
+    }
+
     // Live polling state. Tails /api/receipts using `since=<timestamp>` and
     // prepends fresh rows into whichever view is currently visible.
     const POLL_FALLBACK_MS = 5000;
@@ -958,19 +1061,37 @@
       renderServerActivitySkeleton();
       renderRecentSkeleton();
       renderTopActionsSkeleton();
+
+      // Compute the active range once per load so all fetches use a consistent
+      // snapshot. after is null for "All" (no lower bound).
+      const { after } = overviewRangeParams();
+      const afterQ = after ? 'after=' + encodeURIComponent(after) : '';
+
       try {
-        const stats = await fetchJSON('/api/stats');
+        const stats = await fetchJSON('/api/stats' + (afterQ ? '?' + afterQ : ''));
         if (gen !== poller.generation) return;
         renderStats(stats);
-        renderHeaderContext(null, stats);
+        // The Overview stat cards are range-scoped, but the persistent app-header
+        // count + "latest" show store-wide totals. When a range is active, fetch
+        // all-time stats just for the header (fire-and-forget); for "All" the one
+        // fetch already covers both.
+        if (after) {
+          fetchJSON('/api/stats')
+            .then(all => { if (gen === poller.generation) renderHeaderContext(null, all); })
+            .catch(err => console.warn('header totals:', err));
+        } else {
+          renderHeaderContext(null, stats);
+        }
 
-        const receipts = await fetchJSON(`/api/receipts?limit=${RECENT_LIMIT}`);
+        const receiptsURL = `/api/receipts?limit=${RECENT_LIMIT}` + (afterQ ? '&' + afterQ : '');
+        const receipts = await fetchJSON(receiptsURL);
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
 
         // Start live polling + keyboard nav immediately so a slow/hung summary
-        // fetch can't delay core overview UX.
-        // Seed polling from the full fetch, not the displayed slice.
+        // fetch can't delay core overview UX. The poller always tails with
+        // `since=` regardless of the active range — new receipts should appear
+        // in the live feed even when a short range is selected.
         startPolling('overview', 'recent-receipts', receipts, () => ({}));
         // Wire keyboard nav after startPolling so the j/k/Enter row list is
         // initialised even though stopPolling() cleared activeView above.
@@ -983,7 +1104,7 @@
         // poll start (the earlier bug that left these stuck on skeletons).
         const summaryGen = poller.generation;
         try {
-          const actionData = await fetchJSON('/api/stats/actions');
+          const actionData = await fetchJSON(after ? '/api/stats/actions?range=' + encodeURIComponent(rangePresetToGoRange(overviewRange)) : '/api/stats/actions');
           if (summaryGen !== poller.generation) return;
           renderTopActionsChart(actionData.actions || []);
         } catch (err) {
@@ -992,7 +1113,7 @@
         }
 
         try {
-          const serverData = await fetchJSON('/api/stats/servers');
+          const serverData = await fetchJSON(after ? '/api/stats/servers?range=' + encodeURIComponent(rangePresetToGoRange(overviewRange)) : '/api/stats/servers');
           if (summaryGen !== poller.generation) return;
           renderServerActivityChart(serverData.servers || []);
         } catch (err) {
@@ -1004,12 +1125,28 @@
       }
     }
 
+    // rangePresetToGoRange converts a UI preset to a Go duration string accepted
+    // by /api/stats/actions and /api/stats/servers. "All" returns "" (no filter).
+    function rangePresetToGoRange(preset) {
+      const map = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '168h', '30d': '720h' };
+      return map[preset] || '';
+    }
+
     async function refreshOverviewStats() {
+      const { after } = overviewRangeParams();
+      const afterParam = after ? '?after=' + encodeURIComponent(after) : '';
       try {
-        const stats = await fetchJSON('/api/stats');
+        const stats = await fetchJSON('/api/stats' + afterParam);
         if (poller.activeView !== 'overview') return;
         renderStats(stats);
-        renderHeaderContext(null, stats);
+        // Header shows store-wide totals, not the selected range (see loadOverview).
+        if (after) {
+          fetchJSON('/api/stats')
+            .then(all => { if (poller.activeView === 'overview') renderHeaderContext(null, all); })
+            .catch(err => console.warn('header totals:', err));
+        } else {
+          renderHeaderContext(null, stats);
+        }
       } catch (err) {
         console.warn('refresh stats:', err);
       }
@@ -2974,6 +3111,11 @@
     });
 
     // ---------- Boot ----------
+    // Read the active range from the URL hash before loading the overview, so
+    // a bookmarked #range=7d opens with the correct window selected.
+    readOverviewRangeFromHash();
+    applyRangeButtonState();
+
     loadPollConfig().then(async () => {
       // If the URL contains ?q=<term>, pre-populate the search box and open
       // the Receipts view with the term applied. Otherwise load the overview.

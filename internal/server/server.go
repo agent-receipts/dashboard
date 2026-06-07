@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/stats/timeseries", s.handleTimeseriesStats)
 	mux.HandleFunc("GET /api/stats/actions", s.handleActionStats)
 	mux.HandleFunc("GET /api/stats/servers", s.handleServerStats)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
@@ -160,13 +161,165 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.reader.Stats()
+	q := r.URL.Query()
+	var after, before *string
+	if v := q.Get("after"); v != "" {
+		after = &v
+	}
+	if v := q.Get("before"); v != "" {
+		before = &v
+	}
+	stats, err := s.reader.Stats(after, before)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "stats query failed")
 		log.Printf("stats error: %v", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// parseFlexibleDuration parses a Go duration, additionally accepting an `Nd`
+// (days) suffix — e.g. "7d", "30d" — which time.ParseDuration rejects. This
+// matches the day-shorthand shown in the timeseries API examples.
+func parseFlexibleDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
+// formatBucketDuration renders a bucket duration without the redundant zero
+// units time.Duration.String() emits (e.g. "1h" not "1h0m0s", "1d" not "24h0m0s").
+func formatBucketDuration(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "0s"
+	case d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	case d%time.Second == 0:
+		return fmt.Sprintf("%ds", d/time.Second)
+	default:
+		return d.String()
+	}
+}
+
+// autoBucket selects a sensible bucket duration for the given window duration.
+// Thresholds: ≤2h → 5m, ≤24h → 1h, ≤7d → 6h, else → 1d.
+func autoBucket(window time.Duration) time.Duration {
+	switch {
+	case window <= 2*time.Hour:
+		return 5 * time.Minute
+	case window <= 24*time.Hour:
+		return time.Hour
+	case window <= 7*24*time.Hour:
+		return 6 * time.Hour
+	default:
+		return 24 * time.Hour
+	}
+}
+
+func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	now := time.Now().UTC()
+
+	var from, to time.Time
+	to = now // default
+
+	rangeStr := q.Get("range")
+	fromStr := q.Get("from")
+	toStr := q.Get("to")
+
+	if rangeStr != "" {
+		// range= takes precedence over from=/to=.
+		d, err := parseFlexibleDuration(rangeStr)
+		if err != nil || d <= 0 {
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
+			return
+		}
+		from = now.Add(-d)
+	} else {
+		// from and to are honoured independently: `to=` alone bounds the upper
+		// edge while from stays zero (earliest receipt); `from=` alone runs to now.
+		if fromStr != "" {
+			t, err := time.Parse(time.RFC3339, fromStr)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "from must be an ISO-8601 / RFC3339 timestamp")
+				return
+			}
+			from = t
+		}
+		if toStr != "" {
+			t2, err := time.Parse(time.RFC3339, toStr)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "to must be an ISO-8601 / RFC3339 timestamp")
+				return
+			}
+			to = t2
+		}
+	}
+	// If neither range nor from is given, from is the zero Time — TimeseriesStats
+	// will resolve it to the earliest receipt timestamp (all-time).
+
+	// Validate from < to when from is non-zero.
+	if !from.IsZero() && !from.Before(to) {
+		writeError(w, http.StatusBadRequest, "from must be before to")
+		return
+	}
+
+	// Resolve bucket duration.
+	var bucket time.Duration
+	if bucketStr := q.Get("bucket"); bucketStr != "" {
+		d, err := parseFlexibleDuration(bucketStr)
+		if err != nil || d <= 0 {
+			writeError(w, http.StatusBadRequest, "bucket must be a positive duration (e.g. 1h, 1d)")
+			return
+		}
+		bucket = d
+	} else {
+		var window time.Duration
+		if !from.IsZero() {
+			window = to.Sub(from)
+		} else {
+			// All-time: default to 1d bucket.
+			window = 8 * 24 * time.Hour
+		}
+		bucket = autoBucket(window)
+	}
+
+	buckets, err := s.reader.TimeseriesStats(from, to, bucket)
+	if err != nil {
+		// Surface the bucket-count guard as a 400.
+		writeError(w, http.StatusBadRequest, err.Error())
+		log.Printf("timeseries stats error: %v", err)
+		return
+	}
+
+	// Ensure the slice is never null in JSON.
+	if buckets == nil {
+		buckets = []store.BucketRow{}
+	}
+
+	rangeFrom := from.UTC().Format(time.RFC3339)
+	if from.IsZero() && len(buckets) > 0 {
+		rangeFrom = buckets[0].Ts
+	} else if from.IsZero() {
+		rangeFrom = ""
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"buckets":         buckets,
+		"bucket_duration": formatBucketDuration(bucket),
+		"range_from":      rangeFrom,
+		"range_to":        to.UTC().Format(time.RFC3339),
+	})
 }
 
 func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {

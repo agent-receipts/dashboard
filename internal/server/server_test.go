@@ -871,3 +871,220 @@ func TestReceiptsEndpoint_Q(t *testing.T) {
 		t.Errorf("q=: got %d rows, want 3 (same as no param)", len(allRows))
 	}
 }
+
+// seedTimedDB creates a temporary SQLite file with receipts spread across
+// two distinct hours, used by timeseries and range-aware stats tests.
+func seedTimedDB(t *testing.T) (*Server, string) {
+	t.Helper()
+	dbPath := t.TempDir() + "/timed-receipts.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceipt("urn:receipt:td1", "chain-td", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil),
+		makeReceipt("urn:receipt:td2", "chain-td", 2, "filesystem.file.modify", receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:30:00Z", nil),
+		makeReceipt("urn:receipt:td3", "chain-td", 3, "communication.email.send", receipt.RiskHigh, receipt.StatusFailure, "2026-04-01T11:00:00Z", nil),
+	}
+	for _, r := range recs {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return New(reader, Config{}), dbPath
+}
+
+func TestTimeseriesStatsEndpoint(t *testing.T) {
+	srv, _ := seedTimedDB(t)
+
+	t.Run("200 with range param produces buckets", func(t *testing.T) {
+		// Use an absolute from/to that covers the seeded data.
+		req := httptest.NewRequest("GET",
+			"/api/stats/timeseries?from=2026-04-01T10:00:00Z&to=2026-04-01T13:00:00Z&bucket=1h",
+			nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		var resp struct {
+			Buckets        []store.BucketRow `json:"buckets"`
+			BucketDuration string            `json:"bucket_duration"`
+			RangeFrom      string            `json:"range_from"`
+			RangeTo        string            `json:"range_to"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Buckets == nil {
+			t.Error("buckets must not be null")
+		}
+		// 3 buckets: 10:00, 11:00, 12:00 (to=13:00 exclusive).
+		if len(resp.Buckets) != 3 {
+			t.Errorf("got %d buckets, want 3", len(resp.Buckets))
+		}
+		// bucket_duration is rendered cleanly, not as "1h0m0s".
+		if resp.BucketDuration != "1h" {
+			t.Errorf("bucket_duration = %q, want \"1h\"", resp.BucketDuration)
+		}
+		if resp.RangeFrom == "" || resp.RangeTo == "" {
+			t.Error("range_from and range_to must not be empty")
+		}
+		// Bucket[0] should have 2 receipts (10:00 and 10:30).
+		if len(resp.Buckets) >= 1 && resp.Buckets[0].Total != 2 {
+			t.Errorf("bucket[0].Total = %d, want 2", resp.Buckets[0].Total)
+		}
+	})
+
+	t.Run("to= alone is honored without from", func(t *testing.T) {
+		// from omitted → earliest receipt; to= must still bound the upper edge
+		// rather than defaulting to now.
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?to=2026-04-01T11:00:00Z", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			RangeTo string `json:"range_to"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.RangeTo != "2026-04-01T11:00:00Z" {
+			t.Errorf("range_to = %q, want 2026-04-01T11:00:00Z (to must be honored without from)", resp.RangeTo)
+		}
+	})
+
+	t.Run("200 with Go range param", func(t *testing.T) {
+		// "range" shorthand: last 24h relative to now — seeded data is in the past,
+		// but we just check the shape is valid (same as other range tests).
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?range=24h", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Buckets []store.BucketRow `json:"buckets"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Buckets == nil {
+			t.Error("buckets must not be null (expect [])")
+		}
+	})
+
+	t.Run("200 with day-suffix range (7d)", func(t *testing.T) {
+		// The day shorthand from the issue examples must be accepted (time.ParseDuration alone rejects "7d").
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?range=7d", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("range=7d: got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("400 on invalid range", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?range=notaduration", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("400 on bad from", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?from=notadate&to=2026-04-01T13:00:00Z", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("400 on bad to", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?from=2026-04-01T10:00:00Z&to=notadate", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("400 when from >= to", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/stats/timeseries?from=2026-04-01T13:00:00Z&to=2026-04-01T10:00:00Z",
+			nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("400 when from equals to", func(t *testing.T) {
+		req := httptest.NewRequest("GET",
+			"/api/stats/timeseries?from=2026-04-01T10:00:00Z&to=2026-04-01T10:00:00Z",
+			nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+	})
+}
+
+func TestStatsEndpoint_WithRange(t *testing.T) {
+	srv, _ := seedTimedDB(t)
+
+	// All-time: 3 receipts.
+	req := httptest.NewRequest("GET", "/api/stats", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("all-time: got status %d, want 200", w.Code)
+	}
+	var allTime store.Stats
+	if err := json.Unmarshal(w.Body.Bytes(), &allTime); err != nil {
+		t.Fatalf("all-time decode: %v", err)
+	}
+	if allTime.Total != 3 {
+		t.Errorf("all-time total = %d, want 3", allTime.Total)
+	}
+
+	// With after= restricting to 11:00 only (1 receipt).
+	req = httptest.NewRequest("GET", "/api/stats?after=2026-04-01T11:00:00Z", nil)
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("after=: got status %d, want 200", w.Code)
+	}
+	var filtered store.Stats
+	if err := json.Unmarshal(w.Body.Bytes(), &filtered); err != nil {
+		t.Fatalf("after= decode: %v", err)
+	}
+	if filtered.Total != 1 {
+		t.Errorf("after= total = %d, want 1 (filtered counts differ from all-time)", filtered.Total)
+	}
+	// Confirm the range-filtered count is genuinely different from all-time.
+	if filtered.Total >= allTime.Total {
+		t.Errorf("filtered total (%d) must be less than all-time (%d)", filtered.Total, allTime.Total)
+	}
+}

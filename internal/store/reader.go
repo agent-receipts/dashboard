@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 
@@ -92,6 +93,19 @@ type Stats struct {
 	// audit trail was last updated.
 	LatestTimestamp string `json:"latest_timestamp,omitempty"`
 }
+
+// BucketRow is one time bucket in a timeseries query result.
+type BucketRow struct {
+	Ts       string         `json:"ts"` // RFC3339 UTC, bucket start
+	Total    int            `json:"total"`
+	ByStatus map[string]int `json:"by_status"`
+	ByRisk   map[string]int `json:"by_risk"`
+}
+
+// maxTimeseriesBuckets is the upper bound on the number of buckets
+// TimeseriesStats will compute. Requests that would exceed this limit return
+// an error so the handler can respond with 400.
+const maxTimeseriesBuckets = 2000
 
 // GroupCount is a label + count pair.
 type GroupCount struct {
@@ -369,21 +383,38 @@ func (r *Reader) ListChains() ([]ChainSummary, error) {
 	return out, rows.Err()
 }
 
-// Stats returns aggregate statistics.
-func (r *Reader) Stats() (Stats, error) {
+// Stats returns aggregate statistics. after and before are optional ISO-8601
+// timestamps (inclusive lower / inclusive upper); nil means unbounded.
+func (r *Reader) Stats(after, before *string) (Stats, error) {
 	var st Stats
 
-	if err := r.db.QueryRow("SELECT COUNT(*) FROM receipts").Scan(&st.Total); err != nil {
+	// Build a shared WHERE clause applied to every query.
+	var conds []string
+	var args []any
+	if after != nil {
+		conds = append(conds, "timestamp >= ?")
+		args = append(args, *after)
+	}
+	if before != nil {
+		conds = append(conds, "timestamp <= ?")
+		args = append(args, *before)
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+
+	if err := r.db.QueryRow("SELECT COUNT(*) FROM receipts"+where, args...).Scan(&st.Total); err != nil {
 		return Stats{}, err
 	}
-	if err := r.db.QueryRow("SELECT COUNT(DISTINCT chain_id) FROM receipts").Scan(&st.Chains); err != nil {
+	if err := r.db.QueryRow("SELECT COUNT(DISTINCT chain_id) FROM receipts"+where, args...).Scan(&st.Chains); err != nil {
 		return Stats{}, err
 	}
 
 	// MAX over an empty table returns NULL; scan into a nullable string so the
 	// empty-store case is "" rather than an error.
 	var latest sql.NullString
-	if err := r.db.QueryRow("SELECT MAX(timestamp) FROM receipts").Scan(&latest); err != nil {
+	if err := r.db.QueryRow("SELECT MAX(timestamp) FROM receipts"+where, args...).Scan(&latest); err != nil {
 		return Stats{}, err
 	}
 	if latest.Valid {
@@ -391,20 +422,133 @@ func (r *Reader) Stats() (Stats, error) {
 	}
 
 	var err error
-	st.ByRisk, err = r.groupBy("risk_level")
+	st.ByRisk, err = r.groupByFiltered("risk_level", where, args)
 	if err != nil {
 		return Stats{}, err
 	}
-	st.ByStatus, err = r.groupBy("status")
+	st.ByStatus, err = r.groupByFiltered("status", where, args)
 	if err != nil {
 		return Stats{}, err
 	}
-	st.ByAction, err = r.groupBy("action_type")
+	st.ByAction, err = r.groupByFiltered("action_type", where, args)
 	if err != nil {
 		return Stats{}, err
 	}
 
 	return st, nil
+}
+
+// TimeseriesStats returns one BucketRow per bucket from from (inclusive) to
+// to (exclusive), stepping by bucket. Empty buckets are included with zero
+// counts so callers get a continuous series. If from is the zero Time, the
+// earliest receipt timestamp in the store is used; if the store is empty,
+// returns an empty slice.
+func (r *Reader) TimeseriesStats(from, to time.Time, bucket time.Duration) ([]BucketRow, error) {
+	bucketSec := int64(bucket.Seconds())
+	if bucketSec <= 0 {
+		return nil, fmt.Errorf("bucket duration must be positive")
+	}
+
+	// When from is zero, resolve from the earliest receipt timestamp.
+	if from.IsZero() {
+		var earliest sql.NullString
+		if err := r.db.QueryRow("SELECT MIN(timestamp) FROM receipts").Scan(&earliest); err != nil {
+			return nil, err
+		}
+		if !earliest.Valid {
+			// Empty store — return empty slice.
+			return []BucketRow{}, nil
+		}
+		t, err := time.Parse(time.RFC3339, earliest.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse earliest timestamp %q: %w", earliest.String, err)
+		}
+		from = t
+	}
+
+	// The SQL bound uses the exact requested window so e.g. range=24h returns at
+	// most 24h of data. Bucket starts are floored to the bucket boundary so the
+	// bars align on round times; the first/last bucket may therefore be partial.
+	fromISO := from.UTC().Format(time.RFC3339)
+	toISO := to.UTC().Format(time.RFC3339)
+
+	fromSec := (from.Unix() / bucketSec) * bucketSec
+	toSec := to.Unix()
+
+	// Guard against absurd bucket counts (the number of buckets generated below).
+	bucketCount := (toSec - fromSec + bucketSec - 1) / bucketSec
+	if bucketCount > maxTimeseriesBuckets {
+		return nil, fmt.Errorf("time range and bucket size would produce %d buckets (limit %d): narrow the range or increase the bucket size", bucketCount, maxTimeseriesBuckets)
+	}
+
+	// Query: group by floored epoch bucket, status, and risk_level.
+	query := fmt.Sprintf(`
+		SELECT
+			(CAST(strftime('%%s', timestamp) AS INTEGER) / %d) * %d AS bucket_epoch,
+			status,
+			risk_level,
+			COUNT(*) AS cnt
+		FROM receipts
+		WHERE timestamp >= ? AND timestamp < ?
+		GROUP BY bucket_epoch, status, risk_level
+		ORDER BY bucket_epoch ASC
+	`, bucketSec, bucketSec)
+
+	rows, err := r.db.Query(query, fromISO, toISO)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Accumulate query results into a map keyed by bucket epoch.
+	type rowData struct {
+		total    int
+		byStatus map[string]int
+		byRisk   map[string]int
+	}
+	bucketMap := map[int64]*rowData{}
+	for rows.Next() {
+		var epochSec int64
+		var status, riskLevel string
+		var cnt int
+		if err := rows.Scan(&epochSec, &status, &riskLevel, &cnt); err != nil {
+			return nil, err
+		}
+		rd := bucketMap[epochSec]
+		if rd == nil {
+			rd = &rowData{byStatus: map[string]int{}, byRisk: map[string]int{}}
+			bucketMap[epochSec] = rd
+		}
+		rd.total += cnt
+		rd.byStatus[status] += cnt
+		rd.byRisk[riskLevel] += cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Generate every bucket from from to to (exclusive), filling zeros where absent.
+	var out []BucketRow
+	for t := fromSec; t < toSec; t += bucketSec {
+		ts := time.Unix(t, 0).UTC().Format(time.RFC3339)
+		rd := bucketMap[t]
+		if rd == nil {
+			out = append(out, BucketRow{
+				Ts:       ts,
+				Total:    0,
+				ByStatus: map[string]int{},
+				ByRisk:   map[string]int{},
+			})
+		} else {
+			out = append(out, BucketRow{
+				Ts:       ts,
+				Total:    rd.total,
+				ByStatus: rd.byStatus,
+				ByRisk:   rd.byRisk,
+			})
+		}
+	}
+	return out, nil
 }
 
 // ActionStat holds aggregate statistics for a single action type.
@@ -643,14 +787,18 @@ func escapeLikeTerm(s string) string {
 }
 
 func (r *Reader) groupBy(column string) ([]GroupCount, error) {
+	return r.groupByFiltered(column, "", nil)
+}
+
+func (r *Reader) groupByFiltered(column, where string, args []any) ([]GroupCount, error) {
 	if !allowedGroupByColumns[column] {
 		return nil, fmt.Errorf("invalid group-by column: %q", column)
 	}
 	query := fmt.Sprintf(
-		"SELECT %s, COUNT(*) FROM receipts GROUP BY %s ORDER BY COUNT(*) DESC",
-		column, column,
+		"SELECT %s, COUNT(*) FROM receipts%s GROUP BY %s ORDER BY COUNT(*) DESC",
+		column, where, column,
 	)
-	rows, err := r.db.Query(query)
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
