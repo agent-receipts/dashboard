@@ -250,6 +250,9 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("tool_name"); v != "" {
 		f.ToolName = &v
 	}
+	if v := q.Get("q"); v != "" {
+		f.Q = &v
+	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 {

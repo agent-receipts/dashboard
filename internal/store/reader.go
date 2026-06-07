@@ -133,6 +133,7 @@ type Filter struct {
 	Before     *string // ISO 8601 timestamp, inclusive
 	Since      *string // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
 	Limit      *int
+	Q          *string // free-text search against the raw receipt JSON; nil or whitespace-only means no filter
 }
 
 // OpenReadOnly opens an existing receipt SQLite database in read-only mode.
@@ -228,6 +229,12 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		// dedups by id.
 		conds = append(conds, "timestamp >= ?")
 		args = append(args, *f.Since)
+	}
+	if f.Q != nil {
+		if term := strings.TrimSpace(*f.Q); term != "" {
+			conds = append(conds, `receipt_json LIKE '%' || ? || '%' ESCAPE '\'`)
+			args = append(args, escapeLikeTerm(term))
+		}
 	}
 
 	where := ""
@@ -623,6 +630,16 @@ var allowedGroupByColumns = map[string]bool{
 	"risk_level":  true,
 	"status":      true,
 	"action_type": true,
+}
+
+// escapeLikeTerm escapes a user-supplied search term so that %, _, and \ are
+// treated as literal characters in a SQLite LIKE pattern using backslash as the
+// escape character (ESCAPE '\').
+func escapeLikeTerm(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 func (r *Reader) groupBy(column string) ([]GroupCount, error) {

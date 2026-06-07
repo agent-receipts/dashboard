@@ -834,3 +834,40 @@ func TestActionStatsEndpoint_WithSufficientData(t *testing.T) {
 		t.Errorf("got failure %d, want 3", resp.Actions[0].Failure)
 	}
 }
+
+func TestReceiptsEndpoint_Q(t *testing.T) {
+	srv := setupServer(t)
+
+	// A term unique to one receipt should return only that receipt.
+	req := httptest.NewRequest("GET", "/api/receipts?q=email", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("q=email: got status %d, want 200", w.Code)
+	}
+	var rows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("q=email: decode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("q=email: got %d rows, want 1", len(rows))
+	}
+	if len(rows) > 0 && rows[0].ID != "urn:receipt:003" {
+		t.Errorf("q=email: got ID %q, want urn:receipt:003", rows[0].ID)
+	}
+
+	// An empty q= behaves like no param — returns all rows.
+	req = httptest.NewRequest("GET", "/api/receipts?q=", nil)
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("q=: got status %d, want 200", w.Code)
+	}
+	var allRows []store.ReceiptRow
+	if err := json.Unmarshal(w.Body.Bytes(), &allRows); err != nil {
+		t.Fatalf("q=: decode: %v", err)
+	}
+	if len(allRows) != 3 {
+		t.Errorf("q=: got %d rows, want 3 (same as no param)", len(allRows))
+	}
+}
