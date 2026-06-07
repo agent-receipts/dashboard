@@ -660,6 +660,14 @@
 
       <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"></div>
 
+      <div class="card p-4 mb-6" data-card="activity-timeline">
+        <div class="card-head flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium muted">Activity timeline</h3>
+          <button class="card-collapse" type="button" aria-label="Collapse Activity timeline" onclick="toggleCardCollapse('activity-timeline')">▾</button>
+        </div>
+        <div id="activity-timeline-chart"></div>
+      </div>
+
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="card p-4" data-card="risk">
           <div class="card-head flex items-center justify-between mb-3">
@@ -1058,6 +1066,7 @@
     async function loadOverview() {
       const gen = ++poller.generation;
       renderStatsSkeleton();
+      renderTimelineSkeleton();
       renderServerActivitySkeleton();
       renderRecentSkeleton();
       renderTopActionsSkeleton();
@@ -1119,6 +1128,17 @@
         } catch (err) {
           console.warn('server activity summary:', err);
           renderServerActivityChart([]);
+        }
+
+        try {
+          const { preset } = overviewRangeParams();
+          const timelineURL = '/api/stats/timeseries' + (preset !== 'All' ? '?range=' + encodeURIComponent(preset) : '');
+          const timelineData = await fetchJSON(timelineURL);
+          if (summaryGen !== poller.generation) return;
+          renderActivityTimeline(timelineData);
+        } catch (err) {
+          console.warn('activity timeline:', err);
+          renderActivityTimeline(null);
         }
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
@@ -1614,6 +1634,175 @@
     function renderTopActionsSkeleton() {
       const el = document.getElementById('top-actions-chart');
       if (el) el.innerHTML = skeletonBars(3);
+    }
+
+    function renderTimelineSkeleton() {
+      const el = document.getElementById('activity-timeline-chart');
+      if (!el) return;
+      // Mimic a row of skeleton bars at varying heights to suggest the chart shape.
+      el.innerHTML = `
+        <div style="display:flex;align-items:flex-end;gap:3px;height:160px;padding-bottom:20px;">
+          ${Array(24).fill(0).map((_, i) => {
+            const h = Math.max(10, Math.round(20 + Math.sin(i * 0.7) * 15 + Math.random() * 30));
+            return `<div class="skeleton" style="flex:1;height:${h}px;border-radius:3px 3px 0 0;"></div>`;
+          }).join('')}
+        </div>`;
+    }
+
+    // ---------- Activity timeline chart ----------
+    // Renders an inline SVG stacked bar chart: success (green) at the bottom,
+    // failure (red) above it, and any remaining count (pending / other) as a
+    // muted grey segment above that. Bar heights sum exactly to total.
+    function renderActivityTimeline(data) {
+      const el = document.getElementById('activity-timeline-chart');
+      if (!el) return;
+
+      const buckets = (data && data.buckets) || [];
+      const allEmpty = buckets.length === 0 || buckets.every(b => (b.total || 0) === 0);
+      if (allEmpty) {
+        el.innerHTML = '<div class="muted text-sm" style="padding:12px 0;">No activity in this range.</div>';
+        return;
+      }
+
+      // --- Dimensions ----------------------------------------------------------
+      const CHART_H = 140; // px — usable bar area height
+      const BAR_GAP = 2;   // px between bars inside the SVG
+
+      const n = buckets.length;
+      // viewBox width = n bars + (n-1) gaps + 1px margin each side.
+      const VB_W = n + (n - 1) * BAR_GAP + 2;
+
+      // --- Scale ---------------------------------------------------------------
+      const maxTotal = Math.max(...buckets.map(b => b.total || 0), 1);
+
+      // --- X-axis tick positions (4–6 evenly spaced labels) --------------------
+      // Label format depends on the overall SPAN, not the bucket size: a 7d range
+      // with 6h buckets is still multi-day, so HH:MM alone would be ambiguous.
+      let spanMs = 0;
+      try { spanMs = new Date(data.range_to) - new Date(data.range_from); } catch (_) { spanMs = 0; }
+      const isIntraday = spanMs > 0 && spanMs <= 36 * 60 * 60 * 1000; // ≤ ~1.5 days → HH:MM
+
+      function fmtTick(ts) {
+        try {
+          const d = new Date(ts);
+          if (isIntraday) {
+            // HH:MM in local time
+            return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+          }
+          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        } catch (_) { return ''; }
+      }
+
+      // Choose ~4-6 evenly spaced tick indices (always include first + last).
+      const TARGET_TICKS = Math.min(6, n);
+      const tickIndices = new Set();
+      if (n <= TARGET_TICKS) {
+        for (let i = 0; i < n; i++) tickIndices.add(i);
+      } else {
+        tickIndices.add(0);
+        tickIndices.add(n - 1);
+        const step = (n - 1) / (TARGET_TICKS - 1);
+        for (let t = 1; t < TARGET_TICKS - 1; t++) {
+          tickIndices.add(Math.round(t * step));
+        }
+      }
+
+      // --- Build SVG bars + tooltips ------------------------------------------
+      // Each bar occupies 1 unit width in the viewBox; gap is BAR_GAP units.
+      // Bar x = 1 (margin) + i * (1 + BAR_GAP)
+      const barParts = buckets.map((b, i) => {
+        const total   = b.total   || 0;
+        const success = (b.by_status && b.by_status.success) || 0;
+        const failure = (b.by_status && b.by_status.failure) || 0;
+        const other   = Math.max(0, total - success - failure);
+
+        const x = 1 + i * (1 + BAR_GAP);
+
+        // Segments are expressed as a fraction of maxTotal, scaled to CHART_H.
+        // They are stacked bottom-up: success → failure → other.
+        // We guard against floating-point drift: cap sum at total.
+        function segH(count) {
+          return count <= 0 ? 0 : Math.max(1, (count / maxTotal) * CHART_H);
+        }
+        const hSuccess = segH(success);
+        const hFailure = segH(failure);
+        const hOther   = segH(other);
+        // Total bar height. Recompute from fractions to avoid accumulated error.
+        const hTotal   = total <= 0 ? 0 : Math.max(1, (total / maxTotal) * CHART_H);
+
+        // Y positions (SVG y=0 is the top). Bars grow upward from y=CHART_H.
+        // Success sits at the bottom, failure above it, other at the top.
+        const ySuccess = CHART_H - hSuccess;
+        const yFailure = CHART_H - hSuccess - hFailure;
+        const yOther   = CHART_H - hSuccess - hFailure - hOther;
+
+        // Tooltip text (escaped via attribute escaping)
+        const tsLabel = (() => {
+          try { return new Date(b.ts).toLocaleString(); } catch (_) { return b.ts || ''; }
+        })();
+        const tipText = `${tsLabel}\nTotal: ${total}\nSuccess: ${success}\nFailure: ${failure}${other > 0 ? '\nOther: ' + other : ''}`;
+        const tipAttr = escapeAttr(tipText);
+
+        const segs = [];
+        if (total > 0) {
+          if (other > 0) {
+            segs.push(`<rect x="${x}" y="${yOther}" width="1" height="${hOther}" fill="var(--subtle)"/>`);
+          }
+          if (failure > 0) {
+            segs.push(`<rect x="${x}" y="${yFailure}" width="1" height="${hFailure}" fill="var(--status-failure)" opacity="0.85"/>`);
+          }
+          if (success > 0) {
+            segs.push(`<rect x="${x}" y="${ySuccess}" width="1" height="${hSuccess}" fill="var(--status-success)" opacity="0.8"/>`);
+          }
+        } else {
+          // Zero-count bucket: render a 1px hairline so the axis baseline is visible
+          segs.push(`<rect x="${x}" y="${CHART_H - 1}" width="1" height="1" fill="var(--border)"/>`);
+        }
+
+        // Transparent hit area spans the full bar height so the tooltip fires
+        // anywhere the cursor hovers over a bar (including the gap between segments).
+        const hitY = total > 0 ? CHART_H - hTotal : CHART_H - 1;
+        const hitH = total > 0 ? hTotal : 1;
+        return `
+          <g>
+            ${segs.join('')}
+            <rect x="${x}" y="${hitY}" width="1" height="${hitH}" fill="transparent" style="cursor:default;">
+              <title>${tipAttr}</title>
+            </rect>
+          </g>`;
+      }).join('');
+
+      // --- X-axis tick labels (HTML, positioned below the SVG) ----------------
+      // Rendered as HTML rather than SVG <text> because the chart uses
+      // preserveAspectRatio="none", which stretches the viewBox non-uniformly
+      // and would distort SVG text.
+      const tickLabels = Array.from(tickIndices).sort((a, b) => a - b).map(i => {
+        const b = buckets[i];
+        const label = b && b.ts ? fmtTick(b.ts) : '';
+        const cx = 1 + i * (1 + BAR_GAP) + 0.5; // bar centre in viewBox units
+        const leftPct = (cx / VB_W) * 100;
+        return `<span style="position:absolute;left:${leftPct}%;transform:translateX(-50%);white-space:nowrap;">${escapeHtml(label)}</span>`;
+      }).join('');
+
+      // --- Legend -------------------------------------------------------------
+      const legendHTML = `
+        <div style="display:flex;align-items:center;gap:14px;margin-top:8px;font-size:0.72rem;color:var(--muted);">
+          <span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--status-success);opacity:0.8;"></span>Success</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--status-failure);opacity:0.85;"></span>Failure</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--subtle);"></span>Other</span>
+        </div>`;
+
+      // viewBox width scales with bucket count; height is fixed. Bars (rects)
+      // stretch to fill the width; the x-axis labels live in an HTML overlay
+      // below so they aren't distorted by preserveAspectRatio="none".
+      el.innerHTML = `
+        <svg viewBox="0 0 ${VB_W} ${CHART_H}" preserveAspectRatio="none"
+             style="width:100%;height:${CHART_H}px;display:block;"
+             role="img" aria-label="Activity timeline — stacked bar chart of receipt counts by status">
+          ${barParts}
+        </svg>
+        <div style="position:relative;height:16px;margin-top:4px;font-size:0.68rem;color:var(--muted);">${tickLabels}</div>
+        ${legendHTML}`;
     }
 
     function skeletonBars(n) {
