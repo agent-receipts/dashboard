@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -112,10 +113,10 @@ type ServerStat struct {
 	// missing-server bucket (receipts with no target.system); the frontend
 	// renders it as "Unknown". Keeping it empty rather than the literal string
 	// "Unknown" avoids colliding with a real server named "Unknown".
-	Server      string     `json:"server"`
-	Tools       []ToolStat `json:"tools"`
-	Total       int        `json:"total"`
-	Failure     int        `json:"failure"`
+	Server  string     `json:"server"`
+	Tools   []ToolStat `json:"tools"`
+	Total   int        `json:"total"`
+	Failure int        `json:"failure"`
 	// FailureRate is the fraction of receipts that failed, in [0,1].
 	FailureRate float64 `json:"failure_rate"`
 }
@@ -397,6 +398,82 @@ func (r *Reader) Stats() (Stats, error) {
 	}
 
 	return st, nil
+}
+
+// ActionStat holds aggregate statistics for a single action type.
+type ActionStat struct {
+	ActionType string `json:"action_type"`
+	Total      int    `json:"total"`
+	Success    int    `json:"success"`
+	Failure    int    `json:"failure"`
+	// FailureRate is the fraction of receipts that failed, in [0,1] (e.g. 0.05
+	// is 5%). Matches the ratio convention used by ServerStats.
+	FailureRate float64 `json:"failure_rate"`
+}
+
+// ActionStats returns per-action-type failure rate statistics. Action types
+// with fewer than 5 receipts are excluded (HAVING COUNT(*) >= 5). Results are
+// sorted by failure_rate DESC, then total DESC, then action_type ASC for a
+// deterministic ordering. An optional since timestamp (ISO-8601, inclusive)
+// restricts the query to receipts at or after that time; nil means all-time.
+func (r *Reader) ActionStats(since *string) ([]ActionStat, error) {
+	var conds []string
+	var args []any
+
+	if since != nil {
+		conds = append(conds, "timestamp >= ?")
+		args = append(args, *since)
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+
+	query := fmt.Sprintf(`
+		SELECT action_type,
+		       COUNT(*) AS total,
+		       SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+		       SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) AS failure_count
+		FROM receipts
+		%s
+		GROUP BY action_type
+		HAVING COUNT(*) >= 5
+	`, where)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ActionStat
+	for rows.Next() {
+		var s ActionStat
+		if err := rows.Scan(&s.ActionType, &s.Total, &s.Success, &s.Failure); err != nil {
+			return nil, err
+		}
+		if s.Total > 0 {
+			s.FailureRate = float64(s.Failure) / float64(s.Total)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Sort: failure_rate DESC, total DESC, action_type ASC (deterministic).
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].FailureRate != out[j].FailureRate {
+			return out[i].FailureRate > out[j].FailureRate
+		}
+		if out[i].Total != out[j].Total {
+			return out[i].Total > out[j].Total
+		}
+		return out[i].ActionType < out[j].ActionType
+	})
+
+	return out, nil
 }
 
 // ServerStats returns per-server, per-tool receipt counts and failure rates.

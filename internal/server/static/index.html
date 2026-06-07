@@ -585,6 +585,7 @@
     <nav class="tab-bar">
       <button class="tab active" onclick="showView('overview')" id="tab-overview">Overview</button>
       <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
+      <button class="tab" onclick="showView('actions')" id="tab-actions">Actions</button>
       <button class="tab" onclick="showView('servers')" id="tab-servers">Servers</button>
       <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
     </nav>
@@ -618,7 +619,15 @@
         </div>
       </div>
 
-      <div class="card p-4" id="server-activity-card">
+      <div class="card p-4 mb-6">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium muted">Top actions by failure rate</h3>
+          <button class="text-xs accent" onclick="showView('actions')" style="background:none;border:none;cursor:pointer;">View all →</button>
+        </div>
+        <div id="top-actions-chart"></div>
+      </div>
+
+      <div class="card p-4 mb-6" id="server-activity-card">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium muted">Server activity</h3>
           <button class="text-xs accent" onclick="showView('servers')" style="background:none;border:none;cursor:pointer;">View all →</button>
@@ -681,6 +690,11 @@
       </div>
 
       <div id="receipts-table"></div>
+    </div>
+
+    <!-- Actions view -->
+    <div id="view-actions" class="hidden">
+      <div id="actions-table-container"></div>
     </div>
 
     <!-- Servers view -->
@@ -847,6 +861,7 @@
       stopPolling();
       if (view === 'overview') loadOverview();
       if (view === 'receipts') loadReceipts();
+      if (view === 'actions')  loadActions();
       if (view === 'servers')  loadServers();
       if (view === 'chains')   loadChains();
     }
@@ -881,6 +896,7 @@
       renderStatsSkeleton();
       renderServerActivitySkeleton();
       renderRecentSkeleton();
+      renderTopActionsSkeleton();
       try {
         const stats = await fetchJSON('/api/stats');
         if (gen !== poller.generation) return;
@@ -897,9 +913,19 @@
         // initialised even though stopPolling() cleared activeView above.
         nav.setSelector('#recent-receipts tbody tr');
 
-        // The server-activity card is non-essential: load it separately and
-        // isolate failures so a /api/stats/servers error can't take down
-        // recent-receipts polling or keyboard nav.
+        // The top-actions summary card is non-essential: load it after core
+        // overview is wired and isolate failures so a /api/stats/actions error
+        // can't take down recent-receipts polling or keyboard nav.
+        try {
+          const actionData = await fetchJSON('/api/stats/actions');
+          if (gen !== poller.generation) return;
+          renderTopActionsChart(actionData.actions || []);
+        } catch (err) {
+          console.warn('top actions summary:', err);
+          renderTopActionsChart([]);
+        }
+
+        // The server-activity card is likewise non-essential and isolated.
         try {
           const serverData = await fetchJSON('/api/stats/servers');
           if (gen !== poller.generation) return;
@@ -1019,6 +1045,181 @@
 
     function showHighRisk() {
       document.getElementById('filter-risk').value = highRiskPreferredFilter;
+      showView('receipts');
+    }
+
+    // Render up to 5 action types as horizontal bars in the Overview summary card.
+    // failure_rate is a 0–1 ratio; the bar width and label render it as a percent.
+    // Each row navigates to the Actions tab (mouse + keyboard), mirroring "View all →".
+    function renderTopActionsChart(actions) {
+      const el = document.getElementById('top-actions-chart');
+      if (!el) return;
+      const top5 = (actions || []).slice(0, 5);
+      if (top5.length === 0) {
+        el.innerHTML = '<div class="muted text-sm">No data — action types with fewer than 5 receipts are excluded.</div>';
+        return;
+      }
+      el.innerHTML = top5.map(a => {
+        const pct = (a.failure_rate * 100);
+        return `
+        <div class="bar-row" style="cursor:pointer;" role="button" tabindex="0" onclick="showView('actions')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showView('actions')}" title="${escapeAttr(a.action_type)} — ${pct.toFixed(1)}% failure rate" aria-label="${escapeAttr(a.action_type)}, ${pct.toFixed(1)}% failure rate. View all actions.">
+          <span class="bar-label" style="width:160px;min-width:160px;" title="${escapeAttr(a.action_type)}"><span class="badge badge-failure" style="max-width:156px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(a.action_type)}</span></span>
+          <div class="bar-track"><div class="bar-fill bar-failure" style="width:${Math.min(pct, 100)}%"></div></div>
+          <span class="bar-count">${pct.toFixed(1)}%</span>
+        </div>`;
+      }).join('');
+    }
+
+    // ---------- Actions tab ----------
+    // Client-side sort state for the Actions table.
+    let actionsData = [];
+    let actionsSortKey = 'failure_rate';
+    let actionsSortAsc = false; // default: failure_rate DESC
+    let actionsShowAll = false;
+    const ACTIONS_PAGE_SIZE = 10;
+
+    async function loadActions() {
+      const gen = ++poller.generation;
+      document.getElementById('actions-table-container').innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll">
+            <table class="receipts">
+              <thead><tr>
+                <th>Action type</th><th>Total</th><th>Failures</th><th>Failure rate</th>
+              </tr></thead>
+              <tbody>${skeletonActionRows(6)}</tbody>
+            </table>
+          </div>
+        </div>`;
+      try {
+        const data = await fetchJSON('/api/stats/actions');
+        if (gen !== poller.generation) return;
+        actionsData = data.actions || [];
+        actionsSortKey = 'failure_rate';
+        actionsSortAsc = false;
+        actionsShowAll = false;
+        renderActionsTable();
+        // Wire keyboard row navigation (j/k/Enter) for the Actions table,
+        // mirroring the receipts/chains views.
+        nav.setSelector('#actions-table-container tbody tr');
+      } catch (err) {
+        showError('Failed to load actions: ' + err.message);
+        document.getElementById('actions-table-container').innerHTML =
+          '<div class="empty-state"><div class="empty-title">Could not load actions</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    function skeletonActionRows(n) {
+      return Array(n).fill(0).map(() => `
+        <tr>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:70%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:40%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton skeleton-line" style="width:40%"></span></td>
+          <td style="padding:8px 12px;"><span class="skeleton" style="width:80px;height:8px;border-radius:9999px;display:inline-block;"></span></td>
+        </tr>
+      `).join('');
+    }
+
+    function sortedActions() {
+      const copy = actionsData.slice();
+      copy.sort((a, b) => {
+        let va = a[actionsSortKey], vb = b[actionsSortKey];
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return actionsSortAsc ? -1 : 1;
+        if (va > vb) return actionsSortAsc ? 1 : -1;
+        return 0;
+      });
+      return copy;
+    }
+
+    function renderActionsTable() {
+      const container = document.getElementById('actions-table-container');
+      if (!container) return;
+
+      const sorted = sortedActions();
+      if (sorted.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-title">No action data</div>
+            <div class="empty-hint">Action types appear here once they have at least 5 receipts.</div>
+          </div>`;
+        nav.refresh();
+        return;
+      }
+
+      const visible = actionsShowAll ? sorted : sorted.slice(0, ACTIONS_PAGE_SIZE);
+      const hiddenCount = sorted.length - visible.length;
+
+      function thHTML(key, label) {
+        const active = actionsSortKey === key;
+        const arrow = active ? (actionsSortAsc ? ' ↑' : ' ↓') : '';
+        const ariaSort = active ? (actionsSortAsc ? 'ascending' : 'descending') : 'none';
+        // Sort control is a real <button> so it is keyboard-focusable and
+        // operable with Enter/Space, not just mouse click on the <th>.
+        return `<th style="user-select:none;" aria-sort="${ariaSort}"><button type="button" onclick="toggleActionsSort('${key}')" style="background:none;border:none;color:inherit;font:inherit;cursor:pointer;padding:0;">${escapeHtml(label)}${arrow}</button></th>`;
+      }
+
+      const rows = visible.map(a => {
+        const pct = Math.min(a.failure_rate * 100, 100); // failure_rate is a 0–1 ratio
+        const rateBar = `<div style="display:inline-flex;align-items:center;gap:8px;width:100%;">
+          <div class="bar-track" style="flex:1;"><div class="bar-fill bar-failure" style="width:${pct}%"></div></div>
+          <span style="width:40px;text-align:right;font-size:0.8rem;color:var(--muted);font-variant-numeric:tabular-nums;">${(a.failure_rate * 100).toFixed(1)}%</span>
+        </div>`;
+        return `
+          <tr style="cursor:pointer;" data-action="${escapeAttr(a.action_type)}" onclick="filterToActionFailures(this.dataset.action)" title="Click to view failure receipts for ${escapeAttr(a.action_type)}">
+            <td class="font-mono text-xs">${escapeHtml(a.action_type)}</td>
+            <td class="muted" style="font-variant-numeric:tabular-nums;">${a.total}</td>
+            <td class="muted" style="font-variant-numeric:tabular-nums;">${a.failure}</td>
+            <td style="min-width:160px;">${rateBar}</td>
+          </tr>`;
+      }).join('');
+
+      const showAllToggle = hiddenCount > 0
+        ? `<div style="padding:10px 12px;text-align:center;border-top:1px solid var(--border);">
+            <button type="button" class="chip-clear-all" onclick="actionsShowAll=true;renderActionsTable()">Show all ${sorted.length} action types</button>
+          </div>`
+        : (actionsShowAll && sorted.length > ACTIONS_PAGE_SIZE
+            ? `<div style="padding:10px 12px;text-align:center;border-top:1px solid var(--border);">
+                <button type="button" class="chip-clear-all" onclick="actionsShowAll=false;renderActionsTable()">Show fewer</button>
+              </div>`
+            : '');
+
+      container.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll">
+            <table class="receipts">
+              <thead><tr>
+                ${thHTML('action_type','Action type')}
+                ${thHTML('total','Total')}
+                ${thHTML('failure','Failures')}
+                ${thHTML('failure_rate','Failure rate')}
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${showAllToggle}
+        </div>`;
+      // Re-renders (sort / show-all) replace the table DOM, so refresh the
+      // keyboard-nav row list to keep j/k/Enter targeting the current rows.
+      nav.refresh();
+    }
+
+    function toggleActionsSort(key) {
+      if (actionsSortKey === key) {
+        actionsSortAsc = !actionsSortAsc;
+      } else {
+        actionsSortKey = key;
+        // Default direction: numeric desc, alpha asc.
+        actionsSortAsc = (key === 'action_type');
+      }
+      renderActionsTable();
+    }
+
+    // Row click: pre-fill action type + status=failure filter and jump to Receipts.
+    function filterToActionFailures(actionType) {
+      document.getElementById('filter-action').value = actionType;
+      document.getElementById('filter-status').value = 'failure';
       showView('receipts');
     }
 
@@ -1203,6 +1404,11 @@
       if (serverEl) serverEl.value = server;
       if (toolEl)   toolEl.value   = toolName;
       showView('receipts');
+    }
+
+    function renderTopActionsSkeleton() {
+      const el = document.getElementById('top-actions-chart');
+      if (el) el.innerHTML = skeletonBars(3);
     }
 
     function skeletonBars(n) {
