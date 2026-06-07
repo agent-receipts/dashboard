@@ -911,13 +911,23 @@
         if (gen !== poller.generation) return;
         renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
 
-        // Summary cards (non-essential, each isolated so a stats error can't
-        // break the rest of the overview). Load them BEFORE startPolling, which
-        // increments poller.generation — running them afterwards would make the
-        // gen guard below always bail, leaving the cards stuck on skeletons.
+        // Start live polling + keyboard nav immediately so a slow/hung summary
+        // fetch can't delay core overview UX.
+        // Seed polling from the full fetch, not the displayed slice.
+        startPolling('overview', 'recent-receipts', receipts, () => ({}));
+        // Wire keyboard nav after startPolling so the j/k/Enter row list is
+        // initialised even though stopPolling() cleared activeView above.
+        nav.setSelector('#recent-receipts tbody tr');
+
+        // Summary cards are non-essential and each isolated (a stats error or
+        // slow request can't break the rest of the overview). Capture a fresh
+        // generation AFTER startPolling — which increments poller.generation —
+        // so the stale-guard only trips on a real view change, not on our own
+        // poll start (the earlier bug that left these stuck on skeletons).
+        const summaryGen = poller.generation;
         try {
           const actionData = await fetchJSON('/api/stats/actions');
-          if (gen !== poller.generation) return;
+          if (summaryGen !== poller.generation) return;
           renderTopActionsChart(actionData.actions || []);
         } catch (err) {
           console.warn('top actions summary:', err);
@@ -926,18 +936,12 @@
 
         try {
           const serverData = await fetchJSON('/api/stats/servers');
-          if (gen !== poller.generation) return;
+          if (summaryGen !== poller.generation) return;
           renderServerActivityChart(serverData.servers || []);
         } catch (err) {
           console.warn('server activity summary:', err);
           renderServerActivityChart([]);
         }
-
-        // Seed polling from the full fetch, not the displayed slice.
-        startPolling('overview', 'recent-receipts', receipts, () => ({}));
-        // Wire keyboard nav after startPolling so the j/k/Enter row list is
-        // initialised even though stopPolling() cleared activeView above.
-        nav.setSelector('#recent-receipts tbody tr');
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
       }
