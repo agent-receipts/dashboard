@@ -412,6 +412,334 @@ func TestReader_ListReceipts_ServerAndTool(t *testing.T) {
 	}
 }
 
+func TestReader_ListReceipts_FilterByServer(t *testing.T) {
+	dbPath := t.TempDir() + "/server-filter-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	r1 := makeReceiptWithTool("urn:receipt:sf1", "chain-sf", 1, "tool.call", "read_file", "filesystem", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z")
+	r2 := makeReceiptWithTool("urn:receipt:sf2", "chain-sf", 2, "tool.call", "list_dir", "filesystem", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z")
+	r3 := makeReceiptWithTool("urn:receipt:sf3", "chain-sf", 3, "tool.call", "create_issue", "jira", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z")
+
+	for _, r := range []receipt.AgentReceipt{r1, r2, r3} {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Filter by server "filesystem" — should return 2 rows.
+	rows, err := reader.ListReceipts(Filter{Server: strPtr("filesystem")})
+	if err != nil {
+		t.Fatalf("list by server: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("got %d rows by server=filesystem, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.Server != "filesystem" {
+			t.Errorf("row server %q, want filesystem", row.Server)
+		}
+	}
+
+	// Filter by tool_name "read_file" — should return 1 row.
+	rows, err = reader.ListReceipts(Filter{ToolName: strPtr("read_file")})
+	if err != nil {
+		t.Fatalf("list by tool_name: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows by tool_name=read_file, want 1", len(rows))
+	}
+	if len(rows) == 1 && rows[0].ToolName != "read_file" {
+		t.Errorf("row tool_name %q, want read_file", rows[0].ToolName)
+	}
+
+	// Filter by server + tool_name combined — should return 1 row.
+	rows, err = reader.ListReceipts(Filter{Server: strPtr("filesystem"), ToolName: strPtr("list_dir")})
+	if err != nil {
+		t.Fatalf("list by server+tool: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows by server=filesystem tool_name=list_dir, want 1", len(rows))
+	}
+
+	// Non-matching filter — should return 0 rows.
+	rows, err = reader.ListReceipts(Filter{Server: strPtr("nonexistent")})
+	if err != nil {
+		t.Fatalf("list nonexistent server: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d rows for nonexistent server, want 0", len(rows))
+	}
+}
+
+func TestServerStats(t *testing.T) {
+	dbPath := t.TempDir() + "/serverstats-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Server A: 3 calls (2 success, 1 failure), 2 tools.
+	// Server B: 2 calls (1 success, 1 failure), 1 tool.
+	// No server: 1 call (1 failure) — the missing-server bucket (Server == "").
+	receipts := []receipt.AgentReceipt{
+		makeReceiptWithTool("urn:receipt:ss1", "chain-ss", 1, "tool.call", "tool_a1", "server-a", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:ss2", "chain-ss", 2, "tool.call", "tool_a1", "server-a", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
+		makeReceiptWithTool("urn:receipt:ss3", "chain-ss", 3, "tool.call", "tool_a2", "server-a", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:02:00Z"),
+		makeReceiptWithTool("urn:receipt:ss4", "chain-ss", 4, "tool.call", "tool_b1", "server-b", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:03:00Z"),
+		makeReceiptWithTool("urn:receipt:ss5", "chain-ss", 5, "tool.call", "tool_b1", "server-b", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:04:00Z"),
+		makeReceiptWithTool("urn:receipt:ss6", "chain-ss", 6, "tool.call", "", "", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:05:00Z"),
+	}
+	for _, r := range receipts {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// All-time stats.
+	stats, err := reader.ServerStats(nil)
+	if err != nil {
+		t.Fatalf("ServerStats: %v", err)
+	}
+
+	// Expect 3 servers: server-a (3), server-b (2), Unknown (1).
+	if len(stats) != 3 {
+		t.Fatalf("got %d servers, want 3: %+v", len(stats), stats)
+	}
+
+	// server-a must come first (highest total).
+	if stats[0].Server != "server-a" {
+		t.Errorf("stats[0].Server = %q, want server-a", stats[0].Server)
+	}
+	if stats[0].Total != 3 {
+		t.Errorf("server-a total = %d, want 3", stats[0].Total)
+	}
+	if stats[0].Failure != 1 {
+		t.Errorf("server-a failure = %d, want 1", stats[0].Failure)
+	}
+	wantRate := 1.0 / 3.0
+	if diff := stats[0].FailureRate - wantRate; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("server-a failure_rate = %f, want %f", stats[0].FailureRate, wantRate)
+	}
+	if len(stats[0].Tools) != 2 {
+		t.Errorf("server-a tools = %d, want 2", len(stats[0].Tools))
+	}
+	// tool_a1 (2 total) comes before tool_a2 (1 total).
+	if stats[0].Tools[0].ToolName != "tool_a1" {
+		t.Errorf("server-a tools[0].ToolName = %q, want tool_a1", stats[0].Tools[0].ToolName)
+	}
+	if stats[0].Tools[0].Total != 2 {
+		t.Errorf("server-a tools[0].Total = %d, want 2", stats[0].Tools[0].Total)
+	}
+	if stats[0].Tools[0].Failure != 0 {
+		t.Errorf("server-a tools[0].Failure = %d, want 0", stats[0].Tools[0].Failure)
+	}
+
+	// server-b.
+	if stats[1].Server != "server-b" {
+		t.Errorf("stats[1].Server = %q, want server-b", stats[1].Server)
+	}
+	if stats[1].Total != 2 {
+		t.Errorf("server-b total = %d, want 2", stats[1].Total)
+	}
+	if stats[1].Failure != 1 {
+		t.Errorf("server-b failure = %d, want 1", stats[1].Failure)
+	}
+	if diff := stats[1].FailureRate - 0.5; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("server-b failure_rate = %f, want 0.5", stats[1].FailureRate)
+	}
+
+	// The missing-server bucket (Server == "") must be last.
+	if stats[2].Server != "" {
+		t.Errorf("stats[2].Server = %q, want \"\" (missing-server bucket)", stats[2].Server)
+	}
+	if stats[2].Total != 1 {
+		t.Errorf("missing-server total = %d, want 1", stats[2].Total)
+	}
+	if stats[2].Failure != 1 {
+		t.Errorf("missing-server failure = %d, want 1", stats[2].Failure)
+	}
+	if diff := stats[2].FailureRate - 1.0; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("missing-server failure_rate = %f, want 1.0", stats[2].FailureRate)
+	}
+
+	// Since filter — only receipts from 10:03 onward: ss4 (server-b success), ss5 (server-b failure), ss6 (unknown failure).
+	since := "2026-04-01T10:03:00Z"
+	filtered, err := reader.ServerStats(&since)
+	if err != nil {
+		t.Fatalf("ServerStats since: %v", err)
+	}
+	// 2 servers: server-b (2) and the missing-server bucket (1).
+	if len(filtered) != 2 {
+		t.Fatalf("since filter: got %d servers, want 2: %+v", len(filtered), filtered)
+	}
+	if filtered[0].Server != "server-b" {
+		t.Errorf("since filter stats[0].Server = %q, want server-b", filtered[0].Server)
+	}
+	if filtered[0].Total != 2 {
+		t.Errorf("since filter server-b total = %d, want 2", filtered[0].Total)
+	}
+	if filtered[1].Server != "" {
+		t.Errorf("since filter stats[1].Server = %q, want \"\" (missing-server bucket)", filtered[1].Server)
+	}
+}
+
+// A server literally named "Unknown" must not be merged into the missing-server
+// bucket. The missing bucket is returned with an empty Server string; only the
+// frontend renders "" as the "Unknown" label.
+func TestServerStats_LiteralUnknownNotMerged(t *testing.T) {
+	dbPath := t.TempDir() + "/serverstats-unknown.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	receipts := []receipt.AgentReceipt{
+		// A real server whose system name happens to be "Unknown".
+		makeReceiptWithTool("urn:receipt:u1", "chain-u", 1, "tool.call", "tool_u", "Unknown", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:u2", "chain-u", 2, "tool.call", "tool_u", "Unknown", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
+		// A receipt with no server — the missing-server bucket.
+		makeReceiptWithTool("urn:receipt:u3", "chain-u", 3, "tool.call", "", "", receipt.RiskLow, receipt.StatusFailure, "2026-04-01T10:02:00Z"),
+	}
+	for _, r := range receipts {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	stats, err := reader.ServerStats(nil)
+	if err != nil {
+		t.Fatalf("ServerStats: %v", err)
+	}
+
+	// Two distinct buckets: the real server keeps Server == "Unknown"
+	// (2 receipts, 0 failures); the missing-server bucket keeps Server == ""
+	// (1 receipt, 1 failure). They must not be conflated.
+	if len(stats) != 2 {
+		t.Fatalf("got %d server groups, want 2 (real 'Unknown' must stay separate from missing): %+v", len(stats), stats)
+	}
+	var foundReal, foundMissing bool
+	for _, st := range stats {
+		switch st.Server {
+		case "Unknown":
+			foundReal = true
+			if st.Total != 2 || st.Failure != 0 {
+				t.Errorf("real 'Unknown' server = {total %d, failure %d}, want {2, 0}", st.Total, st.Failure)
+			}
+		case "":
+			foundMissing = true
+			if st.Total != 1 || st.Failure != 1 {
+				t.Errorf("missing-server bucket = {total %d, failure %d}, want {1, 1}", st.Total, st.Failure)
+			}
+		default:
+			t.Errorf("unexpected server label %q", st.Server)
+		}
+	}
+	if !foundReal {
+		t.Error("did not find the real 'Unknown' server bucket (Server == \"Unknown\")")
+	}
+	if !foundMissing {
+		t.Error("did not find the missing-server bucket (Server == \"\")")
+	}
+}
+
+func TestServerStats_Empty(t *testing.T) {
+	dbPath := seedEmptyDB(t)
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	stats, err := reader.ServerStats(nil)
+	if err != nil {
+		t.Fatalf("ServerStats: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Errorf("empty store: got %d servers, want 0", len(stats))
+	}
+}
+
+func TestServerStats_ToolOrdering(t *testing.T) {
+	// Two tools with equal totals — tie-break by tool_name ASC.
+	dbPath := t.TempDir() + "/tool-order-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	recs := []receipt.AgentReceipt{
+		makeReceiptWithTool("urn:receipt:to1", "chain-to", 1, "tool.call", "zebra", "srv", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z"),
+		makeReceiptWithTool("urn:receipt:to2", "chain-to", 2, "tool.call", "alpha", "srv", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z"),
+	}
+	for _, r := range recs {
+		h, err := receipt.HashReceipt(r)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(r, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	stats, err := reader.ServerStats(nil)
+	if err != nil {
+		t.Fatalf("ServerStats: %v", err)
+	}
+	if len(stats) != 1 || len(stats[0].Tools) != 2 {
+		t.Fatalf("unexpected shape: %+v", stats)
+	}
+	// Equal totals → alphabetical ASC: alpha before zebra.
+	if stats[0].Tools[0].ToolName != "alpha" {
+		t.Errorf("tools[0].ToolName = %q, want alpha (tie-break ASC)", stats[0].Tools[0].ToolName)
+	}
+	if stats[0].Tools[1].ToolName != "zebra" {
+		t.Errorf("tools[1].ToolName = %q, want zebra", stats[0].Tools[1].ToolName)
+	}
+}
+
 func TestReader_ListReceipts_ParametersDisclosurePresence(t *testing.T) {
 	// Under the v0.3.0 envelope shape (ADR-0012), parameters_disclosure is an
 	// opaque HPKE ciphertext blob — there are no `input`/`output` keys to

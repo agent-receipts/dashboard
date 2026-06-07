@@ -99,12 +99,36 @@ type GroupCount struct {
 	Count int    `json:"count"`
 }
 
+// ToolStat holds per-tool aggregates within a server group.
+type ToolStat struct {
+	ToolName    string  `json:"tool_name"`
+	Total       int     `json:"total"`
+	Failure     int     `json:"failure"`
+	FailureRate float64 `json:"failure_rate"`
+}
+
+// ServerStat holds per-server aggregates with a breakdown by tool.
+type ServerStat struct {
+	// Server is the target.system value. An empty string denotes the
+	// missing-server bucket (receipts with no target.system); the frontend
+	// renders it as "Unknown". Keeping it empty rather than the literal string
+	// "Unknown" avoids colliding with a real server named "Unknown".
+	Server  string     `json:"server"`
+	Tools   []ToolStat `json:"tools"`
+	Total   int        `json:"total"`
+	Failure int        `json:"failure"`
+	// FailureRate is the fraction of receipts that failed, in [0,1].
+	FailureRate float64 `json:"failure_rate"`
+}
+
 // Filter controls which receipts are returned by ListReceipts.
 type Filter struct {
 	ChainID    *string
 	ActionType *string
 	RiskLevel  *string
 	Status     *string
+	Server     *string // target.system value (exact match)
+	ToolName   *string // tool_name column (exact match)
 	After      *string // ISO 8601 timestamp, inclusive
 	Before     *string // ISO 8601 timestamp, inclusive
 	Since      *string // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
@@ -182,6 +206,14 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	if f.Status != nil {
 		conds = append(conds, "status = ?")
 		args = append(args, *f.Status)
+	}
+	if f.ToolName != nil {
+		conds = append(conds, "tool_name = ?")
+		args = append(args, *f.ToolName)
+	}
+	if f.Server != nil {
+		conds = append(conds, "json_extract(receipt_json, '$.credentialSubject.action.target.system') = ?")
+		args = append(args, *f.Server)
 	}
 	if f.After != nil {
 		conds = append(conds, "timestamp >= ?")
@@ -448,6 +480,138 @@ func (r *Reader) ActionStats(since *string) ([]ActionStat, error) {
 		return out[i].ActionType < out[j].ActionType
 	})
 
+	return out, nil
+}
+
+// ServerStats returns per-server, per-tool receipt counts and failure rates.
+// The optional since parameter (ISO-8601 inclusive) restricts results to
+// receipts at or after that timestamp; nil means all-time.
+// Rows whose extracted server value is empty are grouped into a missing-server
+// bucket (Server == "") placed after all named servers in the result slice.
+func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
+	var args []any
+	where := ""
+	if since != nil {
+		where = "WHERE timestamp >= ?"
+		args = append(args, *since)
+	}
+
+	// Group by both server and tool in one pass. We COALESCE empty/NULL values
+	// so Go sees a plain empty string rather than a SQL NULL.
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.system'), '') AS server,
+			COALESCE(tool_name, '') AS tool,
+			COUNT(*) AS total,
+			SUM(CASE WHEN status = 'failure' THEN 1 ELSE 0 END) AS failure
+		FROM receipts
+		%s
+		GROUP BY server, tool
+		ORDER BY total DESC, tool ASC
+	`, where)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type rawRow struct {
+		server  string
+		tool    string
+		total   int
+		failure int
+	}
+	serverMap := map[string]*ServerStat{}
+	var serverOrder []string // insertion order
+
+	for rows.Next() {
+		var rr rawRow
+		if err := rows.Scan(&rr.server, &rr.tool, &rr.total, &rr.failure); err != nil {
+			return nil, err
+		}
+		// Key by the raw server value (empty string for a missing target.system)
+		// rather than folding to "Unknown" here — folding now would merge a real
+		// server literally named "Unknown" into the missing-server bucket. The
+		// empty-string bucket is relabelled to "Unknown" for display below.
+		st, ok := serverMap[rr.server]
+		if !ok {
+			st = &ServerStat{Server: rr.server}
+			serverMap[rr.server] = st
+			serverOrder = append(serverOrder, rr.server)
+		}
+		rate := 0.0
+		if rr.total > 0 {
+			rate = float64(rr.failure) / float64(rr.total)
+		}
+		st.Tools = append(st.Tools, ToolStat{
+			ToolName:    rr.tool,
+			Total:       rr.total,
+			Failure:     rr.failure,
+			FailureRate: rate,
+		})
+		st.Total += rr.total
+		st.Failure += rr.failure
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Compute per-server failure rate and split named vs the missing-server
+	// bucket (keyed by ""). The missing bucket keeps an empty server string in
+	// the response so a real server literally named "Unknown" stays
+	// distinguishable; the frontend renders "" as the "Unknown" label.
+	var named []ServerStat
+	var unknown *ServerStat
+	for _, key := range serverOrder {
+		st := serverMap[key]
+		if st.Total > 0 {
+			st.FailureRate = float64(st.Failure) / float64(st.Total)
+		}
+		if key == "" {
+			unknown = st
+		} else {
+			named = append(named, *st)
+		}
+	}
+
+	// Sort named servers DESC by total, tie-broken by server name ASC for a
+	// deterministic order (avoids UI jitter across equivalent datasets).
+	// Insertion sort is fine at dashboard scale.
+	for i := 1; i < len(named); i++ {
+		for j := i; j > 0; j-- {
+			cur, prev := named[j], named[j-1]
+			if cur.Total > prev.Total || (cur.Total == prev.Total && cur.Server < prev.Server) {
+				named[j], named[j-1] = named[j-1], named[j]
+			} else {
+				break
+			}
+		}
+	}
+
+	// Sort each server's tools DESC by total, tie-break tool_name ASC.
+	sortTools := func(tools []ToolStat) {
+		for i := 1; i < len(tools); i++ {
+			for j := i; j > 0; j-- {
+				a, b := tools[j-1], tools[j]
+				less := a.Total < b.Total || (a.Total == b.Total && a.ToolName > b.ToolName)
+				if less {
+					tools[j-1], tools[j] = tools[j], tools[j-1]
+				} else {
+					break
+				}
+			}
+		}
+	}
+	for i := range named {
+		sortTools(named[i].Tools)
+	}
+
+	out := named
+	if unknown != nil {
+		sortTools(unknown.Tools)
+		out = append(out, *unknown)
+	}
 	return out, nil
 }
 
