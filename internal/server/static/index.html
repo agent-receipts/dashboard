@@ -54,6 +54,22 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
     }
+    /* Collapsible cards: the chevron toggles a `collapsed` class that hides
+       every direct child of the card except the header (.card-head). */
+    .card-collapse {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      line-height: 1;
+      padding: 2px 4px;
+      transition: transform 0.15s ease, color 0.12s ease;
+    }
+    .card-collapse:hover { color: var(--text); }
+    .card.collapsed .card-collapse { transform: rotate(-90deg); }
+    .card.collapsed > .card-head { margin-bottom: 0; }
+    .card.collapsed > :not(.card-head) { display: none; }
     .card-clickable {
       cursor: pointer;
       transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
@@ -605,40 +621,58 @@
       <div id="stats-cards" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6"></div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div class="card p-4">
-          <h3 class="text-sm font-medium muted mb-3">Risk distribution</h3>
+        <div class="card p-4" data-card="risk">
+          <div class="card-head flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium muted">Risk distribution</h3>
+            <button class="card-collapse" type="button" aria-label="Collapse Risk distribution" onclick="toggleCardCollapse('risk')">▾</button>
+          </div>
           <div id="risk-chart" class="space-y-2"></div>
         </div>
-        <div class="card p-4">
-          <h3 class="text-sm font-medium muted mb-3">Status distribution</h3>
+        <div class="card p-4" data-card="status">
+          <div class="card-head flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium muted">Status distribution</h3>
+            <button class="card-collapse" type="button" aria-label="Collapse Status distribution" onclick="toggleCardCollapse('status')">▾</button>
+          </div>
           <div id="status-chart" class="space-y-2"></div>
         </div>
-        <div class="card p-4">
-          <h3 class="text-sm font-medium muted mb-3">Action distribution</h3>
+        <div class="card p-4" data-card="action">
+          <div class="card-head flex items-center justify-between mb-3">
+            <h3 class="text-sm font-medium muted">Action distribution</h3>
+            <button class="card-collapse" type="button" aria-label="Collapse Action distribution" onclick="toggleCardCollapse('action')">▾</button>
+          </div>
           <div id="action-chart" class="space-y-2"></div>
         </div>
       </div>
 
-      <div class="card p-4 mb-6">
-        <div class="flex items-center justify-between mb-3">
+      <div class="card p-4 mb-6" data-card="top-actions">
+        <div class="card-head flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium muted">Top actions by failure rate</h3>
-          <button class="text-xs accent" onclick="showView('actions')" style="background:none;border:none;cursor:pointer;">View all →</button>
+          <div class="flex items-center gap-2">
+            <button class="text-xs accent" onclick="showView('actions')" style="background:none;border:none;cursor:pointer;">View all →</button>
+            <button class="card-collapse" type="button" aria-label="Collapse Top actions by failure rate" onclick="toggleCardCollapse('top-actions')">▾</button>
+          </div>
         </div>
         <div id="top-actions-chart"></div>
       </div>
 
-      <div class="card p-4 mb-6" id="server-activity-card">
-        <div class="flex items-center justify-between mb-3">
+      <div class="card p-4 mb-6" id="server-activity-card" data-card="server-activity">
+        <div class="card-head flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium muted">Server activity</h3>
-          <button class="text-xs accent" onclick="showView('servers')" style="background:none;border:none;cursor:pointer;">View all →</button>
+          <div class="flex items-center gap-2">
+            <button class="text-xs accent" onclick="showView('servers')" style="background:none;border:none;cursor:pointer;">View all →</button>
+            <button class="card-collapse" type="button" aria-label="Collapse Server activity" onclick="toggleCardCollapse('server-activity')">▾</button>
+          </div>
         </div>
         <div id="server-activity-chart"></div>
       </div>
 
-      <div class="card p-4">
-        <div class="flex items-center justify-between mb-3">
+      <div class="card p-4" data-card="recent-receipts">
+        <div class="card-head flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium muted">Recent receipts</h3>
-          <button class="text-xs accent" onclick="showView('receipts')" style="background:none;border:none;cursor:pointer;">View all →</button>
+          <div class="flex items-center gap-2">
+            <button class="text-xs accent" onclick="showView('receipts')" style="background:none;border:none;cursor:pointer;">View all →</button>
+            <button class="card-collapse" type="button" aria-label="Collapse Recent receipts" onclick="toggleCardCollapse('recent-receipts')">▾</button>
+          </div>
         </div>
         <div id="recent-receipts"></div>
       </div>
@@ -868,6 +902,29 @@
       if (view === 'actions')  loadActions();
       if (view === 'servers')  loadServers();
       if (view === 'chains')   loadChains();
+    }
+
+    // ---------- Collapsible cards ----------
+    // Each Overview card with a [data-card] id can be collapsed to just its
+    // header; the state is remembered per card in localStorage so a hidden card
+    // stays hidden across reloads.
+    const CARD_COLLAPSE_PREFIX = 'cardCollapsed:';
+
+    function toggleCardCollapse(id) {
+      const card = document.querySelector(`[data-card="${id}"]`);
+      if (!card) return;
+      const collapsed = card.classList.toggle('collapsed');
+      const btn = card.querySelector('.card-collapse');
+      if (btn) btn.setAttribute('aria-label', (collapsed ? 'Expand ' : 'Collapse ') + id);
+      try { localStorage.setItem(CARD_COLLAPSE_PREFIX + id, collapsed ? '1' : '0'); } catch (_) {}
+    }
+
+    function applyCardCollapseState() {
+      document.querySelectorAll('[data-card]').forEach(card => {
+        let stored = null;
+        try { stored = localStorage.getItem(CARD_COLLAPSE_PREFIX + card.dataset.card); } catch (_) {}
+        if (stored === '1') card.classList.add('collapsed');
+      });
     }
 
     // ---------- Header context ----------
@@ -2938,6 +2995,7 @@
         loadOverview();
       }
     });
+    applyCardCollapseState();
     loadForensicStatus();
   </script>
 </body>
