@@ -466,21 +466,20 @@ func (r *Reader) TimeseriesStats(from, to time.Time, bucket time.Duration) ([]Bu
 		from = t
 	}
 
-	// Floor from to the bucket boundary.
-	fromSec := from.Unix()
-	fromSec = (fromSec / bucketSec) * bucketSec
-	from = time.Unix(fromSec, 0).UTC()
+	// The SQL bound uses the exact requested window so e.g. range=24h returns at
+	// most 24h of data. Bucket starts are floored to the bucket boundary so the
+	// bars align on round times; the first/last bucket may therefore be partial.
+	fromISO := from.UTC().Format(time.RFC3339)
+	toISO := to.UTC().Format(time.RFC3339)
 
+	fromSec := (from.Unix() / bucketSec) * bucketSec
 	toSec := to.Unix()
 
-	// Guard against absurd bucket counts.
-	bucketCount := (toSec-fromSec+bucketSec-1)/bucketSec + 1
+	// Guard against absurd bucket counts (the number of buckets generated below).
+	bucketCount := (toSec - fromSec + bucketSec - 1) / bucketSec
 	if bucketCount > maxTimeseriesBuckets {
 		return nil, fmt.Errorf("time range and bucket size would produce %d buckets (limit %d): narrow the range or increase the bucket size", bucketCount, maxTimeseriesBuckets)
 	}
-
-	fromISO := from.UTC().Format(time.RFC3339)
-	toISO := to.UTC().Format(time.RFC3339)
 
 	// Query: group by floored epoch bucket, status, and risk_level.
 	query := fmt.Sprintf(`

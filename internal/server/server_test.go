@@ -970,6 +970,16 @@ func TestTimeseriesStatsEndpoint(t *testing.T) {
 		}
 	})
 
+	t.Run("200 with day-suffix range (7d)", func(t *testing.T) {
+		// The day shorthand from the issue examples must be accepted (time.ParseDuration alone rejects "7d").
+		req := httptest.NewRequest("GET", "/api/stats/timeseries?range=7d", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("range=7d: got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("400 on invalid range", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/stats/timeseries?range=notaduration", nil)
 		w := httptest.NewRecorder()

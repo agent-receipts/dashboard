@@ -1424,7 +1424,7 @@ func TestTimeseriesStats(t *testing.T) {
 	// Hour 1 (10:00–10:59): 2 success/low, 1 failure/high
 	// Hour 2 (11:00–11:59): 1 success/medium
 	// Hour 3 (12:00–12:59): 0 receipts (empty bucket)
-	// to covers hour 4 (13:00) — so 4 buckets total.
+	// from=10:00, to=13:00 (exclusive), 1h buckets → 3 buckets: 10:00, 11:00, 12:00.
 	dbPath := t.TempDir() + "/ts-test.db"
 	s, err := sdkstore.Open(dbPath)
 	if err != nil {

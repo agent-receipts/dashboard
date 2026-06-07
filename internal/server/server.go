@@ -178,6 +178,20 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// parseFlexibleDuration parses a Go duration, additionally accepting an `Nd`
+// (days) suffix — e.g. "7d", "30d" — which time.ParseDuration rejects. This
+// matches the day-shorthand shown in the timeseries API examples.
+func parseFlexibleDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
 // autoBucket selects a sensible bucket duration for the given window duration.
 // Thresholds: ≤2h → 5m, ≤24h → 1h, ≤7d → 6h, else → 1d.
 func autoBucket(window time.Duration) time.Duration {
@@ -206,9 +220,9 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 
 	if rangeStr != "" {
 		// range= takes precedence over from=/to=.
-		d, err := time.ParseDuration(rangeStr)
+		d, err := parseFlexibleDuration(rangeStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "range must be a positive Go duration (e.g. 24h)")
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
 			return
 		}
 		from = now.Add(-d)
@@ -240,9 +254,9 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 	// Resolve bucket duration.
 	var bucket time.Duration
 	if bucketStr := q.Get("bucket"); bucketStr != "" {
-		d, err := time.ParseDuration(bucketStr)
+		d, err := parseFlexibleDuration(bucketStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "bucket must be a positive Go duration (e.g. 1h)")
+			writeError(w, http.StatusBadRequest, "bucket must be a positive duration (e.g. 1h, 1d)")
 			return
 		}
 		bucket = d
