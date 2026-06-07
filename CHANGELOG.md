@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Overview "Top actions by failure rate" and "Server activity" cards no longer hang on their loading skeletons.** Both summary fetches ran after `startPolling()`, which increments the polling generation counter, so their stale-generation guard always tripped and the render was skipped. The fetches now run before `startPolling()`, keeping each card isolated (a stats error still can't break recent-receipts polling).
+- **Overview "Server activity" card now includes the "Unknown" (no-server) group** instead of filtering it out, so receipts with no `target.system` still show activity rather than rendering "No data". The empty state now only appears for a genuinely empty store.
 
 ## [0.5.1] - 2026-06-03
 

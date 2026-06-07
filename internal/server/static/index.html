@@ -1252,21 +1252,24 @@
     function renderServerActivityChart(servers) {
       const el = document.getElementById('server-activity-chart');
       if (!el) return;
-      // Exclude the missing-server bucket (server === '') from the named-server
-      // activity summary; a real server named "Unknown" is kept.
-      const top = servers.filter(s => s.server !== '').slice(0, 5);
+      // Include all server groups (top 5 by the backend's ordering), mapping the
+      // missing-server bucket (server === '') to an "Unknown" label so activity
+      // with no target.system still shows instead of an empty card.
+      const top = (servers || []).slice(0, 5);
       if (top.length === 0) {
-        el.innerHTML = '<div class="muted text-sm">No data</div>';
+        el.innerHTML = '<div class="muted text-sm">No server data yet.</div>';
         return;
       }
       const maxTotal = Math.max(...top.map(s => s.total), 1);
-      el.innerHTML = top.map(s => `
+      el.innerHTML = top.map(s => {
+        const label = s.server || 'Unknown';
+        return `
         <div class="bar-row">
-          <span class="bar-label" style="width:120px;min-width:120px;" title="${escapeAttr(s.server)}"><span class="badge" style="max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(s.server)}</span></span>
+          <span class="bar-label" style="width:120px;min-width:120px;" title="${escapeAttr(label)}"><span class="badge" style="max-width:116px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">${escapeHtml(label)}</span></span>
           <div class="bar-track"><div class="bar-fill bar-action" style="width:${(s.total / maxTotal * 100)}%"></div></div>
           <span class="bar-count">${s.total}</span>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
     }
 
     // ---------- Servers view ----------
