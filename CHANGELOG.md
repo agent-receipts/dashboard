@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Layer 3 attribution rendering** — the Receipts view now renders session grouping, subagent swimlanes, correlation pairing, and delegation edges for receipts emitted by daemon ≥ v0.17.0 / hook ≥ v0.14.0. When any receipt in the current result set carries a `session_id`, the flat table is replaced with a grouped layout:
+  - **Session groups** — receipts are grouped under collapsible session headers keyed by `issuer.session_id`; clicking the ▾ button hides all rows in that session.
+  - **Subagent swimlanes** — within each session, receipts are split by `issuer.agent_id` into labelled sub-groups ("Orchestrator" for the root agent, "↳ Subagent <id>" for spawned agents).
+  - **Delegation edges** — subagent swimlane headers show a `← <parent_chain_id>` indicator when the first receipt of that agent carries a `credentialSubject.delegation` object, making parent→child chain relationships visible at a glance.
+  - **Correlation pairing** — hook pre-check and mcp-proxy post-action receipts sharing the same `credentialSubject.correlation_id` are collapsed into a single row showing both statuses (`pre-status → post-status`) with a `pre+post` badge; clicking opens the post-action receipt.
+  - **Graceful degradation** — old receipts without these fields continue to render correctly in both the flat and grouped layouts; receipts without a `session_id` are grouped under a "Legacy receipts" section at the bottom.
+
 ## [0.6.1] - 2026-06-09
 
 ### Fixed

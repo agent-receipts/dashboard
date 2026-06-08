@@ -569,6 +569,47 @@
     }
     .range-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+    /* ---------- Session grouping / Layer 3 ---------- */
+    .session-header-tr td {
+      padding: 6px 12px;
+      background: var(--surface-hover);
+      border-bottom: 1px solid var(--border);
+    }
+    .session-header-inner {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .session-collapse-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 0.8rem; padding: 1px 4px;
+      transition: color 0.12s ease;
+    }
+    .session-collapse-btn:hover { color: var(--text); }
+    .agent-header-tr td {
+      padding: 4px 12px 4px 28px;
+      background: rgba(255,255,255,0.015);
+      border-bottom: 1px solid rgba(48,54,61,0.4);
+    }
+    .agent-header-inner {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--muted);
+    }
+    .agent-root-label { color: var(--accent); font-weight: 500; }
+    .agent-sub-label  { color: var(--muted); }
+    .delegation-edge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 0.7rem; color: var(--subtle);
+      margin-left: 8px; font-family: var(--font-mono);
+    }
+    .corr-pair-badge {
+      display: inline-block; padding: 1px 5px;
+      background: rgba(88,166,255,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(88,166,255,0.3);
+      border-radius: 9999px;
+      font-size: 0.65rem; font-weight: 500;
+      margin-left: 5px; vertical-align: middle;
+    }
+
     /* ---------- Layout helpers ---------- */
     main.app-main { padding: 24px; max-width: 1280px; margin: 0 auto; }
     @media (max-width: 720px) {
@@ -2150,7 +2191,8 @@
         renderReceiptsTable(receiptList, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
         renderMatchCount(receiptList.length, qVal);
         startPolling('receipts', 'receipts-table', receiptList, currentReceiptFilters);
-        nav.setSelector('#receipts-table tbody tr');
+        // Use [data-receipt-id] to skip session/agent header rows in grouped view.
+        nav.setSelector('#receipts-table tbody tr[data-receipt-id]');
       } catch (err) {
         showError('Failed to load receipts: ' + err.message);
         document.getElementById('receipts-table').innerHTML =
@@ -2197,8 +2239,11 @@
     function receiptRowHTML(r, opts) {
       const flash = opts && opts.flash ? ' row-new' : '';
       const tsAttr = r.timestamp ? ` title="${escapeAttr(r.timestamp)}"` : '';
+      // When rendered inside a session group, carry the session ID so
+      // toggleSession() can show/hide this row with its peers.
+      const sessionAttr = (opts && opts.sessionId) ? ` data-session-id="${escapeAttr(opts.sessionId)}"` : '';
       return `
-        <tr class="${flash}" data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+        <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
           <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
@@ -2285,6 +2330,16 @@
         `;
         return;
       }
+
+      // Use session-grouped rendering for the full receipts table whenever any
+      // receipt carries a session_id (daemon ≥ v0.17.0). The overview
+      // recent-receipts mini-table always uses the flat layout.
+      if (containerId === 'receipts-table' && receipts.some(r => r.session_id)) {
+        renderGroupedReceiptsTable(receipts, container, containerId);
+        hydrateListDisclosurePreviews(receipts);
+        return;
+      }
+
       container.innerHTML = `
         <div class="receipts-table-wrap">
           <div class="receipts-table-scroll">
@@ -2309,6 +2364,226 @@
         </div>
       `;
       hydrateListDisclosurePreviews(receipts);
+    }
+
+    // ---------- Layer 3 session grouping ----------
+
+    // groupReceiptsBySession returns an array of session groups ordered by
+    // their first receipt's timestamp (preserving the server's newest-first
+    // ordering). Each group has the shape:
+    //   { sessionId, firstTimestamp, receiptCount, agents: [ { agentId, delegation, rows } ] }
+    // where rows is an array of "items": each item is either a single-element
+    // array [r] (ungrouped receipt) or a two-element array [pre, post]
+    // (correlated pair). Receipts without session_id are bucketed under the
+    // sentinel key '__legacy__' and appended at the end.
+    function groupReceiptsBySession(receipts) {
+      const sessionMap  = new Map();
+      const sessionOrder = [];
+
+      for (const r of receipts) {
+        const sid = r.session_id || '__legacy__';
+        if (!sessionMap.has(sid)) {
+          sessionMap.set(sid, { firstTimestamp: r.timestamp, agents: new Map(), agentOrder: [] });
+          sessionOrder.push(sid);
+        }
+        const session = sessionMap.get(sid);
+        const aid = r.agent_id || '__root__';
+        if (!session.agents.has(aid)) {
+          session.agents.set(aid, { rawRows: [], delegation: null });
+          session.agentOrder.push(aid);
+        }
+        const agent = session.agents.get(aid);
+        agent.rawRows.push(r);
+        // Capture delegation from first receipt of a delegated chain.
+        if (!agent.delegation && r.delegation) {
+          agent.delegation = r.delegation;
+        }
+      }
+
+      const result = [];
+      for (const sid of sessionOrder) {
+        const session  = sessionMap.get(sid);
+        const rawCount = Array.from(session.agents.values())
+          .reduce((n, a) => n + a.rawRows.length, 0);
+        const agents = session.agentOrder.map(aid => {
+          const a = session.agents.get(aid);
+          return {
+            agentId:    aid,
+            delegation: a.delegation,
+            rows:       collapseCorrelationPairs(a.rawRows),
+          };
+        });
+        result.push({
+          sessionId:      sid,
+          firstTimestamp: session.firstTimestamp,
+          receiptCount:   rawCount,
+          agents,
+        });
+      }
+      return result;
+    }
+
+    // collapseCorrelationPairs merges pairs of receipts sharing the same
+    // correlation_id into a two-element [pre, post] array sorted by sequence.
+    // Receipts without a correlation_id, or whose correlation_id appears only
+    // once in the list, are wrapped in single-element arrays [r].
+    function collapseCorrelationPairs(rows) {
+      // First pass: collect all rows per correlation_id.
+      const corrMap = new Map();
+      for (const r of rows) {
+        if (!r.correlation_id) continue;
+        if (!corrMap.has(r.correlation_id)) corrMap.set(r.correlation_id, []);
+        corrMap.get(r.correlation_id).push(r);
+      }
+
+      // Second pass: walk the original order and emit items.
+      const result  = [];
+      const emitted = new Set(); // correlation_ids already emitted as a pair
+      for (const r of rows) {
+        if (!r.correlation_id) {
+          result.push([r]);
+          continue;
+        }
+        if (emitted.has(r.correlation_id)) continue;
+        const group = corrMap.get(r.correlation_id);
+        if (group.length === 2) {
+          emitted.add(r.correlation_id);
+          group.sort((a, b) => a.sequence - b.sequence);
+          result.push(group); // [pre, post]
+        } else {
+          // Odd count or singleton: emit individually.
+          emitted.add(r.correlation_id);
+          for (const gr of group) result.push([gr]);
+        }
+      }
+      return result;
+    }
+
+    // renderGroupedReceiptsTable renders the receipts view with session headers,
+    // per-agent swimlane sub-headers, collapsed correlation pairs, and
+    // delegation edge indicators. Only used when at least one receipt carries
+    // a session_id; falls back to the flat table otherwise.
+    function renderGroupedReceiptsTable(receipts, container, containerId) {
+      const groups   = groupReceiptsBySession(receipts);
+      const COL_COUNT = 8;
+
+      const bodyHTML = groups.map(session => {
+        const sid      = session.sessionId;
+        const isLegacy = sid === '__legacy__';
+        const safeEsc  = escapeAttr(sid);
+        const countLabel = `${session.receiptCount} receipt${session.receiptCount !== 1 ? 's' : ''}`;
+        const timeLabel  = session.firstTimestamp ? formatRelative(session.firstTimestamp) : '';
+
+        const headerRow = isLegacy
+          ? `<tr class="session-header-tr">
+               <td colspan="${COL_COUNT}">
+                 <div class="session-header-inner">
+                   <span style="font-size:0.78rem;color:var(--muted);">Legacy receipts (no session)</span>
+                   <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel}</span>
+                 </div>
+               </td>
+             </tr>`
+          : `<tr class="session-header-tr">
+               <td colspan="${COL_COUNT}">
+                 <div class="session-header-inner">
+                   <button type="button" class="session-collapse-btn" onclick="toggleSession(this,${JSON.stringify(sid)})" aria-label="Collapse session">▾</button>
+                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
+                   <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · started ${escapeHtml(timeLabel)}</span>
+                 </div>
+               </td>
+             </tr>`;
+
+        const agentRowsHTML = session.agents.map(agent => {
+          const aid    = agent.agentId;
+          const isRoot = aid === '__root__';
+          const aLabel = isRoot
+            ? `<span class="agent-root-label">Orchestrator</span>`
+            : `<span class="agent-sub-label">↳ Subagent</span><span class="font-mono" style="font-size:0.7rem;color:var(--text);">${escapeHtml(aid)}</span>`;
+
+          const delEdge = agent.delegation
+            ? `<span class="delegation-edge" title="Delegated from ${escapeAttr(agent.delegation.parent_chain_id)}">← ${escapeHtml(truncate(agent.delegation.parent_chain_id, 28))}</span>`
+            : '';
+
+          const agentHeaderRow = `<tr class="agent-header-tr" data-session-id="${safeEsc}">
+               <td colspan="${COL_COUNT}">
+                 <div class="agent-header-inner">${aLabel}${delEdge}</div>
+               </td>
+             </tr>`;
+
+          const receiptRowsHTML = agent.rows.map(item =>
+            item.length === 2
+              ? corrPairRowHTML(item[0], item[1], sid)
+              : receiptRowHTML(item[0], { sessionId: sid })
+          ).join('');
+
+          return agentHeaderRow + receiptRowsHTML;
+        }).join('');
+
+        return headerRow + agentRowsHTML;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll">
+            <table class="receipts">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
+                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th>
+                </tr>
+              </thead>
+              <tbody id="${tbodyIdFor(containerId)}">
+                ${bodyHTML}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    // corrPairRowHTML renders a pre+post correlated pair as a single table row.
+    // Clicking opens the post-action receipt (which carries the final outcome).
+    function corrPairRowHTML(pre, post, sessionId) {
+      const ts          = pre.timestamp || post.timestamp || '';
+      const server      = pre.server    || post.server    || '';
+      const tool        = pre.tool_name || post.tool_name || '';
+      const action      = pre.action_type || post.action_type || '';
+      const riskLevel   = post.risk_level || pre.risk_level || '';
+      const tsTitle     = ts
+        ? ` title="${escapeAttr(ts)} (pre) → ${escapeAttr(post.timestamp || '')} (post)"`
+        : '';
+      const sessionAttr = sessionId ? ` data-session-id="${escapeAttr(sessionId)}"` : '';
+      return `
+        <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" onclick="showReceipt(this.dataset.receiptId)">
+          <td class="muted whitespace-nowrap"${tsTitle}>${formatRelative(ts)}</td>
+          <td class="font-mono text-xs muted">${server ? escapeHtml(server) : '<span class="subtle">—</span>'}</td>
+          <td class="font-mono text-xs">${tool ? escapeHtml(tool) : '<span class="subtle">—</span>'}</td>
+          <td class="font-mono text-xs">${escapeHtml(action)}<span class="corr-pair-badge">pre+post</span>${disclosureIndicatorHTML(post)}</td>
+          <td><span class="badge ${riskClass(riskLevel)}">${escapeHtml(riskLevel)}</span></td>
+          <td>
+            <span class="badge ${statusClass(pre.status)}" style="opacity:0.6;">${escapeHtml(pre.status)}</span>
+            <span class="subtle" style="font-size:0.7rem;margin:0 2px;">→</span>
+            <span class="badge ${statusClass(post.status)}">${escapeHtml(post.status)}</span>
+            ${mismatchIndicatorHTML(post)}
+          </td>
+          <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(post.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(post.chain_id, 20))}</td>
+          <td class="muted">#${pre.sequence}</td>
+        </tr>
+      `;
+    }
+
+    // toggleSession collapses or expands all rows belonging to a session group.
+    // Non-header rows are identified by data-session-id matching the given sid.
+    function toggleSession(btn, sid) {
+      const tbody = btn.closest('tbody');
+      if (!tbody) return;
+      const memberRows = Array.from(tbody.rows).filter(r =>
+        r.dataset && r.dataset.sessionId === sid
+      );
+      const anyVisible = memberRows.some(r => !r.hidden);
+      memberRows.forEach(r => { r.hidden = anyVisible; });
+      btn.textContent = anyVisible ? '▶' : '▾';
+      btn.setAttribute('aria-label', anyVisible ? 'Expand session' : 'Collapse session');
     }
 
     // disclosureHydrationConcurrency caps how many /api/disclosure requests
@@ -3338,8 +3613,9 @@
         }
         refreshOverviewStats();
       } else if (poller.activeView === 'receipts') {
-        // Refresh match count when new rows arrive.
-        const tableRows = tbody.rows.length;
+        // Count only receipt rows (not session/agent header rows which lack
+        // data-receipt-id) so the match count is correct in grouped view.
+        const tableRows = Array.from(tbody.rows).filter(r => r.dataset.receiptId).length;
         renderMatchCount(tableRows, currentReceiptFilters().q || '');
       }
 
