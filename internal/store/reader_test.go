@@ -1136,6 +1136,79 @@ func TestReader_Stats_EmptyStore(t *testing.T) {
 	}
 }
 
+// TestEmptyResultsNeverNil guards against the class of bug where a store
+// function returns a nil Go slice on an empty result set, which json.Marshal
+// encodes as JSON null rather than []. All list/stat functions that feed API
+// responses must return non-nil slices so clients always receive [].
+func TestEmptyResultsNeverNil(t *testing.T) {
+	dbPath := seedEmptyDB(t)
+	r, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	t.Run("ListReceipts", func(t *testing.T) {
+		rows, err := r.ListReceipts(Filter{})
+		if err != nil {
+			t.Fatalf("ListReceipts: %v", err)
+		}
+		if rows == nil {
+			t.Error("ListReceipts returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+
+	t.Run("GetChain", func(t *testing.T) {
+		rows, err := r.GetChain("nonexistent")
+		if err != nil {
+			t.Fatalf("GetChain: %v", err)
+		}
+		if rows == nil {
+			t.Error("GetChain returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+
+	t.Run("ListChains", func(t *testing.T) {
+		chains, err := r.ListChains()
+		if err != nil {
+			t.Fatalf("ListChains: %v", err)
+		}
+		if chains == nil {
+			t.Error("ListChains returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+
+	t.Run("TimeseriesStats", func(t *testing.T) {
+		buckets, err := r.TimeseriesStats(time.Time{}, time.Now(), time.Hour)
+		if err != nil {
+			t.Fatalf("TimeseriesStats: %v", err)
+		}
+		if buckets == nil {
+			t.Error("TimeseriesStats returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+
+	t.Run("ActionStats", func(t *testing.T) {
+		stats, err := r.ActionStats(nil)
+		if err != nil {
+			t.Fatalf("ActionStats: %v", err)
+		}
+		if stats == nil {
+			t.Error("ActionStats returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+
+	t.Run("ServerStats", func(t *testing.T) {
+		stats, err := r.ServerStats(nil)
+		if err != nil {
+			t.Fatalf("ServerStats: %v", err)
+		}
+		if stats == nil {
+			t.Error("ServerStats returned nil slice; want non-nil empty slice (would JSON-encode as null)")
+		}
+	})
+}
+
 func TestListReceiptsQ(t *testing.T) {
 	dbPath := t.TempDir() + "/q-test.db"
 	s, err := sdkstore.Open(dbPath)

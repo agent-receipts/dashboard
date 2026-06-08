@@ -528,7 +528,7 @@ func (r *Reader) TimeseriesStats(from, to time.Time, bucket time.Duration) ([]Bu
 	}
 
 	// Generate every bucket from from to to (exclusive), filling zeros where absent.
-	out := make([]BucketRow, 0)
+	out := make([]BucketRow, 0, bucketCount)
 	for t := fromSec; t < toSec; t += bucketSec {
 		ts := time.Unix(t, 0).UTC().Format(time.RFC3339)
 		rd := bucketMap[t]
