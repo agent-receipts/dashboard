@@ -1145,124 +1145,64 @@
           renderServerActivityChart([]);
         }
 
-        try {
-          const { preset } = overviewRangeParams();
-          const timelineURL = '/api/stats/timeseries' + (preset !== 'All' ? '?range=' + encodeURIComponent(preset) : '');
-          const timelineData = await fetchJSON(timelineURL);
-          if (summaryGen !== poller.generation) return;
-          renderActivityTimeline(timelineData);
-        } catch (err) {
-          console.warn('activity timeline:', err);
-          renderActivityTimeline(null);
-        }
-
-        // Timeseries: powers the error-rate sparkline AND provides range_from/range_to
-        // for the throughput calculation when the "All" preset is active.
+        // One timeseries fetch feeds the activity timeline, the error-rate
+        // sparkline, and the throughput card (it also provides range_from/range_to
+        // for the "All" throughput span).
         try {
           const { preset } = overviewRangeParams();
           const tsURL = '/api/stats/timeseries' +
             (preset !== 'All' ? '?range=' + encodeURIComponent(preset) : '');
           const tsData = await fetchJSON(tsURL);
           if (summaryGen !== poller.generation) return;
+          renderActivityTimeline(tsData);
           renderErrorRateCard(tsData);
 
           // Compute throughput: total receipts in range ÷ range duration in hours.
           // For preset ranges use OVERVIEW_RANGE_DURATIONS; for "All" derive the
           // span from the timeseries range_from/range_to that the server returns.
-          const total = stats.total || 0;
+          // Throughput is rendered by renderStats() from the live stats.total so
+          // it stays fresh during polling. Here we compute only the CONTEXT: the
+          // range length in hours and the previous period's per-hour rate.
           let rangeHours = null;
           if (preset !== 'All') {
-            const durationMs = OVERVIEW_RANGE_DURATIONS[preset];
-            rangeHours = durationMs / 3600000;
+            rangeHours = OVERVIEW_RANGE_DURATIONS[preset] / 3600000;
           } else if (tsData.range_from && tsData.range_to) {
             const spanMs = new Date(tsData.range_to) - new Date(tsData.range_from);
             if (spanMs > 0) rangeHours = spanMs / 3600000;
           }
 
-          if (rangeHours == null || rangeHours <= 0) {
-            // Can't compute a rate — show raw count.
-            overviewThroughput = {
-              label: 'Receipts / hr',
-              value: total.toLocaleString(),
-              sub: 'total (all time)',
-              title: 'Total receipts with no time bound',
-            };
-          } else {
-            const perHour = total / rangeHours;
-            const usePerMin = perHour > 60;
-            const rate      = usePerMin ? perHour / 60 : perHour;
-            const rateLabel = usePerMin ? 'Receipts / min' : 'Receipts / hr';
-            const rateRounded = Math.round(rate);
-
-            // Previous-period comparison (only for preset ranges, not "All").
-            let trendArrow = '';
-            let trendSub   = '';
-            if (preset !== 'All') {
-              try {
-                const now = Date.now();
-                const durMs = OVERVIEW_RANGE_DURATIONS[preset];
-                const prevBefore = new Date(now - durMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
-                const prevAfter  = new Date(now - 2 * durMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
-                const prevStats  = await fetchJSON(
-                  '/api/stats?after=' + encodeURIComponent(prevAfter) +
-                  '&before=' + encodeURIComponent(prevBefore)
-                );
-                if (summaryGen !== poller.generation) return;
-                const prevTotal   = prevStats.total || 0;
-                const prevPerHour = prevTotal / rangeHours;
-                const prevRate    = usePerMin ? prevPerHour / 60 : prevPerHour;
-                const prevRounded = Math.round(prevRate);
-                if (prevRounded === 0 && rateRounded === 0) {
-                  trendArrow = ' →';
-                  trendSub   = 'flat vs prev period';
-                } else if (rateRounded > prevRounded) {
-                  trendArrow = ' ↑';
-                  trendSub   = `vs ${prevRounded} prev period`;
-                } else if (rateRounded < prevRounded) {
-                  trendArrow = ' ↓';
-                  trendSub   = `vs ${prevRounded} prev period`;
-                } else {
-                  trendArrow = ' →';
-                  trendSub   = 'flat vs prev period';
-                }
-              } catch (err) {
-                console.warn('throughput prev-period:', err);
-                // No comparison arrow if the prev-period fetch fails.
-              }
+          let prevPerHour = null;
+          if (preset !== 'All' && rangeHours > 0) {
+            try {
+              const durMs = OVERVIEW_RANGE_DURATIONS[preset];
+              // Anchor the previous window to the current window's `after` so the
+              // two are contiguous: current = [after, now], prev = [after-dur, after].
+              const prevBefore = after;
+              const prevAfter  = new Date(Date.parse(after) - durMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+              const prevStats  = await fetchJSON(
+                '/api/stats?after=' + encodeURIComponent(prevAfter) +
+                '&before=' + encodeURIComponent(prevBefore)
+              );
+              if (summaryGen !== poller.generation) return;
+              prevPerHour = (prevStats.total || 0) / rangeHours;
+            } catch (err) {
+              console.warn('throughput prev-period:', err);
             }
-
-            overviewThroughput = {
-              label: rateLabel,
-              value: rateRounded.toLocaleString() + trendArrow,
-              sub:   trendSub || (usePerMin ? 'receipts per minute' : 'receipts per hour'),
-              title: `${total.toLocaleString()} receipts over ${rangeHours < 24 ? rangeHours + 'h' : Math.round(rangeHours / 24) + 'd'}`,
-            };
           }
+          overviewThroughput = { rangeHours: rangeHours > 0 ? rangeHours : null, prevPerHour };
 
-          // Re-render the stat cards with the computed throughput.
           if (summaryGen !== poller.generation) return;
           renderStats(stats);
         } catch (err) {
-          console.warn('timeseries/throughput:', err);
+          console.warn('timeseries:', err);
+          renderActivityTimeline(null);
           renderErrorRateCard(null);
-          // Don't leave the throughput card stuck on "computing…": the rate for
-          // a preset range only needs stats.total ÷ hours (no timeseries), so
-          // render a best-effort value (without the prev-period comparison).
+          // Don't leave the throughput card stuck on "computing…": a preset
+          // range's rate only needs stats.total ÷ hours (no timeseries / prev).
           if (overviewThroughput === null) {
             const { preset } = overviewRangeParams();
-            const total = stats.total || 0;
             const durMs = OVERVIEW_RANGE_DURATIONS[preset];
-            if (durMs) {
-              const perHour = total / (durMs / 3600000);
-              const usePerMin = perHour > 60;
-              overviewThroughput = {
-                label: usePerMin ? 'Receipts / min' : 'Receipts / hr',
-                value: Math.round(usePerMin ? perHour / 60 : perHour).toLocaleString(),
-                sub: usePerMin ? 'receipts per minute' : 'receipts per hour',
-              };
-            } else {
-              overviewThroughput = { label: 'Receipts / hr', value: total.toLocaleString(), sub: 'total (all time)' };
-            }
+            overviewThroughput = { rangeHours: durMs ? durMs / 3600000 : null, prevPerHour: null };
             if (summaryGen === poller.generation) renderStats(stats);
           }
         }
@@ -1306,25 +1246,38 @@
       const highRisk      = highCount + criticalCount;
       highRiskPreferredFilter = criticalCount > 0 ? 'critical' : 'high';
 
-      // Build the throughput card HTML. overviewThroughput is populated
-      // asynchronously in loadOverview() before calling renderStats() a second
-      // time once the timeseries fetch and prev-period comparison complete.
-      // Until then it is null and we show a compact placeholder.
+      // Build the throughput card. overviewThroughput holds the CONTEXT
+      // ({ rangeHours, prevPerHour }) computed asynchronously in loadOverview();
+      // the displayed rate is computed here from the live stats.total so it stays
+      // current during polling. Null context = not computed yet (placeholder).
       let throughputCardHTML;
       if (!overviewThroughput) {
+        throughputCardHTML = statCardHTML({ label: 'Receipts / hr', value: '—', sub: 'computing…' });
+      } else if (overviewThroughput.rangeHours == null) {
+        // No fixed window (All with no derivable span) — show the raw total.
         throughputCardHTML = statCardHTML({
           label: 'Receipts / hr',
-          value: '—',
-          sub: 'computing…',
+          value: Number(stats.total || 0).toLocaleString(),
+          sub: 'total (all time)',
+          title: 'Total receipts with no time bound',
         });
       } else {
-        const tp = overviewThroughput;
+        const rh = overviewThroughput.rangeHours;
+        const perHour = (stats.total || 0) / rh;
+        const usePerMin = perHour > 60;
+        const rate = Math.round(usePerMin ? perHour / 60 : perHour);
+        let arrow = '', sub = usePerMin ? 'receipts per minute' : 'receipts per hour';
+        if (overviewThroughput.prevPerHour != null) {
+          const prevRate = Math.round(usePerMin ? overviewThroughput.prevPerHour / 60 : overviewThroughput.prevPerHour);
+          if (rate > prevRate)      { arrow = ' ↑'; sub = `vs ${prevRate.toLocaleString()} prev period`; }
+          else if (rate < prevRate) { arrow = ' ↓'; sub = `vs ${prevRate.toLocaleString()} prev period`; }
+          else                      { arrow = ' →'; sub = 'flat vs prev period'; }
+        }
         throughputCardHTML = statCardHTML({
-          label: tp.label,
-          value: tp.value,
-          sub: tp.sub || '',
-          valueSmall: tp.valueSmall || false,
-          title: tp.title || '',
+          label: usePerMin ? 'Receipts / min' : 'Receipts / hr',
+          value: rate.toLocaleString() + arrow,
+          sub,
+          title: `${Number(stats.total || 0).toLocaleString()} receipts over ${rh < 24 ? rh + 'h' : Math.round(rh / 24) + 'd'}`,
         });
       }
 
@@ -2086,7 +2039,7 @@
         </svg>`;
 
       const trendSpan = trendArrow
-        ? `<span title="${escapeAttr(trendTitle)}" style="font-size:1rem;color:${trendArrow === '↓' ? 'var(--risk-low)' : trendArrow === '↑' ? 'var(--risk-high)' : 'var(--muted)'};">${trendArrow}</span>`
+        ? `<span role="img" aria-label="${escapeAttr(trendTitle)}" title="${escapeAttr(trendTitle)}" style="font-size:1rem;color:${trendArrow === '↓' ? 'var(--risk-low)' : trendArrow === '↑' ? 'var(--risk-high)' : 'var(--muted)'};">${trendArrow}</span>`
         : '';
 
       el.innerHTML = `
