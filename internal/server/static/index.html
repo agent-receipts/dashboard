@@ -2374,20 +2374,21 @@
     //   { sessionId, firstTimestamp, receiptCount, agents: [ { agentId, delegation, rows } ] }
     // where rows is an array of "items": each item is either a single-element
     // array [r] (ungrouped receipt) or a two-element array [pre, post]
-    // (correlated pair). Receipts without session_id are bucketed under the
-    // sentinel key '__legacy__' and appended at the end.
+    // (correlated pair). Receipts without session_id have sessionId === null
+    // and are appended at the end. Receipts without agent_id have agentId === null
+    // and are labelled "Orchestrator" in the swimlane header.
     function groupReceiptsBySession(receipts) {
       const sessionMap  = new Map();
       const sessionOrder = [];
 
       for (const r of receipts) {
-        const sid = r.session_id || '__legacy__';
+        const sid = r.session_id || null;
         if (!sessionMap.has(sid)) {
           sessionMap.set(sid, { firstTimestamp: r.timestamp, agents: new Map(), agentOrder: [] });
           sessionOrder.push(sid);
         }
         const session = sessionMap.get(sid);
-        const aid = r.agent_id || '__root__';
+        const aid = r.agent_id || null;
         if (!session.agents.has(aid)) {
           session.agents.set(aid, { rawRows: [], delegation: null });
           session.agentOrder.push(aid);
@@ -2459,18 +2460,22 @@
       return result;
     }
 
+    // Number of columns in the receipts table (Time, Server, Tool, Action,
+    // Risk, Status, Chain, Seq). Used as colspan for session/agent header rows.
+    const RECEIPT_COLS = 8;
+
     // renderGroupedReceiptsTable renders the receipts view with session headers,
     // per-agent swimlane sub-headers, collapsed correlation pairs, and
     // delegation edge indicators. Only used when at least one receipt carries
     // a session_id; falls back to the flat table otherwise.
     function renderGroupedReceiptsTable(receipts, container, containerId) {
-      const groups   = groupReceiptsBySession(receipts);
-      const COL_COUNT = 8;
+      const groups    = groupReceiptsBySession(receipts);
+      const COL_COUNT = RECEIPT_COLS;
 
       const bodyHTML = groups.map(session => {
-        const sid      = session.sessionId;
-        const isLegacy = sid === '__legacy__';
-        const safeEsc  = escapeAttr(sid);
+        const sid      = session.sessionId;   // null for legacy receipts
+        const isLegacy = sid === null;
+        const safeEsc  = sid !== null ? escapeAttr(sid) : '';
         const countLabel = `${session.receiptCount} receipt${session.receiptCount !== 1 ? 's' : ''}`;
         const timeLabel  = session.firstTimestamp ? formatRelative(session.firstTimestamp) : '';
 
@@ -2486,7 +2491,7 @@
           : `<tr class="session-header-tr">
                <td colspan="${COL_COUNT}">
                  <div class="session-header-inner">
-                   <button type="button" class="session-collapse-btn" onclick="toggleSession(this,${JSON.stringify(sid)})" aria-label="Collapse session">▾</button>
+                   <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-label="Collapse session">▾</button>
                    <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
                    <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · started ${escapeHtml(timeLabel)}</span>
                  </div>
@@ -2494,8 +2499,8 @@
              </tr>`;
 
         const agentRowsHTML = session.agents.map(agent => {
-          const aid    = agent.agentId;
-          const isRoot = aid === '__root__';
+          const aid    = agent.agentId;   // null for root/orchestrator agent
+          const isRoot = aid === null;
           const aLabel = isRoot
             ? `<span class="agent-root-label">Orchestrator</span>`
             : `<span class="agent-sub-label">↳ Subagent</span><span class="font-mono" style="font-size:0.7rem;color:var(--text);">${escapeHtml(aid)}</span>`;
@@ -2567,14 +2572,16 @@
             ${mismatchIndicatorHTML(post)}
           </td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(post.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(post.chain_id, 20))}</td>
-          <td class="muted">#${pre.sequence}</td>
+          <td class="muted">#${pre.sequence}–${post.sequence}</td>
         </tr>
       `;
     }
 
     // toggleSession collapses or expands all rows belonging to a session group.
-    // Non-header rows are identified by data-session-id matching the given sid.
-    function toggleSession(btn, sid) {
+    // The target session ID is read from data-target-session on the button so
+    // it never passes through an onclick attribute string (safe for any ID value).
+    function toggleSession(btn) {
+      const sid   = btn.dataset.targetSession;
       const tbody = btn.closest('tbody');
       if (!tbody) return;
       const memberRows = Array.from(tbody.rows).filter(r =>
@@ -3602,10 +3609,29 @@
         return;
       }
 
-      const html = sorted.map(r => receiptRowHTML(r, { flash: true })).join('');
-      tbody.insertAdjacentHTML('afterbegin', html);
       sorted.forEach(r => poller.knownIds.add(r.id));
       bumpWatermark(sorted);
+      const snap          = lastRenderedReceipts.get(poller.containerId);
+      const prevReceipts  = snap ? snap.receipts : [];
+      const merged        = [...sorted, ...prevReceipts];
+
+      // In grouped mode a full re-render is needed so new rows land inside the
+      // correct session/agent group and remain controllable by toggleSession.
+      // This also keeps lastRenderedReceipts current so rerenderAllReceiptTables
+      // (triggered by forensic-key load) always rebuilds from fresh data.
+      const isGrouped = poller.containerId === 'receipts-table' &&
+                        merged.some(r => r.session_id);
+      if (isGrouped) {
+        renderReceiptsTable(merged, poller.containerId, snap ? snap.opts : undefined);
+        renderMatchCount(merged.length, currentReceiptFilters().q || '');
+        showLiveToast(fresh.length);
+        nav.refresh();
+        return;
+      }
+
+      // Flat mode: prepend rows directly.
+      const html = sorted.map(r => receiptRowHTML(r, { flash: true })).join('');
+      tbody.insertAdjacentHTML('afterbegin', html);
 
       if (poller.activeView === 'overview') {
         while (tbody.rows.length > RECENT_LIMIT) {
@@ -3613,10 +3639,9 @@
         }
         refreshOverviewStats();
       } else if (poller.activeView === 'receipts') {
-        // Count only receipt rows (not session/agent header rows which lack
-        // data-receipt-id) so the match count is correct in grouped view.
-        const tableRows = Array.from(tbody.rows).filter(r => r.dataset.receiptId).length;
-        renderMatchCount(tableRows, currentReceiptFilters().q || '');
+        // Update the snapshot so rerenderAllReceiptTables has current data.
+        lastRenderedReceipts.set(poller.containerId, { receipts: merged, opts: snap ? snap.opts : undefined });
+        renderMatchCount(merged.length, currentReceiptFilters().q || '');
       }
 
       showLiveToast(fresh.length);
