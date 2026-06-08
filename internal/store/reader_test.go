@@ -1733,11 +1733,6 @@ func TestStatsWithRange(t *testing.T) {
 // receipts with fields not yet in the SDK Go types.
 func insertLayer3(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, correlationID, agentID string, delegation *DelegationInfo) {
 	t.Helper()
-	hash, err := receipt.HashReceipt(r)
-	if err != nil {
-		t.Fatalf("hash receipt: %v", err)
-	}
-
 	rawJSON, err := json.Marshal(r)
 	if err != nil {
 		t.Fatalf("marshal receipt: %v", err)
@@ -1778,6 +1773,10 @@ func insertLayer3(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, corre
 	augmented, err := json.Marshal(m)
 	if err != nil {
 		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
 	}
 	if err := s.InsertRaw(r, augmented, hash); err != nil {
 		t.Fatalf("insert receipt: %v", err)
@@ -1939,10 +1938,6 @@ func TestReader_Layer3_DelegationMalformed(t *testing.T) {
 
 	base := makeReceipt("urn:receipt:dm1", "chain-dm", 1, "tool.call",
 		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
-	hash, err := receipt.HashReceipt(base)
-	if err != nil {
-		t.Fatalf("hash: %v", err)
-	}
 
 	rawJSON, err := json.Marshal(base)
 	if err != nil {
@@ -1963,6 +1958,10 @@ func TestReader_Layer3_DelegationMalformed(t *testing.T) {
 	augmented, err := json.Marshal(m)
 	if err != nil {
 		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
 	}
 	if err := s.InsertRaw(base, augmented, hash); err != nil {
 		t.Fatalf("insert: %v", err)

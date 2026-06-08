@@ -2501,7 +2501,7 @@
           : `<tr class="session-header-tr">
                <td colspan="${COL_COUNT}">
                  <div class="session-header-inner">
-                   <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-label="Collapse session">▾</button>
+                   <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-expanded="true" aria-label="Collapse session">▾</button>
                    <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
                    <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · latest ${escapeHtml(timeLabel)}</span>
                  </div>
@@ -2600,6 +2600,7 @@
       const anyVisible = memberRows.some(r => !r.hidden);
       memberRows.forEach(r => { r.hidden = anyVisible; });
       btn.textContent = anyVisible ? '▶' : '▾';
+      btn.setAttribute('aria-expanded', anyVisible ? 'false' : 'true');
       btn.setAttribute('aria-label', anyVisible ? 'Expand session' : 'Collapse session');
     }
 
