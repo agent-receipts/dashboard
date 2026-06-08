@@ -1763,11 +1763,16 @@
       }
 
       // --- Dimensions ----------------------------------------------------------
-      const CHART_H = 140; // px — usable bar area height
-      const BAR_GAP = 2;   // px between bars inside the SVG
+      // Units are viewBox units (the SVG stretches to full width via
+      // preserveAspectRatio="none"), so only the bar:gap RATIO matters. Each bar
+      // is 1 unit wide; the gap is a fraction of that, so bars read as solid bars
+      // rather than thin spikes.
+      const CHART_H = 140;  // bar area height
+      const BAR_GAP = 0.06; // gap between bars (fraction of bar width) — tight, so
+                            // contiguous time buckets read as a continuous histogram
 
       const n = buckets.length;
-      // viewBox width = n bars + (n-1) gaps + 1px margin each side.
+      // viewBox width = n bars (1 unit each) + (n-1) gaps + 1 unit margin each side.
       const VB_W = n + (n - 1) * BAR_GAP + 2;
 
       // --- Scale ---------------------------------------------------------------
