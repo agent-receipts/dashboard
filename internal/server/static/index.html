@@ -1657,7 +1657,14 @@
       const el = document.getElementById('activity-timeline-chart');
       if (!el) return;
 
-      const buckets = (data && data.buckets) || [];
+      // null/undefined means the fetch failed — distinct from a genuinely empty
+      // (all-zero) range, so we don't mask a load error as "no activity".
+      if (!data) {
+        el.innerHTML = '<div class="muted text-sm" style="padding:12px 0;">Couldn\'t load the activity timeline.</div>';
+        return;
+      }
+
+      const buckets = data.buckets || [];
       const allEmpty = buckets.length === 0 || buckets.every(b => (b.total || 0) === 0);
       if (allEmpty) {
         el.innerHTML = '<div class="muted text-sm" style="padding:12px 0;">No activity in this range.</div>';
@@ -1718,17 +1725,15 @@
 
         const x = 1 + i * (1 + BAR_GAP);
 
-        // Segments are expressed as a fraction of maxTotal, scaled to CHART_H.
-        // They are stacked bottom-up: success → failure → other.
-        // We guard against floating-point drift: cap sum at total.
-        function segH(count) {
-          return count <= 0 ? 0 : Math.max(1, (count / maxTotal) * CHART_H);
-        }
-        const hSuccess = segH(success);
-        const hFailure = segH(failure);
-        const hOther   = segH(other);
-        // Total bar height. Recompute from fractions to avoid accumulated error.
+        // The bar's total height is scaled from maxTotal; the three segments are
+        // then sub-divided proportionally out of that height so they ALWAYS sum
+        // to hTotal exactly (no per-segment 1px minimum — that would make the
+        // visible stack exceed the total and leave the hit-rect too short).
+        // Stacked bottom-up: success → failure → other.
         const hTotal   = total <= 0 ? 0 : Math.max(1, (total / maxTotal) * CHART_H);
+        const hSuccess = total > 0 ? hTotal * (success / total) : 0;
+        const hFailure = total > 0 ? hTotal * (failure / total) : 0;
+        const hOther   = Math.max(0, hTotal - hSuccess - hFailure); // remainder → exact sum
 
         // Y positions (SVG y=0 is the top). Bars grow upward from y=CHART_H.
         // Success sits at the bottom, failure above it, other at the top.
