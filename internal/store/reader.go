@@ -830,7 +830,7 @@ func parseDelegationJSON(s string) *DelegationInfo {
 	if err := json.Unmarshal([]byte(s), &wire); err != nil {
 		return nil
 	}
-	if wire.ParentChainID == "" && wire.ParentReceiptID == "" {
+	if wire.ParentChainID == "" || wire.ParentReceiptID == "" {
 		return nil
 	}
 	return &DelegationInfo{

@@ -1960,7 +1960,10 @@ func TestReader_Layer3_DelegationMalformed(t *testing.T) {
 	cs["delegation"] = map[string]any{"unexpected_key": "value"}
 	m["credentialSubject"] = cs
 
-	augmented, _ := json.Marshal(m)
+	augmented, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal augmented: %v", err)
+	}
 	if err := s.InsertRaw(base, augmented, hash); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -1981,6 +1984,35 @@ func TestReader_Layer3_DelegationMalformed(t *testing.T) {
 	}
 	if rows[0].Delegation != nil {
 		t.Errorf("want nil Delegation for empty-keys object, got %+v", rows[0].Delegation)
+	}
+}
+
+// TestParseDelegationJSON unit-tests parseDelegationJSON directly, covering
+// the boundary cases that the DB-roundtrip tests cannot easily express.
+func TestParseDelegationJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantNil bool
+	}{
+		{"both fields present", `{"parent_chain_id":"urn:chain:a","parent_receipt_id":"urn:receipt:b"}`, false},
+		{"both fields with delegator", `{"parent_chain_id":"c","parent_receipt_id":"r","delegator":{"id":"did:agent:x"}}`, false},
+		{"only parent_chain_id", `{"parent_chain_id":"urn:chain:a"}`, true},
+		{"only parent_receipt_id", `{"parent_receipt_id":"urn:receipt:b"}`, true},
+		{"neither field", `{"unexpected":"value"}`, true},
+		{"empty object", `{}`, true},
+		{"malformed JSON", `not-json`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseDelegationJSON(tc.input)
+			if tc.wantNil && got != nil {
+				t.Errorf("want nil, got %+v", got)
+			}
+			if !tc.wantNil && got == nil {
+				t.Errorf("want non-nil DelegationInfo, got nil")
+			}
+		})
 	}
 }
 

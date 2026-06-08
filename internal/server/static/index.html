@@ -2401,6 +2401,14 @@
         }
       }
 
+      // Legacy receipts (sid === null) must always appear at the end regardless
+      // of when the first legacy receipt was encountered.
+      const legacyIdx = sessionOrder.indexOf(null);
+      if (legacyIdx !== -1 && legacyIdx !== sessionOrder.length - 1) {
+        sessionOrder.splice(legacyIdx, 1);
+        sessionOrder.push(null);
+      }
+
       const result = [];
       for (const sid of sessionOrder) {
         const session  = sessionMap.get(sid);
@@ -2426,10 +2434,10 @@
 
     // collapseCorrelationPairs merges pairs of receipts sharing the same
     // correlation_id into a two-element [pre, post] array sorted by sequence.
-    // Receipts without a correlation_id, or whose correlation_id appears only
-    // once in the list, are wrapped in single-element arrays [r].
+    // Receipts without a correlation_id, or whose correlation_id count != 2,
+    // are emitted as single-element arrays [r] at their original position.
     function collapseCorrelationPairs(rows) {
-      // First pass: collect all rows per correlation_id.
+      // First pass: count group size per correlation_id.
       const corrMap = new Map();
       for (const r of rows) {
         if (!r.correlation_id) continue;
@@ -2437,24 +2445,26 @@
         corrMap.get(r.correlation_id).push(r);
       }
 
-      // Second pass: walk the original order and emit items.
-      const result  = [];
-      const emitted = new Set(); // correlation_ids already emitted as a pair
+      // Second pass: walk original order and emit items.
+      const result   = [];
+      const pairedIds = new Set(); // correlation_ids already emitted as a pair
       for (const r of rows) {
         if (!r.correlation_id) {
           result.push([r]);
           continue;
         }
-        if (emitted.has(r.correlation_id)) continue;
         const group = corrMap.get(r.correlation_id);
         if (group.length === 2) {
-          emitted.add(r.correlation_id);
-          group.sort((a, b) => a.sequence - b.sequence);
-          result.push(group); // [pre, post]
+          if (!pairedIds.has(r.correlation_id)) {
+            pairedIds.add(r.correlation_id);
+            group.sort((a, b) => a.sequence - b.sequence);
+            result.push(group); // [pre, post]
+          }
+          // Second member of the pair is skipped — already emitted above.
         } else {
-          // Odd count or singleton: emit individually.
-          emitted.add(r.correlation_id);
-          for (const gr of group) result.push([gr]);
+          // Not exactly two: emit individually at original position to
+          // preserve ordering of surrounding receipts.
+          result.push([r]);
         }
       }
       return result;
@@ -2493,7 +2503,7 @@
                  <div class="session-header-inner">
                    <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-label="Collapse session">▾</button>
                    <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
-                   <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · started ${escapeHtml(timeLabel)}</span>
+                   <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · latest ${escapeHtml(timeLabel)}</span>
                  </div>
                </td>
              </tr>`;
