@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-08
+
 ### Added
 
 - **Activity timeline chart on the Overview tab** — a new collapsible "Activity timeline" card sits between the stats summary cards and the distribution grid. It renders an inline SVG stacked bar chart of receipt counts bucketed over the active time range: a green (success) segment at the bottom, red (failure) above it, and a muted grey segment for any remaining statuses (pending, other). Y-axis scales to the maximum bucket total; bars share the full panel width with small gaps. X-axis shows 4–6 evenly spaced tick labels, formatted as `HH:MM` for intraday ranges and `Mon D` for multi-day ranges. Each bar carries a native SVG `<title>` tooltip with the bucket timestamp, success count, failure count, and total. An empty-state message is shown when all buckets are zero. The chart updates automatically whenever the range picker changes (since `setOverviewRange()` re-calls `loadOverview()`), and its collapsed state is remembered in `localStorage` like other Overview cards.
@@ -171,7 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/agent-receipts/dashboard/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/agent-receipts/dashboard/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/agent-receipts/dashboard/compare/v0.3.0...v0.4.0
