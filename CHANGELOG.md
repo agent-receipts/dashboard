@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-09
+
+### Fixed
+
+- **Overview no longer crashes when the selected time range contains no receipts** — API endpoints now return `[]` instead of `null` for empty result sets, and the frontend guards against a `null` receipts response to show a clean zero-state instead of an error banner.
+
 ## [0.6.0] - 2026-06-08
 
 ### Added
@@ -27,8 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub link in the header** — a GitHub icon next to the keyboard-shortcuts button opens the project repository (`github.com/agent-receipts/dashboard`) in a new tab, so operators can find the source or report an issue.
 
 ### Fixed
-
-- **Overview no longer crashes when the selected time range contains no receipts** — API endpoints now return `[]` instead of `null` for empty result sets, and the frontend guards against a `null` receipts response to show a clean zero-state instead of an error banner.
 
 - **Overview "Top actions by failure rate" and "Server activity" cards no longer hang on their loading skeletons.** Both summary fetches captured the polling generation counter and then ran after `startPolling()` incremented it, so their stale-generation guard always tripped and the render was skipped. Live polling and keyboard nav now start first, and the summary cards load afterwards guarded by a fresh generation captured after `startPolling()` — so the cards render correctly while a slow or failing `/api/stats/*` still can't stall recent-receipts polling.
 - **Overview "Server activity" card now includes the "Unknown" (no-server) group** instead of filtering it out, so receipts with no `target.system` still show activity rather than rendering "No data". The empty state now only appears for a genuinely empty store.
