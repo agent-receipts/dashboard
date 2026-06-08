@@ -40,6 +40,12 @@ release:
 
 brews:
   - name: dashboard
+    # `auto` skips the formula bump PR when the release version contains a
+    # pre-release suffix (e.g. v1.0.0-alpha.1). The Homebrew tap stays
+    # locked to the latest stable dashboard until a non-pre-release tag is
+    # cut, so `brew install agent-receipts/tap/dashboard` keeps giving
+    # users a stable build during alpha/beta soak periods.
+    skip_upload: auto
     repository:
       owner: agent-receipts
       name: homebrew-tap
@@ -78,4 +84,39 @@ brews:
         url "https://github.com/agent-receipts/dashboard"
         strategy :github_releases
         regex(/^v?(\d+(?:\.\d+)+)$/i)
+      end
+
+  # Alpha-track formula — updated on every release (stable and pre-release).
+  # `brew install agent-receipts/tap/dashboard-alpha` always gives the latest
+  # cut; conflicts with the stable formula since both install the same binary.
+  - name: dashboard-alpha
+    repository:
+      owner: agent-receipts
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      branch: "bump-{{.ProjectName}}-alpha-{{.Version}}"
+      pull_request:
+        enabled: true
+        base:
+          branch: main
+    directory: Formula
+    url_template: "https://github.com/agent-receipts/dashboard/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
+    homepage: "https://github.com/agent-receipts/dashboard"
+    description: "Local web UI for browsing Agent Receipts SQLite databases (alpha/beta track)"
+    license: "Apache-2.0"
+    commit_author:
+      name: agent-receipts-bot
+      email: bot@agentreceipts.ai
+    commit_msg_template: "chore(dashboard): bump alpha to v{{ .Version }}"
+    install: |
+      bin.install "dashboard"
+    test: |
+      system "#{bin}/dashboard", "--version"
+    custom_block: |
+      conflicts_with "dashboard", because: "both install the same binary"
+
+      livecheck do
+        url "https://github.com/agent-receipts/dashboard"
+        strategy :github_releases
+        regex(/^v?(\d+(?:\.\d+)+(?:-[a-z0-9.]+)?)$/i)
       end
