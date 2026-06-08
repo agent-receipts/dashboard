@@ -692,6 +692,14 @@
         </div>
       </div>
 
+      <div class="card p-4 mb-6" data-card="error-rate">
+        <div class="card-head flex items-center justify-between mb-3">
+          <h3 class="text-sm font-medium muted">Error rate over time</h3>
+          <button class="card-collapse" type="button" aria-label="Collapse Error rate over time" onclick="toggleCardCollapse('error-rate')">▾</button>
+        </div>
+        <div id="error-rate-chart"></div>
+      </div>
+
       <div class="card p-4 mb-6" data-card="top-actions">
         <div class="card-head flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium muted">Top actions by failure rate</h3>
@@ -871,6 +879,11 @@
     // The card counts high+critical, but the backend filter is single-valued,
     // so we prefer critical when any exist (more severe), else high.
     let highRiskPreferredFilter = 'high';
+
+    // Throughput data computed in loadOverview() and consumed by renderStats().
+    // Decouples the async prev-period fetch from the synchronous card renderer.
+    // Null means "not yet computed" (skeleton); reset to null on each loadOverview start.
+    let overviewThroughput = null;
 
     // ---------- Overview time range picker ----------
     // The preset→duration map. Used by overviewRangeParams() so #84/#85 can
@@ -1065,11 +1078,13 @@
     // ---------- Overview ----------
     async function loadOverview() {
       const gen = ++poller.generation;
+      overviewThroughput = null;
       renderStatsSkeleton();
       renderTimelineSkeleton();
       renderServerActivitySkeleton();
       renderRecentSkeleton();
       renderTopActionsSkeleton();
+      renderErrorRateCardSkeleton();
 
       // Compute the active range once per load so all fetches use a consistent
       // snapshot. after is null for "All" (no lower bound).
@@ -1130,15 +1145,66 @@
           renderServerActivityChart([]);
         }
 
+        // One timeseries fetch feeds the activity timeline, the error-rate
+        // sparkline, and the throughput card (it also provides range_from/range_to
+        // for the "All" throughput span).
         try {
           const { preset } = overviewRangeParams();
-          const timelineURL = '/api/stats/timeseries' + (preset !== 'All' ? '?range=' + encodeURIComponent(preset) : '');
-          const timelineData = await fetchJSON(timelineURL);
+          const tsURL = '/api/stats/timeseries' +
+            (preset !== 'All' ? '?range=' + encodeURIComponent(preset) : '');
+          const tsData = await fetchJSON(tsURL);
           if (summaryGen !== poller.generation) return;
-          renderActivityTimeline(timelineData);
+          renderActivityTimeline(tsData);
+          renderErrorRateCard(tsData);
+
+          // Compute throughput: total receipts in range ÷ range duration in hours.
+          // For preset ranges use OVERVIEW_RANGE_DURATIONS; for "All" derive the
+          // span from the timeseries range_from/range_to that the server returns.
+          // Throughput is rendered by renderStats() from the live stats.total so
+          // it stays fresh during polling. Here we compute only the CONTEXT: the
+          // range length in hours and the previous period's per-hour rate.
+          let rangeHours = null;
+          if (preset !== 'All') {
+            rangeHours = OVERVIEW_RANGE_DURATIONS[preset] / 3600000;
+          } else if (tsData.range_from && tsData.range_to) {
+            const spanMs = new Date(tsData.range_to) - new Date(tsData.range_from);
+            if (spanMs > 0) rangeHours = spanMs / 3600000;
+          }
+
+          let prevPerHour = null;
+          if (preset !== 'All' && rangeHours > 0) {
+            try {
+              const durMs = OVERVIEW_RANGE_DURATIONS[preset];
+              // Anchor the previous window to the current window's `after` so the
+              // two are contiguous: current = [after, now], prev = [after-dur, after].
+              const prevBefore = after;
+              const prevAfter  = new Date(Date.parse(after) - durMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+              const prevStats  = await fetchJSON(
+                '/api/stats?after=' + encodeURIComponent(prevAfter) +
+                '&before=' + encodeURIComponent(prevBefore)
+              );
+              if (summaryGen !== poller.generation) return;
+              prevPerHour = (prevStats.total || 0) / rangeHours;
+            } catch (err) {
+              console.warn('throughput prev-period:', err);
+            }
+          }
+          overviewThroughput = { rangeHours: rangeHours > 0 ? rangeHours : null, prevPerHour };
+
+          if (summaryGen !== poller.generation) return;
+          renderStats(stats);
         } catch (err) {
-          console.warn('activity timeline:', err);
+          console.warn('timeseries:', err);
           renderActivityTimeline(null);
+          renderErrorRateCard(null);
+          // Don't leave the throughput card stuck on "computing…": a preset
+          // range's rate only needs stats.total ÷ hours (no timeseries / prev).
+          if (overviewThroughput === null) {
+            const { preset } = overviewRangeParams();
+            const durMs = OVERVIEW_RANGE_DURATIONS[preset];
+            overviewThroughput = { rangeHours: durMs ? durMs / 3600000 : null, prevPerHour: null };
+            if (summaryGen === poller.generation) renderStats(stats);
+          }
         }
       } catch (err) {
         showError('Failed to load overview: ' + err.message);
@@ -1179,8 +1245,41 @@
       const criticalCount = riskCounts['critical'] || 0;
       const highRisk      = highCount + criticalCount;
       highRiskPreferredFilter = criticalCount > 0 ? 'critical' : 'high';
-      const latestRel   = stats.latest_timestamp ? formatRelative(stats.latest_timestamp) : 'none';
-      const latestTitle = stats.latest_timestamp || '';
+
+      // Build the throughput card. overviewThroughput holds the CONTEXT
+      // ({ rangeHours, prevPerHour }) computed asynchronously in loadOverview();
+      // the displayed rate is computed here from the live stats.total so it stays
+      // current during polling. Null context = not computed yet (placeholder).
+      let throughputCardHTML;
+      if (!overviewThroughput) {
+        throughputCardHTML = statCardHTML({ label: 'Receipts / hr', value: '—', sub: 'computing…' });
+      } else if (overviewThroughput.rangeHours == null) {
+        // No fixed window (All with no derivable span) — show the raw total.
+        throughputCardHTML = statCardHTML({
+          label: 'Receipts / hr',
+          value: Number(stats.total || 0).toLocaleString(),
+          sub: 'total (all time)',
+          title: 'Total receipts with no time bound',
+        });
+      } else {
+        const rh = overviewThroughput.rangeHours;
+        const perHour = (stats.total || 0) / rh;
+        const usePerMin = perHour > 60;
+        const rate = Math.round(usePerMin ? perHour / 60 : perHour);
+        let arrow = '', sub = usePerMin ? 'receipts per minute' : 'receipts per hour';
+        if (overviewThroughput.prevPerHour != null) {
+          const prevRate = Math.round(usePerMin ? overviewThroughput.prevPerHour / 60 : overviewThroughput.prevPerHour);
+          if (rate > prevRate)      { arrow = ' ↑'; sub = `vs ${prevRate.toLocaleString()} prev period`; }
+          else if (rate < prevRate) { arrow = ' ↓'; sub = `vs ${prevRate.toLocaleString()} prev period`; }
+          else                      { arrow = ' →'; sub = 'flat vs prev period'; }
+        }
+        throughputCardHTML = statCardHTML({
+          label: usePerMin ? 'Receipts / min' : 'Receipts / hr',
+          value: rate.toLocaleString() + arrow,
+          sub,
+          title: `${Number(stats.total || 0).toLocaleString()} receipts over ${rh < 24 ? rh + 'h' : Math.round(rh / 24) + 'd'}`,
+        });
+      }
 
       document.getElementById('stats-cards').innerHTML = `
         ${statCardHTML({
@@ -1205,15 +1304,7 @@
             ? 'Filter to critical receipts'
             : 'Filter to high-risk receipts',
         })}
-        ${statCardHTML({
-          label: 'Latest',
-          value: latestRel,
-          valueSmall: true,
-          sub: stats.latest_timestamp ? new Date(stats.latest_timestamp).toLocaleString() : '',
-          titleAttr: latestTitle,
-          onClick: stats.latest_timestamp ? "showView('receipts')" : null,
-          title: 'Newest receipt in the store',
-        })}
+        ${throughputCardHTML}
       `;
 
       const maxRisk = Math.max(...(stats.by_risk || []).map(r => r.count), 1);
@@ -1808,6 +1899,165 @@
         </svg>
         <div style="position:relative;height:16px;margin-top:4px;font-size:0.68rem;color:var(--muted);">${tickLabels}</div>
         ${legendHTML}`;
+    }
+
+    function renderErrorRateCardSkeleton() {
+      const el = document.getElementById('error-rate-chart');
+      if (el) el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div>
+            <span class="skeleton" style="display:block;width:80px;height:32px;border-radius:4px;margin-bottom:6px;"></span>
+            <span class="skeleton skeleton-line" style="width:60px;"></span>
+          </div>
+          <div style="flex:1;">
+            <span class="skeleton" style="display:block;width:100%;height:60px;border-radius:4px;"></span>
+          </div>
+        </div>`;
+    }
+
+    // renderErrorRateCard draws the failure-rate sparkline and current-rate readout.
+    // tsData is the /api/stats/timeseries response ({ buckets, bucket_duration,
+    // range_from, range_to }). Pass null to show an empty state.
+    function renderErrorRateCard(tsData) {
+      const el = document.getElementById('error-rate-chart');
+      if (!el) return;
+
+      const buckets = (tsData && tsData.buckets) || [];
+      // Compute a failure rate (0–100) for each bucket, treating zero-total
+      // buckets as gaps (null) so the polyline lifts off rather than snapping to 0.
+      const rates = buckets.map(b => {
+        const t = (b.total || 0);
+        const f = (b.by_status && b.by_status.failure) || 0;
+        return t === 0 ? null : (f / t * 100);
+      });
+
+      const nonNull = rates.filter(r => r !== null);
+      if (nonNull.length === 0) {
+        el.innerHTML = '<div class="muted text-sm">No data for this time range.</div>';
+        return;
+      }
+
+      // Current rate: latest bucket with data.
+      let currentRate = null;
+      let prevRate    = null;
+      for (let i = rates.length - 1; i >= 0; i--) {
+        if (rates[i] !== null) {
+          if (currentRate === null) {
+            currentRate = rates[i];
+          } else {
+            prevRate = rates[i];
+            break;
+          }
+        }
+      }
+
+      // Colour by current rate: <5% green, 5-20% amber, >20% red.
+      const rateColor = currentRate < 5
+        ? 'var(--risk-low)'
+        : currentRate <= 20
+          ? 'var(--risk-medium)'
+          : 'var(--risk-high)';
+
+      // Trend arrow: compare latest to previous non-empty bucket.
+      let trendArrow = '';
+      let trendTitle = '';
+      if (prevRate !== null) {
+        const delta = currentRate - prevRate;
+        if (Math.abs(delta) < 0.5) {
+          trendArrow = '→';
+          trendTitle = 'Flat vs previous bucket';
+        } else if (delta > 0) {
+          trendArrow = '↑';
+          trendTitle = `Up ${delta.toFixed(1)}pp vs previous bucket (worse)`;
+        } else {
+          trendArrow = '↓';
+          trendTitle = `Down ${Math.abs(delta).toFixed(1)}pp vs previous bucket (better)`;
+        }
+      }
+
+      // Build SVG polyline. W×H with 4px padding all around.
+      const W = 300, H = 60, PAD = 4;
+      const innerW = W - 2 * PAD;
+      const innerH = H - 2 * PAD;
+      const n = rates.length;
+
+      // Build line segments: split at null gaps so we don't draw across them.
+      // Each segment is an array of {x, y} SVG points.
+      const segments = [];
+      let current = [];
+      rates.forEach((r, i) => {
+        if (r === null) {
+          if (current.length > 1) segments.push(current);
+          else if (current.length === 1) {
+            // Single isolated point — render as a small circle instead.
+            segments.push(current);
+          }
+          current = [];
+        } else {
+          const x = PAD + (n <= 1 ? innerW / 2 : i / (n - 1) * innerW);
+          const y = PAD + (1 - r / 100) * innerH;
+          current.push({ x, y });
+        }
+      });
+      if (current.length > 0) segments.push(current);
+
+      // Threshold reference lines at 5% and 20%.
+      const y5  = PAD + (1 - 5  / 100) * innerH;
+      const y20 = PAD + (1 - 20 / 100) * innerH;
+
+      const refLines = `
+        <line x1="${PAD}" y1="${y5}"  x2="${W - PAD}" y2="${y5}"  stroke="rgba(210,153,34,0.25)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="${PAD}" y1="${y20}" x2="${W - PAD}" y2="${y20}" stroke="rgba(248,81,73,0.2)"  stroke-width="1" stroke-dasharray="3,3"/>
+      `;
+
+      const polylines = segments.map(seg => {
+        if (seg.length === 1) {
+          const { x, y } = seg[0];
+          return `<circle cx="${x}" cy="${y}" r="2.5" fill="${rateColor}" opacity="0.9"/>`;
+        }
+        const pts = seg.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+        return `<polyline points="${pts}" fill="none" stroke="${rateColor}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`;
+      }).join('');
+
+      // Shaded area under the last segment (visual emphasis).
+      let areaPath = '';
+      if (segments.length > 0) {
+        const last = segments[segments.length - 1];
+        if (last.length > 1) {
+          const firstX = last[0].x.toFixed(1);
+          const lastX  = last[last.length - 1].x.toFixed(1);
+          const pts    = last.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+          areaPath = `<polygon points="${firstX},${H - PAD} ${pts} ${lastX},${H - PAD}" fill="${rateColor}" opacity="0.08"/>`;
+        }
+      }
+
+      const svg = `
+        <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block;overflow:visible;" aria-hidden="true">
+          ${refLines}
+          ${areaPath}
+          ${polylines}
+        </svg>`;
+
+      const trendSpan = trendArrow
+        ? `<span role="img" aria-label="${escapeAttr(trendTitle)}" title="${escapeAttr(trendTitle)}" style="font-size:1rem;color:${trendArrow === '↓' ? 'var(--risk-low)' : trendArrow === '↑' ? 'var(--risk-high)' : 'var(--muted)'};">${trendArrow}</span>`
+        : '';
+
+      el.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:16px;">
+          <div style="flex-shrink:0;min-width:90px;">
+            <div style="font-size:1.6rem;font-weight:700;line-height:1.1;color:${rateColor};">
+              ${currentRate.toFixed(1)}%
+              ${trendSpan}
+            </div>
+            <div class="muted text-xs" style="margin-top:4px;">failure rate</div>
+          </div>
+          <div style="flex:1;min-width:0;">
+            ${svg}
+            <div class="muted" style="font-size:0.65rem;display:flex;justify-content:space-between;margin-top:2px;">
+              <span>older</span><span style="opacity:0.5;">— 5% — 20% —</span><span>now</span>
+            </div>
+          </div>
+        </div>`;
     }
 
     function skeletonBars(n) {
