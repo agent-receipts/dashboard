@@ -309,7 +309,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	}
 	defer rows.Close()
 
-	var out []ReceiptRow
+	out := make([]ReceiptRow, 0)
 	for rows.Next() {
 		var row ReceiptRow
 		if err := rows.Scan(
@@ -341,7 +341,7 @@ func (r *Reader) GetChain(chainID string) ([]ChainReceipt, error) {
 	}
 	defer rows.Close()
 
-	var out []ChainReceipt
+	out := make([]ChainReceipt, 0)
 	for rows.Next() {
 		// Scan into []byte (not string): database/sql hands *[]byte a fresh
 		// copy owned by the caller, so we reuse the one allocation for both
@@ -372,7 +372,7 @@ func (r *Reader) ListChains() ([]ChainSummary, error) {
 	}
 	defer rows.Close()
 
-	var out []ChainSummary
+	out := make([]ChainSummary, 0)
 	for rows.Next() {
 		var cs ChainSummary
 		if err := rows.Scan(&cs.ChainID, &cs.ReceiptCount, &cs.FirstTimestamp, &cs.LastTimestamp); err != nil {
@@ -528,7 +528,7 @@ func (r *Reader) TimeseriesStats(from, to time.Time, bucket time.Duration) ([]Bu
 	}
 
 	// Generate every bucket from from to to (exclusive), filling zeros where absent.
-	var out []BucketRow
+	out := make([]BucketRow, 0, bucketCount)
 	for t := fromSec; t < toSec; t += bucketSec {
 		ts := time.Unix(t, 0).UTC().Format(time.RFC3339)
 		rd := bucketMap[t]
@@ -598,7 +598,7 @@ func (r *Reader) ActionStats(since *string) ([]ActionStat, error) {
 	}
 	defer rows.Close()
 
-	var out []ActionStat
+	out := make([]ActionStat, 0)
 	for rows.Next() {
 		var s ActionStat
 		if err := rows.Scan(&s.ActionType, &s.Total, &s.Success, &s.Failure); err != nil {
@@ -705,7 +705,7 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 	// bucket (keyed by ""). The missing bucket keeps an empty server string in
 	// the response so a real server literally named "Unknown" stays
 	// distinguishable; the frontend renders "" as the "Unknown" label.
-	var named []ServerStat
+	named := make([]ServerStat, 0)
 	var unknown *ServerStat
 	for _, key := range serverOrder {
 		st := serverMap[key]
@@ -804,7 +804,7 @@ func (r *Reader) groupByFiltered(column, where string, args []any) ([]GroupCount
 	}
 	defer rows.Close()
 
-	var out []GroupCount
+	out := make([]GroupCount, 0)
 	for rows.Next() {
 		var gc GroupCount
 		if err := rows.Scan(&gc.Label, &gc.Count); err != nil {

@@ -302,11 +302,6 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ensure the slice is never null in JSON.
-	if buckets == nil {
-		buckets = []store.BucketRow{}
-	}
-
 	rangeFrom := from.UTC().Format(time.RFC3339)
 	if from.IsZero() && len(buckets) > 0 {
 		rangeFrom = buckets[0].Ts
@@ -341,10 +336,6 @@ func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return an empty slice rather than null in JSON.
-	if stats == nil {
-		stats = []store.ActionStat{}
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"actions": stats})
 }
 
@@ -365,9 +356,6 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "server stats query failed")
 		log.Printf("server stats error: %v", err)
 		return
-	}
-	if stats == nil {
-		stats = []store.ServerStat{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": stats})
 }

@@ -1113,13 +1113,14 @@
         const receiptsURL = `/api/receipts?limit=${RECENT_LIMIT}` + (afterQ ? '&' + afterQ : '');
         const receipts = await fetchJSON(receiptsURL);
         if (gen !== poller.generation) return;
-        renderReceiptsTable(receipts.slice(0, RECENT_LIMIT), 'recent-receipts');
+        const receiptList = receipts || [];
+        renderReceiptsTable(receiptList.slice(0, RECENT_LIMIT), 'recent-receipts');
 
         // Start live polling + keyboard nav immediately so a slow/hung summary
         // fetch can't delay core overview UX. The poller always tails with
         // `since=` regardless of the active range — new receipts should appear
         // in the live feed even when a short range is selected.
-        startPolling('overview', 'recent-receipts', receipts, () => ({}));
+        startPolling('overview', 'recent-receipts', receiptList, () => ({}));
         // Wire keyboard nav after startPolling so the j/k/Enter row list is
         // initialised even though stopPolling() cleared activeView above.
         nav.setSelector('#recent-receipts tbody tr');
@@ -2143,11 +2144,12 @@
       stopPolling();
       const gen = ++poller.generation;
       try {
-        const receipts = await fetchJSON('/api/receipts?' + params.toString());
+        const receiptsFetched = await fetchJSON('/api/receipts?' + params.toString());
         if (gen !== poller.generation) return;
-        renderReceiptsTable(receipts, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
-        renderMatchCount(receipts.length, qVal);
-        startPolling('receipts', 'receipts-table', receipts, currentReceiptFilters);
+        const receiptList = receiptsFetched || [];
+        renderReceiptsTable(receiptList, 'receipts-table', { emptyHint: Object.keys(filters).length > 0 });
+        renderMatchCount(receiptList.length, qVal);
+        startPolling('receipts', 'receipts-table', receiptList, currentReceiptFilters);
         nav.setSelector('#receipts-table tbody tr');
       } catch (err) {
         showError('Failed to load receipts: ' + err.message);
