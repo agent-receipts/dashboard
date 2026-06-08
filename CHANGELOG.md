@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Server/tool breakdown panel** — a new "Servers" tab shows an expandable table of every MCP server (extracted from `credentialSubject.action.target.system`) with per-server totals, failure counts, and a mini failure-rate bar. Each server row expands to reveal its tools with the same metrics. Clicking a tool row pre-filters the Receipts view to that server and tool. Receipts with no server are folded into an "Unknown" group, which is listed after named servers. The Overview tab gains a "Server activity" summary card showing the top 5 named servers as horizontal bars. New endpoint: `GET /api/stats/servers` (optional `?range=<duration>` for time-scoped results).
 - **Server and tool filters on Receipts** — two new filter inputs (`Server` and `Tool`) on the Receipts tab allow filtering by `target.system` and `tool_name` independently or in combination, with the same chip and clear-all behaviour as existing filters.
 - **Collapsible Overview cards** — each card on the Overview tab (Risk / Status / Action distribution, Top actions, Server activity, Recent receipts) has a chevron to collapse it down to its title. Collapsed state is remembered per card in `localStorage`, so cards you hide stay hidden across reloads.
+- **GitHub link in the header** — a GitHub icon next to the keyboard-shortcuts button opens the project repository (`github.com/agent-receipts/dashboard`) in a new tab, so operators can find the source or report an issue.
 
 ### Fixed
 
