@@ -2280,6 +2280,7 @@
         const qInput = document.getElementById('filter-q');
         if (qInput) qInput.value = sessionId;
         showView('receipts');
+        loadReceipts();
       }
     }
 
@@ -2292,7 +2293,7 @@
       // In the overview recent-receipts mini-table, show a pill that navigates
       // to the Receipts tab filtered to this session.
       const sessionPill = (opts && opts.showSessionPill && r.session_id)
-        ? `<button type="button" class="session-pill" title="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(${JSON.stringify(r.session_id)})">session</button>`
+        ? `<button type="button" class="session-pill" title="${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
         : '';
       return `
         <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
