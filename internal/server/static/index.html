@@ -820,6 +820,10 @@
           <label class="form-label" for="filter-tool">Tool</label>
           <input type="text" id="filter-tool" placeholder="list_pull_requests" oninput="debounceLoadReceipts()">
         </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-session">Session ID</label>
+          <input type="text" id="filter-session" placeholder="session-…" oninput="debounceLoadReceipts()">
+        </div>
       </div>
 
       <div class="filter-bar-meta">
@@ -2150,16 +2154,18 @@
       const risk   = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
-      const chain  = document.getElementById('filter-chain').value;
-      const server = document.getElementById('filter-server').value;
-      const tool   = document.getElementById('filter-tool').value;
-      if (q)      f.q           = q;
-      if (risk)   f.risk_level  = risk;
-      if (status) f.status      = status;
-      if (action) f.action_type = action;
-      if (chain)  f.chain_id    = chain;
-      if (server) f.server      = server;
-      if (tool)   f.tool_name   = tool;
+      const chain   = document.getElementById('filter-chain').value;
+      const server  = document.getElementById('filter-server').value;
+      const tool    = document.getElementById('filter-tool').value;
+      const session = document.getElementById('filter-session').value;
+      if (q)       f.q           = q;
+      if (risk)    f.risk_level  = risk;
+      if (status)  f.status      = status;
+      if (action)  f.action_type = action;
+      if (chain)   f.chain_id    = chain;
+      if (server)  f.server      = server;
+      if (tool)    f.tool_name   = tool;
+      if (session) f.session_id  = session;
       return f;
     }
 
@@ -2207,7 +2213,7 @@
     }
 
     function renderFilterChips(filters) {
-      const labels = { q: 'search', risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain', server: 'server', tool_name: 'tool' };
+      const labels = { q: 'search', risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain', server: 'server', tool_name: 'tool', session_id: 'session' };
       const entries = Object.entries(filters);
       const chips = entries.map(([k, v]) => `
         <span class="chip">
@@ -2223,17 +2229,24 @@
     }
 
     function clearFilter(key) {
-      const map = { q: 'filter-q', risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain', server: 'filter-server', tool_name: 'filter-tool' };
+      const map = { q: 'filter-q', risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain', server: 'filter-server', tool_name: 'filter-tool', session_id: 'filter-session' };
       const el = document.getElementById(map[key]);
       if (el) { el.value = ''; loadReceipts(); }
     }
 
     function clearAllFilters() {
-      ['filter-q', 'filter-risk', 'filter-status', 'filter-action', 'filter-chain', 'filter-server', 'filter-tool'].forEach(id => {
+      ['filter-q', 'filter-risk', 'filter-status', 'filter-action', 'filter-chain', 'filter-server', 'filter-tool', 'filter-session'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
       loadReceipts();
+    }
+
+    // filterBySession pre-fills the Session ID filter with sid and reloads the
+    // receipts table. Called when the user clicks a session header in the grouped view.
+    function filterBySession(sid) {
+      const el = document.getElementById('filter-session');
+      if (el) { el.value = sid; loadReceipts(); }
     }
 
     function receiptRowHTML(r, opts) {
@@ -2502,7 +2515,7 @@
                <td colspan="${COL_COUNT}">
                  <div class="session-header-inner">
                    <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-expanded="true" aria-label="Collapse session">▾</button>
-                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
+                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);cursor:pointer;" title="Filter by this session" onclick="filterBySession(${JSON.stringify(sid)})">${escapeHtml(truncate(sid, 40))}</span>
                    <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · latest ${escapeHtml(timeLabel)}</span>
                  </div>
                </td>

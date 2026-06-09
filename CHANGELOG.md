@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session ID filter** — the Receipts tab now has a "Session ID" filter input that restricts the list to receipts from a specific agent session (`issuer.session_id` exact match). Clicking a session header in the grouped view pre-fills this input and reloads. The "Clear filters" / per-chip clear buttons also clear the new input. The `GET /api/receipts` endpoint accepts a `session_id` query parameter backed by a `json_extract` WHERE clause.
+
 ## [0.7.0-alpha.1] - 2026-06-09
 
 ### Added

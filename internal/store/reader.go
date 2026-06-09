@@ -168,13 +168,14 @@ type Filter struct {
 	ActionType *string
 	RiskLevel  *string
 	Status     *string
-	Server     *string // target.system value (exact match)
-	ToolName   *string // tool_name column (exact match)
-	After      *string // ISO 8601 timestamp, inclusive
-	Before     *string // ISO 8601 timestamp, inclusive
-	Since      *string // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
+	Server     *string    // target.system value (exact match)
+	ToolName   *string    // tool_name column (exact match)
+	SessionID  *string    // issuer.session_id value (exact match)
+	After      *string    // ISO 8601 timestamp, inclusive
+	Before     *string    // ISO 8601 timestamp, inclusive
+	Since      *string    // ISO 8601 timestamp, inclusive — watermark for live polling; clients dedup by id
 	Limit      *int
-	Q          *string // free-text search against the raw receipt JSON; nil or whitespace-only means no filter
+	Q          *string    // free-text search against the raw receipt JSON; nil or whitespace-only means no filter
 }
 
 // OpenReadOnly opens an existing receipt SQLite database in read-only mode.
@@ -255,6 +256,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	if f.Server != nil {
 		conds = append(conds, "json_extract(receipt_json, '$.credentialSubject.action.target.system') = ?")
 		args = append(args, *f.Server)
+	}
+	if f.SessionID != nil {
+		conds = append(conds, "json_extract(receipt_json, '$.issuer.session_id') = ?")
+		args = append(args, *f.SessionID)
 	}
 	if f.After != nil {
 		conds = append(conds, "timestamp >= ?")
