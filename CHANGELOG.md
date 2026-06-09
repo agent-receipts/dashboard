@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session column in receipts table** — a Session column (truncated to 8 chars with the full ID in a tooltip) appears after Seq in both the flat and grouped receipts table. Clicking the session chip pre-fills the Session ID filter and reloads the list. Receipts without a session ID show a dash.
 - **Session link in receipt detail modal** — the receipt detail view now shows a clickable Session field (below Chain) when the receipt carries an `issuer.session_id`. Clicking closes the modal and filters the receipts list to that session.
 - **Keyboard navigation between receipts in the detail view** — while the receipt detail modal is open, pressing `j` / `↓` opens the next receipt in the current list and `k` / `↑` opens the previous one. Navigation stops at the ends (no wrap). Works correctly in both flat and grouped table layouts; session/agent header rows are skipped. The keyboard shortcuts help modal documents these new bindings.
+- **Jump to session from Overview recent receipts** — each receipt row in the Overview "Recent receipts" mini-table now shows a small `session` pill when the receipt carries a `session_id`. Clicking the pill switches to the Receipts tab and pre-filters it to that session. A `?session_id=<value>` URL parameter is also supported as a deep link (consistent with the existing `?q=` search deep link).
 
 ## [0.7.0-alpha.1] - 2026-06-09
 
