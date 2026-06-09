@@ -886,11 +886,11 @@
         <div class="modal-body">
           <div class="shortcut-row"><span class="shortcut-desc">Show this help</span><span class="shortcut-keys"><span class="kbd">?</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Focus action filter</span><span class="shortcut-keys"><span class="kbd">/</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Next row</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Previous row</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next row (receipts table)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous row (receipts table)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Open focused row</span><span class="shortcut-keys"><span class="kbd">↵</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Next receipt (in detail view)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Previous receipt (in detail view)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Close modal / blur input</span><span class="shortcut-keys"><span class="kbd">Esc</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Overview</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">o</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Receipts</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
@@ -3231,15 +3231,18 @@
     // Navigate to the next (+1) or previous (-1) receipt in the current table
     // when the receipt detail modal is open. Rows without [data-receipt-id] (e.g.
     // session/agent header rows in grouped mode) are skipped. Stops at the ends.
+    // The flag prevents concurrent in-flight fetches when keys are pressed quickly.
+    let receiptNavigating = false;
     function navigateReceipt(delta) {
-      if (!currentReceipt) return;
+      if (!currentReceipt || receiptNavigating) return;
       const rows = Array.from(document.querySelectorAll('#receipts-table tbody tr[data-receipt-id]'));
       if (rows.length === 0) return;
       const idx = rows.findIndex(r => r.dataset.receiptId === currentReceipt.id);
       if (idx < 0) return;
       const next = idx + delta;
       if (next < 0 || next >= rows.length) return;
-      showReceipt(rows[next].dataset.receiptId);
+      receiptNavigating = true;
+      showReceipt(rows[next].dataset.receiptId).finally(() => { receiptNavigating = false; });
     }
 
     function isModalOpen() {
