@@ -2265,6 +2265,7 @@
           <td><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(r.chain_id, 20))}</td>
           <td class="muted">#${r.sequence}</td>
+          <td class="muted font-mono text-xs">${r.session_id ? `<span data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); filterBySession(this.dataset.sessionId)" style="cursor:pointer;" title="${escapeAttr(r.session_id)}">${escapeHtml(truncate(r.session_id, 8))}</span>` : '<span class="subtle">—</span>'}</td>
         </tr>
       `;
     }
@@ -2367,6 +2368,7 @@
                   <th>Status</th>
                   <th>Chain</th>
                   <th>Seq</th>
+                  <th>Session</th>
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
@@ -2484,8 +2486,8 @@
     }
 
     // Number of columns in the receipts table (Time, Server, Tool, Action,
-    // Risk, Status, Chain, Seq). Used as colspan for session/agent header rows.
-    const RECEIPT_COLS = 8;
+    // Risk, Status, Chain, Seq, Session). Used as colspan for session/agent header rows.
+    const RECEIPT_COLS = 9;
 
     // renderGroupedReceiptsTable renders the receipts view with session headers,
     // per-agent swimlane sub-headers, collapsed correlation pairs, and
@@ -2557,7 +2559,7 @@
               <thead>
                 <tr>
                   <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
-                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th>
+                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th><th>Session</th>
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
@@ -2596,6 +2598,7 @@
           </td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(post.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(post.chain_id, 20))}</td>
           <td class="muted">#${pre.sequence}–${post.sequence}</td>
+          <td class="muted font-mono text-xs">${sessionId ? `<span data-session-id="${escapeAttr(sessionId)}" onclick="event.stopPropagation(); filterBySession(this.dataset.sessionId)" style="cursor:pointer;" title="${escapeAttr(sessionId)}">${escapeHtml(truncate(sessionId, 8))}</span>` : '<span class="subtle">—</span>'}</td>
         </tr>
       `;
     }
@@ -2875,6 +2878,15 @@
               — Sequence #${subj.chain.sequence}
             </div>
           </div>
+
+          ${r.issuer && r.issuer.session_id ? `
+          <div>
+            <div class="muted text-xs mb-1">Session</div>
+            <div class="text-sm">
+              <span class="font-mono text-xs accent" style="cursor:pointer;" title="${escapeAttr(r.issuer.session_id)}" data-session-id="${escapeAttr(r.issuer.session_id)}" onclick="closeModal(); filterBySession(this.dataset.sessionId)">${escapeHtml(truncate(r.issuer.session_id, 8))}</span>
+            </div>
+          </div>
+          ` : ''}
 
           <details class="mt-4">
             <summary class="muted text-sm" style="cursor:pointer;">Raw JSON</summary>
