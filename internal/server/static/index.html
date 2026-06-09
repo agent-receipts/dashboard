@@ -700,6 +700,7 @@
       <button class="tab" onclick="showView('receipts')" id="tab-receipts">Receipts</button>
       <button class="tab" onclick="showView('actions')" id="tab-actions">Actions</button>
       <button class="tab" onclick="showView('servers')" id="tab-servers">Servers</button>
+      <button class="tab" onclick="showView('sessions')" id="tab-sessions">Sessions</button>
       <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
     </nav>
   </header>
@@ -868,6 +869,11 @@
       <div id="servers-table"></div>
     </div>
 
+    <!-- Sessions view -->
+    <div id="view-sessions" class="hidden">
+      <div id="sessions-table"></div>
+    </div>
+
     <!-- Chains view -->
     <div id="view-chains" class="hidden">
       <div id="chains-list"></div>
@@ -922,6 +928,7 @@
           <div class="shortcut-row"><span class="shortcut-desc">Close modal / blur input</span><span class="shortcut-keys"><span class="kbd">Esc</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Overview</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">o</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Receipts</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Go to Sessions</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">s</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Chains</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">c</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Clear all filters</span><span class="shortcut-keys"><span class="kbd">c</span></span></div>
         </div>
@@ -1099,6 +1106,7 @@
       if (view === 'receipts') loadReceipts();
       if (view === 'actions')  loadActions();
       if (view === 'servers')  loadServers();
+      if (view === 'sessions') loadSessions();
       if (view === 'chains')   loadChains();
     }
 
@@ -1795,6 +1803,74 @@
       if (serverEl) serverEl.value = server;
       if (toolEl)   toolEl.value   = toolName;
       showView('receipts');
+    }
+
+    async function loadSessions() {
+      const gen = ++poller.generation;
+      const container = document.getElementById('sessions-table');
+      container.innerHTML = `
+        <div class="card p-4">
+          <div class="space-y-2">${skeletonBars(5)}</div>
+        </div>
+      `;
+      try {
+        const data = await fetchJSON('/api/sessions');
+        if (gen !== poller.generation) return;
+        renderSessionsTable(data.sessions || []);
+        nav.setSelector('#sessions-table tbody tr');
+      } catch (err) {
+        showError('Failed to load sessions: ' + err.message);
+        container.innerHTML = '<div class="empty-state"><div class="empty-title">Could not load sessions</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
+      }
+    }
+
+    function renderSessionsTable(sessions) {
+      const container = document.getElementById('sessions-table');
+      if (!sessions || sessions.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-title">No sessions yet</div>
+            <div class="empty-hint">Sessions appear here once receipts carrying a <code>session_id</code> are stored (requires hook ≥ v0.14.0).</div>
+          </div>
+        `;
+        return;
+      }
+
+      const rows = sessions.map(s => {
+        const agentLabel = s.agent_count === 1
+          ? '1 agent'
+          : `${s.agent_count} agents`;
+        return `
+          <tr style="cursor:pointer;" data-session-id="${escapeAttr(s.session_id)}" onclick="applySessionFilter(this.dataset.sessionId)">
+            <td style="padding:10px 12px;" class="font-mono text-sm" title="${escapeAttr(s.session_id)}">${escapeHtml(truncate(s.session_id, 36))}</td>
+            <td style="padding:10px 12px;" class="muted text-sm">${s.receipt_count}</td>
+            <td style="padding:10px 12px;" class="muted text-sm">${agentLabel}</td>
+            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.first_seen)}">${formatRelative(s.first_seen)}</td>
+            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.last_seen)}">${formatRelative(s.last_seen)}</td>
+          </tr>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll" style="max-height:calc(100vh - 180px);">
+            <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
+              <thead>
+                <tr>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Session ID</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Receipts</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Agents</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">First seen</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
     }
 
     function renderTopActionsSkeleton() {
@@ -3939,6 +4015,7 @@
         gPrefixUntil = 0;
         if (e.key === 'o') { e.preventDefault(); showView('overview'); return; }
         if (e.key === 'r') { e.preventDefault(); showView('receipts'); return; }
+        if (e.key === 's') { e.preventDefault(); showView('sessions'); return; }
         if (e.key === 'c') { e.preventDefault(); showView('chains');   return; }
       }
 

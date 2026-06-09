@@ -2094,6 +2094,146 @@ func TestParseDelegationJSON(t *testing.T) {
 	}
 }
 
+// TestReader_SessionStats verifies that SessionStats groups receipts by session_id,
+// computes correct receipt/agent counts, and excludes receipts without a session_id.
+func TestReader_SessionStats(t *testing.T) {
+	dbPath := t.TempDir() + "/sessions-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// session-alpha: 3 receipts, 2 agents (orchestrator + subagent-x)
+	r1 := makeReceipt("urn:receipt:ss1", "chain-ss", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T09:00:00Z", nil)
+	r1.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r1, "", "orchestrator", nil)
+
+	r2 := makeReceipt("urn:receipt:ss2", "chain-ss", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	r2.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r2, "", "subagent-x", nil)
+
+	r3 := makeReceipt("urn:receipt:ss3", "chain-ss", 3, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T11:00:00Z", nil)
+	r3.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r3, "", "orchestrator", nil)
+
+	// session-beta: 1 receipt, 1 agent
+	r4 := makeReceipt("urn:receipt:ss4", "chain-ss2", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T08:00:00Z", nil)
+	r4.Issuer.SessionID = "session-beta"
+	insertLayer3(t, s, r4, "", "orchestrator", nil)
+
+	// no session: should be excluded
+	r5 := makeReceipt("urn:receipt:ss5", "chain-ss3", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T12:00:00Z", nil)
+	hash5, err := receipt.HashReceipt(r5)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r5, hash5); err != nil {
+		t.Fatalf("insert no-session receipt: %v", err)
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.SessionStats(nil)
+	if err != nil {
+		t.Fatalf("session stats: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(rows))
+	}
+
+	// Results are ordered by last_seen DESC, so session-alpha (last 11:00) comes first.
+	alpha := rows[0]
+	if alpha.SessionID != "session-alpha" {
+		t.Errorf("rows[0].SessionID = %q, want session-alpha", alpha.SessionID)
+	}
+	if alpha.ReceiptCount != 3 {
+		t.Errorf("session-alpha ReceiptCount = %d, want 3", alpha.ReceiptCount)
+	}
+	if alpha.AgentCount != 2 {
+		t.Errorf("session-alpha AgentCount = %d, want 2", alpha.AgentCount)
+	}
+	if alpha.FirstSeen != "2026-04-01T09:00:00Z" {
+		t.Errorf("session-alpha FirstSeen = %q, want 2026-04-01T09:00:00Z", alpha.FirstSeen)
+	}
+	if alpha.LastSeen != "2026-04-01T11:00:00Z" {
+		t.Errorf("session-alpha LastSeen = %q, want 2026-04-01T11:00:00Z", alpha.LastSeen)
+	}
+
+	beta := rows[1]
+	if beta.SessionID != "session-beta" {
+		t.Errorf("rows[1].SessionID = %q, want session-beta", beta.SessionID)
+	}
+	if beta.ReceiptCount != 1 {
+		t.Errorf("session-beta ReceiptCount = %d, want 1", beta.ReceiptCount)
+	}
+	if beta.AgentCount != 1 {
+		t.Errorf("session-beta AgentCount = %d, want 1", beta.AgentCount)
+	}
+}
+
+// TestReader_SessionStats_SinceFilter verifies that the since parameter
+// restricts results to receipts at or after the given timestamp.
+func TestReader_SessionStats_SinceFilter(t *testing.T) {
+	dbPath := t.TempDir() + "/sessions-since-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// session-alpha: one old receipt, one new receipt
+	r1 := makeReceipt("urn:receipt:sn1", "chain-sn", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T08:00:00Z", nil)
+	r1.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r1, "", "", nil)
+
+	r2 := makeReceipt("urn:receipt:sn2", "chain-sn", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	r2.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r2, "", "", nil)
+
+	// session-beta: only an old receipt (before the since cutoff)
+	r3 := makeReceipt("urn:receipt:sn3", "chain-sn2", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T07:00:00Z", nil)
+	r3.Issuer.SessionID = "session-beta"
+	insertLayer3(t, s, r3, "", "", nil)
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	since := "2026-04-01T09:00:00Z"
+	rows, err := reader.SessionStats(&since)
+	if err != nil {
+		t.Fatalf("session stats with since: %v", err)
+	}
+
+	// Only session-alpha has a receipt at or after 09:00; session-beta's only
+	// receipt is at 07:00 and should be excluded.
+	if len(rows) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(rows))
+	}
+	if rows[0].SessionID != "session-alpha" {
+		t.Errorf("session ID = %q, want session-alpha", rows[0].SessionID)
+	}
+	if rows[0].ReceiptCount != 1 {
+		t.Errorf("ReceiptCount = %d, want 1 (only the receipt at 10:00 is in window)", rows[0].ReceiptCount)
+	}
+}
+
 // seedFileDB creates a temporary SQLite file with test data using the SDK store,
 // then closes the SDK store so the reader can open it read-only.
 func seedFileDB(t *testing.T) string {

@@ -596,6 +596,61 @@ func (r *Reader) TimeseriesStats(from, to time.Time, bucket time.Duration) ([]Bu
 	return out, nil
 }
 
+// SessionRow holds aggregate statistics for a single agent session.
+type SessionRow struct {
+	SessionID    string `json:"session_id"`
+	ReceiptCount int    `json:"receipt_count"`
+	AgentCount   int    `json:"agent_count"`
+	FirstSeen    string `json:"first_seen"`
+	LastSeen     string `json:"last_seen"`
+}
+
+// SessionStats returns one SessionRow per distinct session_id, ordered by
+// last_seen DESC. Receipts without a session_id are excluded. The optional
+// since parameter (ISO-8601 inclusive) restricts results to receipts at or
+// after that timestamp; nil means all-time.
+func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
+	conds := []string{
+		"json_extract(receipt_json, '$.issuer.session_id') IS NOT NULL",
+		"json_extract(receipt_json, '$.issuer.session_id') != ''",
+	}
+	var args []any
+	if since != nil {
+		conds = append(conds, "timestamp >= ?")
+		args = append(args, *since)
+	}
+	where := "WHERE " + strings.Join(conds, " AND ")
+
+	query := fmt.Sprintf(`
+		SELECT
+			json_extract(receipt_json, '$.issuer.session_id') AS session_id,
+			COUNT(*) AS receipt_count,
+			COUNT(DISTINCT COALESCE(json_extract(receipt_json, '$.issuer.agent_id'), '')) AS agent_count,
+			MIN(timestamp) AS first_seen,
+			MAX(timestamp) AS last_seen
+		FROM receipts
+		%s
+		GROUP BY session_id
+		ORDER BY last_seen DESC
+	`, where)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]SessionRow, 0)
+	for rows.Next() {
+		var sr SessionRow
+		if err := rows.Scan(&sr.SessionID, &sr.ReceiptCount, &sr.AgentCount, &sr.FirstSeen, &sr.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, sr)
+	}
+	return out, rows.Err()
+}
+
 // ActionStat holds aggregate statistics for a single action type.
 type ActionStat struct {
 	ActionType string `json:"action_type"`
