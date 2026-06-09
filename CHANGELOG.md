@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-alpha.3] - 2026-06-09
+
 ### Fixed
 
 - **Sessions tab agent count** — sessions now always show at least 1 agent. Previously the agent count used `issuer.agent_id`, a Layer 3 extension field not yet produced by any current daemon version, so the count was always 0. The query now falls back to `issuer.id` when `agent_id` is absent; once the daemon starts emitting `agent_id` for multi-agent sessions, the correct subagent count will appear automatically.
