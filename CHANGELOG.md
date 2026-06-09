@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session ID filter** — the Receipts tab now has a "Session ID" filter input that restricts the list to receipts from a specific agent session (`issuer.session_id` exact match). Clicking a session header in the grouped view pre-fills this input and reloads. The "Clear filters" / per-chip clear buttons also clear the new input. The `GET /api/receipts` endpoint accepts a `session_id` query parameter backed by a `json_extract` WHERE clause.
+- **Session column in receipts table** — a Session column (truncated to 8 chars with the full ID in a tooltip) appears after Seq in both the flat and grouped receipts table. Clicking the session chip pre-fills the Session ID filter and reloads the list. Receipts without a session ID show a dash.
+- **Session link in receipt detail modal** — the receipt detail view now shows a clickable Session field (below Chain) when the receipt carries an `issuer.session_id`. Clicking closes the modal and filters the receipts list to that session.
 - **Keyboard navigation between receipts in the detail view** — while the receipt detail modal is open, pressing `j` / `↓` opens the next receipt in the current list and `k` / `↑` opens the previous one. Navigation stops at the ends (no wrap). Works correctly in both flat and grouped table layouts; session/agent header rows are skipped. The keyboard shortcuts help modal documents these new bindings.
 
 ## [0.7.0-alpha.1] - 2026-06-09

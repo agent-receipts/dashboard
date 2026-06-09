@@ -391,6 +391,9 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("tool_name"); v != "" {
 		f.ToolName = &v
 	}
+	if v := strings.TrimSpace(q.Get("session_id")); v != "" {
+		f.SessionID = &v
+	}
 	if v := q.Get("q"); v != "" {
 		f.Q = &v
 	}

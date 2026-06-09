@@ -1926,6 +1926,85 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	}
 }
 
+// TestReader_ListReceipts_FilterBySessionID verifies that the session_id filter
+// returns only receipts whose issuer.session_id matches the supplied value.
+func TestReader_ListReceipts_FilterBySessionID(t *testing.T) {
+	dbPath := t.TempDir() + "/session-filter-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Two receipts in session-alpha, one in session-beta, one with no session.
+	r1 := makeReceipt("urn:receipt:sf1", "chain-sf", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	r1.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r1, "", "", nil)
+
+	r2 := makeReceipt("urn:receipt:sf2", "chain-sf", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	r2.Issuer.SessionID = "session-alpha"
+	insertLayer3(t, s, r2, "", "", nil)
+
+	r3 := makeReceipt("urn:receipt:sf3", "chain-sf", 3, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+	r3.Issuer.SessionID = "session-beta"
+	insertLayer3(t, s, r3, "", "", nil)
+
+	// Old-style receipt with no session_id at all.
+	r4 := makeReceipt("urn:receipt:sf4", "chain-sf-old", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:03:00Z", nil)
+	hash4, err := receipt.HashReceipt(r4)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r4, hash4); err != nil {
+		t.Fatalf("insert old receipt: %v", err)
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Filter by session-alpha — should return 2 rows.
+	rows, err := reader.ListReceipts(Filter{SessionID: strPtr("session-alpha")})
+	if err != nil {
+		t.Fatalf("list by session-alpha: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("got %d rows for session-alpha, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.SessionID != "session-alpha" {
+			t.Errorf("row %s: session_id = %q, want session-alpha", row.ID, row.SessionID)
+		}
+	}
+
+	// Filter by session-beta — should return 1 row.
+	rows, err = reader.ListReceipts(Filter{SessionID: strPtr("session-beta")})
+	if err != nil {
+		t.Fatalf("list by session-beta: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows for session-beta, want 1", len(rows))
+	}
+	if len(rows) == 1 && rows[0].ID != "urn:receipt:sf3" {
+		t.Errorf("session-beta row ID = %q, want urn:receipt:sf3", rows[0].ID)
+	}
+
+	// Filter by a non-existent session — should return 0 rows.
+	rows, err = reader.ListReceipts(Filter{SessionID: strPtr("session-nonexistent")})
+	if err != nil {
+		t.Fatalf("list by nonexistent session: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d rows for nonexistent session, want 0", len(rows))
+	}
+}
+
 // TestReader_Layer3_DelegationMalformed verifies that a malformed delegation
 // JSON value does not error — it results in nil Delegation (graceful
 // degradation for forward-compat payloads the dashboard can't fully parse).
