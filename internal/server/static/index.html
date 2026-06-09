@@ -886,9 +886,11 @@
         <div class="modal-body">
           <div class="shortcut-row"><span class="shortcut-desc">Show this help</span><span class="shortcut-keys"><span class="kbd">?</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Focus action filter</span><span class="shortcut-keys"><span class="kbd">/</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Next row</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Previous row</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next row (receipts table)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous row (receipts table)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Open focused row</span><span class="shortcut-keys"><span class="kbd">↵</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Close modal / blur input</span><span class="shortcut-keys"><span class="kbd">Esc</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Overview</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">o</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Receipts</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
@@ -3226,6 +3228,23 @@
     function showShortcuts()   { openModal('shortcuts-modal'); }
     function closeShortcuts()  { closeModalById('shortcuts-modal'); }
 
+    // Navigate to the next (+1) or previous (-1) receipt in the current table
+    // when the receipt detail modal is open. Rows without [data-receipt-id] (e.g.
+    // session/agent header rows in grouped mode) are skipped. Stops at the ends.
+    // The flag prevents concurrent in-flight fetches when keys are pressed quickly.
+    let receiptNavigating = false;
+    function navigateReceipt(delta) {
+      if (!currentReceipt || receiptNavigating) return;
+      const rows = Array.from(document.querySelectorAll('#receipts-table tbody tr[data-receipt-id]'));
+      if (rows.length === 0) return;
+      const idx = rows.findIndex(r => r.dataset.receiptId === currentReceipt.id);
+      if (idx < 0) return;
+      const next = idx + delta;
+      if (next < 0 || next >= rows.length) return;
+      receiptNavigating = true;
+      showReceipt(rows[next].dataset.receiptId).finally(() => { receiptNavigating = false; });
+    }
+
     function isModalOpen() {
       return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].some(id => !document.getElementById(id).hidden);
     }
@@ -3812,6 +3831,18 @@
 
       // Don't intercept while typing in a filter input.
       if (isTypingTarget(e.target)) return;
+
+      // When the receipt detail modal is open, j/↓ and k/↑ navigate between
+      // receipts in the current list. All other keys (except Esc above) are
+      // blocked while any modal is open.
+      if (!document.getElementById('receipt-modal').hidden) {
+        if (e.key === 'j' || e.key === 'ArrowDown') {
+          e.preventDefault(); navigateReceipt(+1); return;
+        }
+        if (e.key === 'k' || e.key === 'ArrowUp') {
+          e.preventDefault(); navigateReceipt(-1); return;
+        }
+      }
 
       // Don't intercept while a modal is open (Esc handled above is the only key).
       if (isModalOpen()) return;

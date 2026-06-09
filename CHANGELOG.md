@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Keyboard navigation between receipts in the detail view** — while the receipt detail modal is open, pressing `j` / `↓` opens the next receipt in the current list and `k` / `↑` opens the previous one. Navigation stops at the ends (no wrap). Works correctly in both flat and grouped table layouts; session/agent header rows are skipped. The keyboard shortcuts help modal documents these new bindings.
+
 ## [0.7.0-alpha.1] - 2026-06-09
 
 ### Added
