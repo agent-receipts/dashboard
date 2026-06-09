@@ -626,7 +626,7 @@ func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
 		SELECT
 			json_extract(receipt_json, '$.issuer.session_id') AS session_id,
 			COUNT(*) AS receipt_count,
-			COUNT(DISTINCT NULLIF(json_extract(receipt_json, '$.issuer.agent_id'), '')) AS agent_count,
+			COUNT(DISTINCT COALESCE(NULLIF(json_extract(receipt_json, '$.issuer.agent_id'), ''), json_extract(receipt_json, '$.issuer.id'))) AS agent_count,
 			MIN(timestamp) AS first_seen,
 			MAX(timestamp) AS last_seen
 		FROM receipts
