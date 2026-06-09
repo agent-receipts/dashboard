@@ -62,8 +62,12 @@ type ReceiptRow struct {
 	// receipt for the same tool call (same tool_use_id).
 	CorrelationID string `json:"correlation_id,omitempty"`
 	// AgentID identifies which subagent issued this receipt (orchestrator vs
-	// spawned subagent). Comes from issuer.agent_id in the receipt JSON.
+	// spawned subagent). Comes from issuer.runtime.agent_id in the receipt JSON
+	// (the issuer.runtime open metadata sub-object, daemon ≥ v0.18.0 / ADR-0026).
 	AgentID string `json:"agent_id,omitempty"`
+	// AgentType is the runtime-reported agent type label (e.g. "general-purpose"),
+	// from issuer.runtime.agent_type.
+	AgentType string `json:"agent_type,omitempty"`
 	// SessionID groups all receipts from the same agent session together.
 	// Comes from issuer.session_id in the receipt JSON.
 	SessionID string `json:"session_id,omitempty"`
@@ -312,8 +316,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	// on text that json_valid has cleared — SQL AND does not short-circuit,
 	// and json_extract on non-JSON text raises a "malformed JSON" error.
 	//
-	// The last four columns are Layer 3 attribution fields (daemon ≥ v0.17.0).
-	// They are absent from older receipts and will scan as empty strings / NULL.
+	// The last five columns are Layer 3 attribution fields. correlation_id and
+	// delegation arrive with daemon ≥ v0.17.0; issuer.runtime.{agent_id,
+	// agent_type} with daemon ≥ v0.18.0 (ADR-0026). All are absent from older
+	// receipts and scan as empty strings / NULL.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -331,7 +337,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		          ELSE 0
 		        END,
 		        COALESCE(json_extract(receipt_json, '$.credentialSubject.correlation_id'), ''),
-		        COALESCE(json_extract(receipt_json, '$.issuer.agent_id'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_id'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.session_id'), ''),
 		        json_extract(receipt_json, '$.credentialSubject.delegation')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
@@ -360,7 +367,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.ParametersInputPreview, &row.ParametersOutputPreview,
 			&row.HasParametersDisclosure,
 			&row.OutputStatusMismatch,
-			&row.CorrelationID, &row.AgentID, &row.SessionID,
+			&row.CorrelationID, &row.AgentID, &row.AgentType, &row.SessionID,
 			&delegationJSON,
 		); err != nil {
 			return nil, err
@@ -626,7 +633,7 @@ func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
 		SELECT
 			json_extract(receipt_json, '$.issuer.session_id') AS session_id,
 			COUNT(*) AS receipt_count,
-			COUNT(DISTINCT COALESCE(NULLIF(json_extract(receipt_json, '$.issuer.agent_id'), ''), json_extract(receipt_json, '$.issuer.id'))) AS agent_count,
+			COUNT(DISTINCT COALESCE(NULLIF(json_extract(receipt_json, '$.issuer.runtime.agent_id'), ''), json_extract(receipt_json, '$.issuer.id'))) AS agent_count,
 			MIN(timestamp) AS first_seen,
 			MAX(timestamp) AS last_seen
 		FROM receipts
