@@ -115,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats/timeseries", s.handleTimeseriesStats)
 	mux.HandleFunc("GET /api/stats/actions", s.handleActionStats)
 	mux.HandleFunc("GET /api/stats/servers", s.handleServerStats)
+	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -320,9 +321,9 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 	var since *string
 	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
-		d, err := time.ParseDuration(rangeStr)
+		d, err := parseFlexibleDuration(rangeStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "range must be a positive Go duration (e.g. 24h)")
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
 			return
 		}
 		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
@@ -342,9 +343,9 @@ func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 	var since *string
 	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
-		d, err := time.ParseDuration(rangeStr)
+		d, err := parseFlexibleDuration(rangeStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "range must be a positive Go duration (e.g. 24h)")
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
 			return
 		}
 		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
@@ -358,6 +359,26 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": stats})
+}
+
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	var since *string
+	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
+		d, err := parseFlexibleDuration(rangeStr)
+		if err != nil || d <= 0 {
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
+			return
+		}
+		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
+		since = &t
+	}
+	sessions, err := s.reader.SessionStats(since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session stats query failed")
+		log.Printf("session stats error: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
 func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {

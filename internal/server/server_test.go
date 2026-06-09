@@ -1051,6 +1051,149 @@ func TestTimeseriesStatsEndpoint(t *testing.T) {
 	})
 }
 
+// seedSessionsDB creates a DB with two sessions and one no-session receipt.
+func seedSessionsDB(t *testing.T) *Server {
+	t.Helper()
+	dbPath := t.TempDir() + "/sessions-srv.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// injectSession augments a receipt's JSON with issuer.session_id/agent_id
+	// and inserts it via InsertRaw (same pattern as TestChainVerifyEndpoint_ForwardCompatChain).
+	injectSession := func(r receipt.AgentReceipt, sessionID, agentID string) {
+		var m map[string]any
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal receipt: %v", err)
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("unmarshal receipt: %v", err)
+		}
+		issuer, _ := m["issuer"].(map[string]any)
+		if issuer == nil {
+			issuer = map[string]any{}
+		}
+		if sessionID != "" {
+			issuer["session_id"] = sessionID
+		}
+		if agentID != "" {
+			issuer["agent_id"] = agentID
+		}
+		m["issuer"] = issuer
+		raw, _ := json.Marshal(m)
+		h, err := receipt.HashRawReceipt(raw)
+		if err != nil {
+			t.Fatalf("hash raw: %v", err)
+		}
+		if err := s.InsertRaw(r, raw, h); err != nil {
+			t.Fatalf("insert raw: %v", err)
+		}
+	}
+
+	r1 := makeReceipt("urn:receipt:ses1", "chain-ses", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	injectSession(r1, "session-alpha", "orchestrator")
+
+	r2 := makeReceipt("urn:receipt:ses2", "chain-ses", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	injectSession(r2, "session-alpha", "subagent-x")
+
+	r3 := makeReceipt("urn:receipt:ses3", "chain-ses2", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T09:00:00Z", nil)
+	injectSession(r3, "session-beta", "orchestrator")
+
+	// No session — should be excluded from /api/sessions.
+	r4 := makeReceipt("urn:receipt:ses4", "chain-old", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T08:00:00Z", nil)
+	h4, err := receipt.HashReceipt(r4)
+	if err != nil {
+		t.Fatalf("hash receipt: %v", err)
+	}
+	if err := s.Insert(r4, h4); err != nil {
+		t.Fatalf("insert receipt: %v", err)
+	}
+
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return New(reader, Config{})
+}
+
+func TestSessionsEndpoint(t *testing.T) {
+	srv := seedSessionsDB(t)
+
+	t.Run("200 returns sessions list excluding no-session receipts", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/sessions", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		var resp struct {
+			Sessions []store.SessionRow `json:"sessions"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+
+		if resp.Sessions == nil {
+			t.Error("sessions must be [] not null")
+		}
+		if len(resp.Sessions) != 2 {
+			t.Fatalf("got %d sessions, want 2", len(resp.Sessions))
+		}
+
+		// Results ordered by last_seen DESC: session-alpha (10:01) before session-beta (09:00).
+		if resp.Sessions[0].SessionID != "session-alpha" {
+			t.Errorf("sessions[0].session_id = %q, want session-alpha", resp.Sessions[0].SessionID)
+		}
+		if resp.Sessions[0].ReceiptCount != 2 {
+			t.Errorf("session-alpha receipt_count = %d, want 2", resp.Sessions[0].ReceiptCount)
+		}
+		if resp.Sessions[0].AgentCount != 2 {
+			t.Errorf("session-alpha agent_count = %d, want 2", resp.Sessions[0].AgentCount)
+		}
+		if resp.Sessions[1].SessionID != "session-beta" {
+			t.Errorf("sessions[1].session_id = %q, want session-beta", resp.Sessions[1].SessionID)
+		}
+	})
+
+	t.Run("400 on invalid range param", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/sessions?range=notaduration", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("got status %d, want 400", w.Code)
+		}
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode error body: %v", err)
+		}
+		if resp["error"] == "" {
+			t.Error("expected error message in response body")
+		}
+	})
+
+	t.Run("200 with valid range param", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/sessions?range=24h", nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("got status %d, want 200", w.Code)
+		}
+	})
+}
+
 func TestStatsEndpoint_WithRange(t *testing.T) {
 	srv, _ := seedTimedDB(t)
 
