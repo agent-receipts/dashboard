@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Jump to session from Overview recent receipts** — each receipt row in the Overview "Recent receipts" mini-table now shows a small `session` pill when the receipt carries a `session_id`. Clicking the pill switches to the Receipts tab and pre-filters it to that session. A `?session_id=<value>` URL parameter is also supported as a deep link (consistent with the existing `?q=` search deep link). When a dedicated session filter input is present (added by a future PR implementing server-side session filtering), it is used directly; otherwise the session ID is placed in the free-text search box as a fallback.
+
 ## [0.7.0-alpha.1] - 2026-06-09
 
 ### Added

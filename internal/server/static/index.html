@@ -197,6 +197,26 @@
     .badge-irreversible { background: rgba(248,81,73,0.15);   color: var(--status-failure); }
     .badge-unknown      { background: rgba(125,133,144,0.15); color: var(--muted); }
 
+    /* Session pill — small clickable link shown in the overview recent-receipts
+       mini-table for receipts that carry a session_id. Navigates to the Receipts
+       tab pre-filtered to that session. */
+    .session-pill {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      font-size: 0.65rem; font-weight: 500; line-height: 1.5;
+      background: rgba(88,166,255,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(88,166,255,0.25);
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .session-pill:hover {
+      background: rgba(88,166,255,0.22);
+      border-color: rgba(88,166,255,0.5);
+    }
+
     .bar-low      { background: rgba(63,185,80,0.6); }
     .bar-medium   { background: rgba(210,153,34,0.6); }
     .bar-high     { background: rgba(248,81,73,0.6); }
@@ -2236,12 +2256,44 @@
       loadReceipts();
     }
 
+    // applySessionFilter switches to the Receipts tab and applies a session_id
+    // filter. If a native filter-session input exists (added by a future PR that
+    // implements server-side session filtering), it is populated and used.
+    // Otherwise the session ID is reflected in the URL as ?session_id=<value> so
+    // it is picked up on boot as a deep link, and the search box is pre-filled
+    // with the value so receipts are narrowed by the free-text fallback.
+    function applySessionFilter(sessionId) {
+      const sessionInput = document.getElementById('filter-session');
+      if (sessionInput) {
+        // Issue #110 is merged — use the dedicated input.
+        clearAllFilters();
+        sessionInput.value = sessionId;
+        showView('receipts');
+        loadReceipts();
+      } else {
+        // Stub: reflect in URL and pre-fill the search box so the user lands on
+        // the Receipts tab with receipts narrowed to this session.
+        const url = new URL(location.href);
+        url.searchParams.set('session_id', sessionId);
+        history.replaceState(null, '', url.toString());
+        clearAllFilters();
+        const qInput = document.getElementById('filter-q');
+        if (qInput) qInput.value = sessionId;
+        showView('receipts');
+      }
+    }
+
     function receiptRowHTML(r, opts) {
       const flash = opts && opts.flash ? ' row-new' : '';
       const tsAttr = r.timestamp ? ` title="${escapeAttr(r.timestamp)}"` : '';
       // When rendered inside a session group, carry the session ID so
       // toggleSession() can show/hide this row with its peers.
       const sessionAttr = (opts && opts.sessionId) ? ` data-session-id="${escapeAttr(opts.sessionId)}"` : '';
+      // In the overview recent-receipts mini-table, show a pill that navigates
+      // to the Receipts tab filtered to this session.
+      const sessionPill = (opts && opts.showSessionPill && r.session_id)
+        ? `<button type="button" class="session-pill" title="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(${JSON.stringify(r.session_id)})">session</button>`
+        : '';
       return `
         <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
@@ -2251,7 +2303,7 @@
           <td><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(r.chain_id, 20))}</td>
-          <td class="muted">#${r.sequence}</td>
+          <td class="muted">#${r.sequence}${sessionPill}</td>
         </tr>
       `;
     }
@@ -2357,7 +2409,7 @@
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
-                ${receipts.map(r => receiptRowHTML(r)).join('')}
+                ${receipts.map(r => receiptRowHTML(r, { showSessionPill: containerId === 'recent-receipts' })).join('')}
               </tbody>
             </table>
           </div>
@@ -3885,7 +3937,9 @@
     loadPollConfig().then(async () => {
       // If the URL contains ?q=<term>, pre-populate the search box and open
       // the Receipts view with the term applied. Otherwise load the overview.
-      const initialQ = new URLSearchParams(location.search).get('q');
+      const params      = new URLSearchParams(location.search);
+      const initialQ    = params.get('q');
+      const initialSid  = params.get('session_id');
       if (initialQ && initialQ.trim()) {
         document.getElementById('filter-q').value = initialQ;
         // loadOverview() is skipped on this path, so fetch stats here to fill
@@ -3899,6 +3953,17 @@
           console.warn('header stats on deep-link boot:', err);
         }
         showView('receipts');
+      } else if (initialSid && initialSid.trim()) {
+        // ?session_id= deep link: navigate directly to the Receipts tab with
+        // the session filter applied (uses applySessionFilter which handles
+        // both the native input path and the free-text fallback).
+        try {
+          const stats = await fetchJSON('/api/stats');
+          renderHeaderContext(null, stats);
+        } catch (err) {
+          console.warn('header stats on deep-link boot:', err);
+        }
+        applySessionFilter(initialSid.trim());
       } else {
         loadOverview();
       }
