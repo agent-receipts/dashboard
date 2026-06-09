@@ -844,6 +844,10 @@
           <label class="form-label" for="filter-tool">Tool</label>
           <input type="text" id="filter-tool" placeholder="list_pull_requests" oninput="debounceLoadReceipts()">
         </div>
+        <div class="form-field">
+          <label class="form-label" for="filter-session">Session ID</label>
+          <input type="text" id="filter-session" placeholder="session-…" oninput="debounceLoadReceipts()">
+        </div>
       </div>
 
       <div class="filter-bar-meta">
@@ -910,9 +914,11 @@
         <div class="modal-body">
           <div class="shortcut-row"><span class="shortcut-desc">Show this help</span><span class="shortcut-keys"><span class="kbd">?</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Focus action filter</span><span class="shortcut-keys"><span class="kbd">/</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Next row</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
-          <div class="shortcut-row"><span class="shortcut-desc">Previous row</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next row (receipts table)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous row (receipts table)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Open focused row</span><span class="shortcut-keys"><span class="kbd">↵</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Next receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">j</span><span class="kbd">↓</span></span></div>
+          <div class="shortcut-row"><span class="shortcut-desc">Previous receipt (detail view open)</span><span class="shortcut-keys"><span class="kbd">k</span><span class="kbd">↑</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Close modal / blur input</span><span class="shortcut-keys"><span class="kbd">Esc</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Overview</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">o</span></span></div>
           <div class="shortcut-row"><span class="shortcut-desc">Go to Receipts</span><span class="shortcut-keys"><span class="kbd">g</span><span class="kbd">r</span></span></div>
@@ -2174,16 +2180,18 @@
       const risk   = document.getElementById('filter-risk').value;
       const status = document.getElementById('filter-status').value;
       const action = document.getElementById('filter-action').value;
-      const chain  = document.getElementById('filter-chain').value;
-      const server = document.getElementById('filter-server').value;
-      const tool   = document.getElementById('filter-tool').value;
-      if (q)      f.q           = q;
-      if (risk)   f.risk_level  = risk;
-      if (status) f.status      = status;
-      if (action) f.action_type = action;
-      if (chain)  f.chain_id    = chain;
-      if (server) f.server      = server;
-      if (tool)   f.tool_name   = tool;
+      const chain   = document.getElementById('filter-chain').value;
+      const server  = document.getElementById('filter-server').value;
+      const tool    = document.getElementById('filter-tool').value;
+      const session = document.getElementById('filter-session').value;
+      if (q)       f.q           = q;
+      if (risk)    f.risk_level  = risk;
+      if (status)  f.status      = status;
+      if (action)  f.action_type = action;
+      if (chain)   f.chain_id    = chain;
+      if (server)  f.server      = server;
+      if (tool)    f.tool_name   = tool;
+      if (session) f.session_id  = session;
       return f;
     }
 
@@ -2231,7 +2239,7 @@
     }
 
     function renderFilterChips(filters) {
-      const labels = { q: 'search', risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain', server: 'server', tool_name: 'tool' };
+      const labels = { q: 'search', risk_level: 'risk', status: 'status', action_type: 'action', chain_id: 'chain', server: 'server', tool_name: 'tool', session_id: 'session' };
       const entries = Object.entries(filters);
       const chips = entries.map(([k, v]) => `
         <span class="chip">
@@ -2247,43 +2255,36 @@
     }
 
     function clearFilter(key) {
-      const map = { q: 'filter-q', risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain', server: 'filter-server', tool_name: 'filter-tool' };
+      const map = { q: 'filter-q', risk_level: 'filter-risk', status: 'filter-status', action_type: 'filter-action', chain_id: 'filter-chain', server: 'filter-server', tool_name: 'filter-tool', session_id: 'filter-session' };
       const el = document.getElementById(map[key]);
       if (el) { el.value = ''; loadReceipts(); }
     }
 
     function clearAllFilters() {
-      ['filter-q', 'filter-risk', 'filter-status', 'filter-action', 'filter-chain', 'filter-server', 'filter-tool'].forEach(id => {
+      ['filter-q', 'filter-risk', 'filter-status', 'filter-action', 'filter-chain', 'filter-server', 'filter-tool', 'filter-session'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
       loadReceipts();
     }
 
-    // applySessionFilter switches to the Receipts tab and applies a session_id
-    // filter. If a native filter-session input exists (added by a future PR that
-    // implements server-side session filtering), it is populated and used.
-    // Otherwise the session ID is reflected in the URL as ?session_id=<value> so
-    // it is picked up on boot as a deep link, and the search box is pre-filled
-    // with the value so receipts are narrowed by the free-text fallback.
+    // applySessionFilter switches to the Receipts tab and pre-filters by session_id.
+    // Used by the Overview session pill to navigate from the Overview to the Receipts tab.
     function applySessionFilter(sessionId) {
-      // Always reflect in URL so the navigation is bookmarkable.
       const url = new URL(location.href);
       url.searchParams.set('session_id', sessionId);
       history.replaceState(null, '', url.toString());
-
       const sessionInput = document.getElementById('filter-session');
-      if (sessionInput) {
-        // Issue #110 is merged — use the dedicated server-side input.
-        // Set value directly (no clearAllFilters — that triggers loadReceipts).
-        sessionInput.value = sessionId;
-      } else {
-        // Fallback: pre-fill free-text search so receipts are narrowed visually.
-        const qInput = document.getElementById('filter-q');
-        if (qInput) qInput.value = sessionId;
-      }
+      if (sessionInput) sessionInput.value = sessionId;
       showView('receipts');
       loadReceipts();
+    }
+
+    // filterBySession pre-fills the Session ID filter with sid and reloads the
+    // receipts table. Called when the user clicks a session header in the grouped view.
+    function filterBySession(sid) {
+      const el = document.getElementById('filter-session');
+      if (el) { el.value = sid; loadReceipts(); }
     }
 
     function receiptRowHTML(r, opts) {
@@ -2307,6 +2308,7 @@
           <td><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(r.chain_id, 20))}</td>
           <td class="muted">#${r.sequence}${sessionPill}</td>
+          <td class="muted font-mono text-xs">${r.session_id ? `<span data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); filterBySession(this.dataset.sessionId)" style="cursor:pointer;" title="${escapeAttr(r.session_id)}">${escapeHtml(truncate(r.session_id, 8))}</span>` : '<span class="subtle">—</span>'}</td>
         </tr>
       `;
     }
@@ -2409,6 +2411,7 @@
                   <th>Status</th>
                   <th>Chain</th>
                   <th>Seq</th>
+                  <th>Session</th>
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
@@ -2526,8 +2529,8 @@
     }
 
     // Number of columns in the receipts table (Time, Server, Tool, Action,
-    // Risk, Status, Chain, Seq). Used as colspan for session/agent header rows.
-    const RECEIPT_COLS = 8;
+    // Risk, Status, Chain, Seq, Session). Used as colspan for session/agent header rows.
+    const RECEIPT_COLS = 9;
 
     // renderGroupedReceiptsTable renders the receipts view with session headers,
     // per-agent swimlane sub-headers, collapsed correlation pairs, and
@@ -2557,7 +2560,7 @@
                <td colspan="${COL_COUNT}">
                  <div class="session-header-inner">
                    <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-expanded="true" aria-label="Collapse session">▾</button>
-                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);" title="${safeEsc}">${escapeHtml(truncate(sid, 40))}</span>
+                   <button type="button" class="font-mono session-filter-btn" style="font-size:0.8rem;color:var(--accent);background:none;border:none;padding:0;cursor:pointer;" title="${safeEsc}" data-session-id="${safeEsc}" onclick="filterBySession(this.dataset.sessionId)">${escapeHtml(truncate(sid, 40))}</button>
                    <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · latest ${escapeHtml(timeLabel)}</span>
                  </div>
                </td>
@@ -2599,7 +2602,7 @@
               <thead>
                 <tr>
                   <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
-                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th>
+                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th><th>Session</th>
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
@@ -2638,6 +2641,7 @@
           </td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(post.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(post.chain_id, 20))}</td>
           <td class="muted">#${pre.sequence}–${post.sequence}</td>
+          <td class="muted font-mono text-xs">${sessionId ? `<span data-session-id="${escapeAttr(sessionId)}" onclick="event.stopPropagation(); filterBySession(this.dataset.sessionId)" style="cursor:pointer;" title="${escapeAttr(sessionId)}">${escapeHtml(truncate(sessionId, 8))}</span>` : '<span class="subtle">—</span>'}</td>
         </tr>
       `;
     }
@@ -2917,6 +2921,15 @@
               — Sequence #${subj.chain.sequence}
             </div>
           </div>
+
+          ${r.issuer && r.issuer.session_id ? `
+          <div>
+            <div class="muted text-xs mb-1">Session</div>
+            <div class="text-sm">
+              <span class="font-mono text-xs accent" style="cursor:pointer;" title="${escapeAttr(r.issuer.session_id)}" data-session-id="${escapeAttr(r.issuer.session_id)}" onclick="closeModal(); filterBySession(this.dataset.sessionId)">${escapeHtml(truncate(r.issuer.session_id, 8))}</span>
+            </div>
+          </div>
+          ` : ''}
 
           <details class="mt-4">
             <summary class="muted text-sm" style="cursor:pointer;">Raw JSON</summary>
@@ -3280,6 +3293,23 @@
     function closeChainModal() { closeModalById('chain-modal'); }
     function showShortcuts()   { openModal('shortcuts-modal'); }
     function closeShortcuts()  { closeModalById('shortcuts-modal'); }
+
+    // Navigate to the next (+1) or previous (-1) receipt in the current table
+    // when the receipt detail modal is open. Rows without [data-receipt-id] (e.g.
+    // session/agent header rows in grouped mode) are skipped. Stops at the ends.
+    // The flag prevents concurrent in-flight fetches when keys are pressed quickly.
+    let receiptNavigating = false;
+    function navigateReceipt(delta) {
+      if (!currentReceipt || receiptNavigating) return;
+      const rows = Array.from(document.querySelectorAll('#receipts-table tbody tr[data-receipt-id]'));
+      if (rows.length === 0) return;
+      const idx = rows.findIndex(r => r.dataset.receiptId === currentReceipt.id);
+      if (idx < 0) return;
+      const next = idx + delta;
+      if (next < 0 || next >= rows.length) return;
+      receiptNavigating = true;
+      showReceipt(rows[next].dataset.receiptId).finally(() => { receiptNavigating = false; });
+    }
 
     function isModalOpen() {
       return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].some(id => !document.getElementById(id).hidden);
@@ -3867,6 +3897,18 @@
 
       // Don't intercept while typing in a filter input.
       if (isTypingTarget(e.target)) return;
+
+      // When the receipt detail modal is open, j/↓ and k/↑ navigate between
+      // receipts in the current list. All other keys (except Esc above) are
+      // blocked while any modal is open.
+      if (!document.getElementById('receipt-modal').hidden) {
+        if (e.key === 'j' || e.key === 'ArrowDown') {
+          e.preventDefault(); navigateReceipt(+1); return;
+        }
+        if (e.key === 'k' || e.key === 'ArrowUp') {
+          e.preventDefault(); navigateReceipt(-1); return;
+        }
+      }
 
       // Don't intercept while a modal is open (Esc handled above is the only key).
       if (isModalOpen()) return;
