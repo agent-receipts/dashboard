@@ -54,6 +54,33 @@ type ReceiptRow struct {
 	// status (see issue #50). This is a read-only display hint; the dashboard
 	// never rewrites the receipt or its hash.
 	OutputStatusMismatch bool `json:"output_status_mismatch"`
+
+	// Layer 3 attribution fields — only present on receipts from daemon ≥ v0.17.0
+	// / hook ≥ v0.14.0. Empty/nil for older receipts; the UI degrades gracefully.
+
+	// CorrelationID links a hook pre-check receipt to its mcp-proxy post-action
+	// receipt for the same tool call (same tool_use_id).
+	CorrelationID string `json:"correlation_id,omitempty"`
+	// AgentID identifies which subagent issued this receipt (orchestrator vs
+	// spawned subagent). Comes from issuer.agent_id in the receipt JSON.
+	AgentID string `json:"agent_id,omitempty"`
+	// SessionID groups all receipts from the same agent session together.
+	// Comes from issuer.session_id in the receipt JSON.
+	SessionID string `json:"session_id,omitempty"`
+	// Delegation is non-nil on the first receipt of a subagent chain and
+	// carries the parent chain reference, enabling delegation edge rendering.
+	Delegation *DelegationInfo `json:"delegation,omitempty"`
+}
+
+// DelegationInfo holds parent-chain attribution fields emitted by subagents
+// delegated from a parent chain (daemon ≥ v0.17.0). Maps to
+// credentialSubject.delegation in the receipt JSON.
+type DelegationInfo struct {
+	ParentChainID   string `json:"parent_chain_id"`
+	ParentReceiptID string `json:"parent_receipt_id"`
+	// DelegatorID is the id of the entity that issued the delegation
+	// (from credentialSubject.delegation.delegator.id).
+	DelegatorID string `json:"delegator_id,omitempty"`
 }
 
 // disclosurePreviewMaxLen bounds the size of input/output previews returned
@@ -279,6 +306,9 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	// reach into it. The CASE gate ensures the inner json_extract only runs
 	// on text that json_valid has cleared — SQL AND does not short-circuit,
 	// and json_extract on non-JSON text raises a "malformed JSON" error.
+	//
+	// The last four columns are Layer 3 attribution fields (daemon ≥ v0.17.0).
+	// They are absent from older receipts and will scan as empty strings / NULL.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -294,7 +324,11 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		           AND json_valid(IFNULL(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 'null')) = 1
 		          THEN IFNULL(json_extract(IFNULL(json_extract(receipt_json, '$.credentialSubject.action.parameters_disclosure.output'), 'null'), '$.isError'), 0) = 1
 		          ELSE 0
-		        END
+		        END,
+		        COALESCE(json_extract(receipt_json, '$.credentialSubject.correlation_id'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.agent_id'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.session_id'), ''),
+		        json_extract(receipt_json, '$.credentialSubject.delegation')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
@@ -312,6 +346,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	out := make([]ReceiptRow, 0)
 	for rows.Next() {
 		var row ReceiptRow
+		var delegationJSON sql.NullString
 		if err := rows.Scan(
 			&row.ID, &row.ChainID, &row.Sequence, &row.ActionType,
 			&row.ToolName, &row.Server,
@@ -320,8 +355,13 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.ParametersInputPreview, &row.ParametersOutputPreview,
 			&row.HasParametersDisclosure,
 			&row.OutputStatusMismatch,
+			&row.CorrelationID, &row.AgentID, &row.SessionID,
+			&delegationJSON,
 		); err != nil {
 			return nil, err
+		}
+		if delegationJSON.Valid && delegationJSON.String != "" && delegationJSON.String != "null" {
+			row.Delegation = parseDelegationJSON(delegationJSON.String)
 		}
 		out = append(out, row)
 	}
@@ -774,6 +814,30 @@ var allowedGroupByColumns = map[string]bool{
 	"risk_level":  true,
 	"status":      true,
 	"action_type": true,
+}
+
+// parseDelegationJSON decodes the credentialSubject.delegation JSON object and
+// returns a DelegationInfo. Unknown fields are ignored. Returns nil on any
+// parse error so callers degrade gracefully on malformed or forward-compat JSON.
+func parseDelegationJSON(s string) *DelegationInfo {
+	var wire struct {
+		ParentChainID   string `json:"parent_chain_id"`
+		ParentReceiptID string `json:"parent_receipt_id"`
+		Delegator       struct {
+			ID string `json:"id"`
+		} `json:"delegator"`
+	}
+	if err := json.Unmarshal([]byte(s), &wire); err != nil {
+		return nil
+	}
+	if wire.ParentChainID == "" || wire.ParentReceiptID == "" {
+		return nil
+	}
+	return &DelegationInfo{
+		ParentChainID:   wire.ParentChainID,
+		ParentReceiptID: wire.ParentReceiptID,
+		DelegatorID:     wire.Delegator.ID,
+	}
 }
 
 // escapeLikeTerm escapes a user-supplied search term so that %, _, and \ are

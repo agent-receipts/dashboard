@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -1721,6 +1722,296 @@ func TestStatsWithRange(t *testing.T) {
 	}
 	if beforeFiltered.Total != 2 {
 		t.Errorf("before-filtered total = %d, want 2", beforeFiltered.Total)
+	}
+}
+
+// ---------- Layer 3 attribution tests ----------
+
+// insertLayer3 creates a receipt with Layer 3 attribution fields by marshalling
+// the base receipt to JSON, injecting the new fields, and inserting the
+// augmented bytes via InsertRaw. This mirrors how daemon ≥ v0.17.0 emits
+// receipts with fields not yet in the SDK Go types.
+func insertLayer3(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, correlationID, agentID string, delegation *DelegationInfo) {
+	t.Helper()
+	rawJSON, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(rawJSON, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Inject correlation_id and delegation into credentialSubject.
+	cs, _ := m["credentialSubject"].(map[string]any)
+	if cs == nil {
+		cs = map[string]any{}
+	}
+	if correlationID != "" {
+		cs["correlation_id"] = correlationID
+	}
+	if delegation != nil {
+		cs["delegation"] = map[string]any{
+			"parent_chain_id":   delegation.ParentChainID,
+			"parent_receipt_id": delegation.ParentReceiptID,
+			"delegator":         map[string]any{"id": delegation.DelegatorID},
+		}
+	}
+	m["credentialSubject"] = cs
+
+	// Inject agent_id into issuer.
+	if agentID != "" {
+		issuer, _ := m["issuer"].(map[string]any)
+		if issuer == nil {
+			issuer = map[string]any{}
+		}
+		issuer["agent_id"] = agentID
+		m["issuer"] = issuer
+	}
+
+	augmented, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
+	}
+	if err := s.InsertRaw(r, augmented, hash); err != nil {
+		t.Fatalf("insert receipt: %v", err)
+	}
+}
+
+// TestReader_Layer3_GracefulDegradation verifies that old receipts (no Layer 3
+// fields) are returned with empty CorrelationID, AgentID, SessionID, and nil
+// Delegation — no errors and no zero-value noise.
+func TestReader_Layer3_GracefulDegradation(t *testing.T) {
+	dbPath := seedFileDB(t)
+	r, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer r.Close()
+
+	rows, err := r.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, row := range rows {
+		if row.CorrelationID != "" {
+			t.Errorf("row %s: want empty CorrelationID for old receipt, got %q", row.ID, row.CorrelationID)
+		}
+		if row.AgentID != "" {
+			t.Errorf("row %s: want empty AgentID for old receipt, got %q", row.ID, row.AgentID)
+		}
+		if row.SessionID != "" {
+			t.Errorf("row %s: want empty SessionID for old receipt, got %q", row.ID, row.SessionID)
+		}
+		if row.Delegation != nil {
+			t.Errorf("row %s: want nil Delegation for old receipt, got %+v", row.ID, row.Delegation)
+		}
+	}
+}
+
+// TestReader_Layer3_NewFields verifies that correlation_id, agent_id,
+// session_id, and delegation are correctly extracted from receipts emitted by
+// daemon ≥ v0.17.0 / hook ≥ v0.14.0.
+func TestReader_Layer3_NewFields(t *testing.T) {
+	dbPath := t.TempDir() + "/layer3-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Base receipt using the current Issuer struct with session_id set.
+	base := makeReceipt("urn:receipt:l3a", "chain-l3", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	base.Issuer.SessionID = "session-abc"
+
+	del := &DelegationInfo{
+		ParentChainID:   "urn:chain:parent",
+		ParentReceiptID: "urn:receipt:parent-last",
+		DelegatorID:     "did:agent:orchestrator",
+	}
+	insertLayer3(t, s, base, "corr-001", "subagent-x", del)
+
+	// Receipt with only correlation_id (no delegation, no agent_id).
+	r2 := makeReceipt("urn:receipt:l3b", "chain-l3", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	r2.Issuer.SessionID = "session-abc"
+	insertLayer3(t, s, r2, "corr-001", "", nil)
+
+	// Old-style receipt with no Layer 3 fields at all.
+	r3 := makeReceipt("urn:receipt:l3c", "chain-l3-old", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+	hash3, err := receipt.HashReceipt(r3)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r3, hash3); err != nil {
+		t.Fatalf("insert old receipt: %v", err)
+	}
+
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	// Rows are newest-first: l3c (index 0), l3b (index 1), l3a (index 2).
+	rowC := rows[0] // old-style, no Layer 3
+	rowB := rows[1] // correlation only
+	rowA := rows[2] // full Layer 3
+
+	// l3a: all Layer 3 fields set.
+	if rowA.CorrelationID != "corr-001" {
+		t.Errorf("l3a CorrelationID: got %q, want corr-001", rowA.CorrelationID)
+	}
+	if rowA.AgentID != "subagent-x" {
+		t.Errorf("l3a AgentID: got %q, want subagent-x", rowA.AgentID)
+	}
+	if rowA.SessionID != "session-abc" {
+		t.Errorf("l3a SessionID: got %q, want session-abc", rowA.SessionID)
+	}
+	if rowA.Delegation == nil {
+		t.Fatal("l3a Delegation: got nil, want non-nil")
+	}
+	if rowA.Delegation.ParentChainID != "urn:chain:parent" {
+		t.Errorf("l3a Delegation.ParentChainID: got %q, want urn:chain:parent", rowA.Delegation.ParentChainID)
+	}
+	if rowA.Delegation.ParentReceiptID != "urn:receipt:parent-last" {
+		t.Errorf("l3a Delegation.ParentReceiptID: got %q, want urn:receipt:parent-last", rowA.Delegation.ParentReceiptID)
+	}
+	if rowA.Delegation.DelegatorID != "did:agent:orchestrator" {
+		t.Errorf("l3a Delegation.DelegatorID: got %q, want did:agent:orchestrator", rowA.Delegation.DelegatorID)
+	}
+
+	// l3b: correlation_id + session_id, no agent_id or delegation.
+	if rowB.CorrelationID != "corr-001" {
+		t.Errorf("l3b CorrelationID: got %q, want corr-001", rowB.CorrelationID)
+	}
+	if rowB.AgentID != "" {
+		t.Errorf("l3b AgentID: got %q, want empty", rowB.AgentID)
+	}
+	if rowB.SessionID != "session-abc" {
+		t.Errorf("l3b SessionID: got %q, want session-abc", rowB.SessionID)
+	}
+	if rowB.Delegation != nil {
+		t.Errorf("l3b Delegation: got %+v, want nil", rowB.Delegation)
+	}
+
+	// l3c: old-style receipt — all Layer 3 fields empty/nil.
+	if rowC.CorrelationID != "" {
+		t.Errorf("l3c CorrelationID: got %q, want empty", rowC.CorrelationID)
+	}
+	if rowC.AgentID != "" {
+		t.Errorf("l3c AgentID: got %q, want empty", rowC.AgentID)
+	}
+	if rowC.SessionID != "" {
+		t.Errorf("l3c SessionID: got %q, want empty", rowC.SessionID)
+	}
+	if rowC.Delegation != nil {
+		t.Errorf("l3c Delegation: got %+v, want nil", rowC.Delegation)
+	}
+}
+
+// TestReader_Layer3_DelegationMalformed verifies that a malformed delegation
+// JSON value does not error — it results in nil Delegation (graceful
+// degradation for forward-compat payloads the dashboard can't fully parse).
+func TestReader_Layer3_DelegationMalformed(t *testing.T) {
+	dbPath := t.TempDir() + "/layer3-malformed.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	base := makeReceipt("urn:receipt:dm1", "chain-dm", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+
+	rawJSON, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawJSON, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cs, _ := m["credentialSubject"].(map[string]any)
+	if cs == nil {
+		cs = map[string]any{}
+	}
+	// Inject a delegation field with missing required keys — should parse to nil.
+	cs["delegation"] = map[string]any{"unexpected_key": "value"}
+	m["credentialSubject"] = cs
+
+	augmented, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
+	}
+	if err := s.InsertRaw(base, augmented, hash); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if rows[0].Delegation != nil {
+		t.Errorf("want nil Delegation for empty-keys object, got %+v", rows[0].Delegation)
+	}
+}
+
+// TestParseDelegationJSON unit-tests parseDelegationJSON directly, covering
+// the boundary cases that the DB-roundtrip tests cannot easily express.
+func TestParseDelegationJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantNil bool
+	}{
+		{"both fields present", `{"parent_chain_id":"urn:chain:a","parent_receipt_id":"urn:receipt:b"}`, false},
+		{"both fields with delegator", `{"parent_chain_id":"c","parent_receipt_id":"r","delegator":{"id":"did:agent:x"}}`, false},
+		{"only parent_chain_id", `{"parent_chain_id":"urn:chain:a"}`, true},
+		{"only parent_receipt_id", `{"parent_receipt_id":"urn:receipt:b"}`, true},
+		{"neither field", `{"unexpected":"value"}`, true},
+		{"empty object", `{}`, true},
+		{"malformed JSON", `not-json`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseDelegationJSON(tc.input)
+			if tc.wantNil && got != nil {
+				t.Errorf("want nil, got %+v", got)
+			}
+			if !tc.wantNil && got == nil {
+				t.Errorf("want non-nil DelegationInfo, got nil")
+			}
+		})
 	}
 }
 
