@@ -216,6 +216,10 @@
       background: rgba(88,166,255,0.22);
       border-color: rgba(88,166,255,0.5);
     }
+    .session-pill:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
 
     .bar-low      { background: rgba(63,185,80,0.6); }
     .bar-medium   { background: rgba(210,153,34,0.6); }
@@ -2263,25 +2267,23 @@
     // it is picked up on boot as a deep link, and the search box is pre-filled
     // with the value so receipts are narrowed by the free-text fallback.
     function applySessionFilter(sessionId) {
+      // Always reflect in URL so the navigation is bookmarkable.
+      const url = new URL(location.href);
+      url.searchParams.set('session_id', sessionId);
+      history.replaceState(null, '', url.toString());
+
       const sessionInput = document.getElementById('filter-session');
       if (sessionInput) {
-        // Issue #110 is merged — use the dedicated input.
-        clearAllFilters();
+        // Issue #110 is merged — use the dedicated server-side input.
+        // Set value directly (no clearAllFilters — that triggers loadReceipts).
         sessionInput.value = sessionId;
-        showView('receipts');
-        loadReceipts();
       } else {
-        // Stub: reflect in URL and pre-fill the search box so the user lands on
-        // the Receipts tab with receipts narrowed to this session.
-        const url = new URL(location.href);
-        url.searchParams.set('session_id', sessionId);
-        history.replaceState(null, '', url.toString());
-        clearAllFilters();
+        // Fallback: pre-fill free-text search so receipts are narrowed visually.
         const qInput = document.getElementById('filter-q');
         if (qInput) qInput.value = sessionId;
-        showView('receipts');
-        loadReceipts();
       }
+      showView('receipts');
+      loadReceipts();
     }
 
     function receiptRowHTML(r, opts) {
@@ -2293,7 +2295,7 @@
       // In the overview recent-receipts mini-table, show a pill that navigates
       // to the Receipts tab filtered to this session.
       const sessionPill = (opts && opts.showSessionPill && r.session_id)
-        ? `<button type="button" class="session-pill" title="${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
+        ? `<button type="button" class="session-pill" style="margin-left:4px;" title="${escapeAttr(r.session_id)}" aria-label="Filter by session ${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
         : '';
       return `
         <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
