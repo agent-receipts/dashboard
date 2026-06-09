@@ -1060,7 +1060,7 @@ func seedSessionsDB(t *testing.T) *Server {
 		t.Fatalf("open sdk store: %v", err)
 	}
 
-	// injectSession augments a receipt's JSON with issuer.session_id/agent_id
+	// injectSession augments a receipt's JSON with issuer.session_id and issuer.runtime.agent_id
 	// and inserts it via InsertRaw (same pattern as TestChainVerifyEndpoint_ForwardCompatChain).
 	injectSession := func(r receipt.AgentReceipt, sessionID, agentID string) {
 		var m map[string]any
@@ -1079,7 +1079,8 @@ func seedSessionsDB(t *testing.T) *Server {
 			issuer["session_id"] = sessionID
 		}
 		if agentID != "" {
-			issuer["agent_id"] = agentID
+			// agent_id lives under the issuer.runtime open sub-object (ADR-0026).
+			issuer["runtime"] = map[string]any{"agent_id": agentID}
 		}
 		m["issuer"] = issuer
 		raw, _ := json.Marshal(m)

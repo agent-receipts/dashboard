@@ -2556,6 +2556,7 @@
           const a = session.agents.get(aid);
           return {
             agentId:    aid,
+            agentType:  (a.rawRows.find(r => r.agent_type) || {}).agent_type || null,
             delegation: a.delegation,
             rows:       collapseCorrelationPairs(a.rawRows),
           };
@@ -2649,9 +2650,12 @@
         const agentRowsHTML = session.agents.map(agent => {
           const aid    = agent.agentId;   // null for root/orchestrator agent
           const isRoot = aid === null;
+          const aTypeBadge = (!isRoot && agent.agentType)
+            ? `<span class="agent-type-badge" style="font-size:0.65rem;color:var(--muted);margin-left:0.4rem;">${escapeHtml(agent.agentType)}</span>`
+            : '';
           const aLabel = isRoot
             ? `<span class="agent-root-label">Orchestrator</span>`
-            : `<span class="agent-sub-label">↳ Subagent</span><span class="font-mono" style="font-size:0.7rem;color:var(--text);">${escapeHtml(aid)}</span>`;
+            : `<span class="agent-sub-label">↳ Subagent</span><span class="font-mono" style="font-size:0.7rem;color:var(--text);">${escapeHtml(aid)}</span>${aTypeBadge}`;
 
           const delEdge = agent.delegation
             ? `<span class="delegation-edge" title="Delegated from ${escapeAttr(agent.delegation.parent_chain_id)}">← ${escapeHtml(truncate(agent.delegation.parent_chain_id, 28))}</span>`
@@ -2979,6 +2983,8 @@
               <div class="muted text-xs mb-1">Issuer</div>
               <div class="font-mono text-xs">${escapeHtml(r.issuer.id)}</div>
               ${r.issuer.name ? `<div class="muted text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
+              ${r.issuer.runtime && r.issuer.runtime.agent_id ? `<div class="muted text-xs mt-1">runtime.agent_id <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_id)}</span></div>` : ''}
+              ${r.issuer.runtime && r.issuer.runtime.agent_type ? `<div class="muted text-xs">runtime.agent_type <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_type)}</span></div>` : ''}
             </div>
             <div>
               <div class="muted text-xs mb-1">Principal</div>

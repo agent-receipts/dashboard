@@ -1760,13 +1760,14 @@ func insertLayer3(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, corre
 	}
 	m["credentialSubject"] = cs
 
-	// Inject agent_id into issuer.
+	// Inject agent_id into issuer.runtime (the open metadata sub-object, ADR-0026;
+	// daemon ≥ v0.18.0). Older receipts had no agent_id at all.
 	if agentID != "" {
 		issuer, _ := m["issuer"].(map[string]any)
 		if issuer == nil {
 			issuer = map[string]any{}
 		}
-		issuer["agent_id"] = agentID
+		issuer["runtime"] = map[string]any{"agent_id": agentID, "agent_type": "general-purpose"}
 		m["issuer"] = issuer
 	}
 
@@ -1880,6 +1881,9 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	}
 	if rowA.AgentID != "subagent-x" {
 		t.Errorf("l3a AgentID: got %q, want subagent-x", rowA.AgentID)
+	}
+	if rowA.AgentType != "general-purpose" {
+		t.Errorf("l3a AgentType: got %q, want general-purpose", rowA.AgentType)
 	}
 	if rowA.SessionID != "session-abc" {
 		t.Errorf("l3a SessionID: got %q, want session-abc", rowA.SessionID)
