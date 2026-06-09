@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-alpha.1] - 2026-06-09
+
 ### Added
 
 - **Layer 3 attribution rendering** — the Receipts view now renders session grouping, subagent swimlanes, correlation pairing, and delegation edges for receipts emitted by daemon ≥ v0.17.0 / hook ≥ v0.14.0. When any receipt in the current result set carries a `session_id`, the flat table is replaced with a grouped layout:
