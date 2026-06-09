@@ -1064,8 +1064,13 @@ func seedSessionsDB(t *testing.T) *Server {
 	// and inserts it via InsertRaw (same pattern as TestChainVerifyEndpoint_ForwardCompatChain).
 	injectSession := func(r receipt.AgentReceipt, sessionID, agentID string) {
 		var m map[string]any
-		b, _ := json.Marshal(r)
-		json.Unmarshal(b, &m)
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal receipt: %v", err)
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("unmarshal receipt: %v", err)
+		}
 		issuer, _ := m["issuer"].(map[string]any)
 		if issuer == nil {
 			issuer = map[string]any{}
@@ -1102,8 +1107,13 @@ func seedSessionsDB(t *testing.T) *Server {
 	// No session — should be excluded from /api/sessions.
 	r4 := makeReceipt("urn:receipt:ses4", "chain-old", 1, "tool.call",
 		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T08:00:00Z", nil)
-	h4, _ := receipt.HashReceipt(r4)
-	s.Insert(r4, h4)
+	h4, err := receipt.HashReceipt(r4)
+	if err != nil {
+		t.Fatalf("hash receipt: %v", err)
+	}
+	if err := s.Insert(r4, h4); err != nil {
+		t.Fatalf("insert receipt: %v", err)
+	}
 
 	s.Close()
 
