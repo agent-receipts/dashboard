@@ -2517,7 +2517,7 @@
                <td colspan="${COL_COUNT}">
                  <div class="session-header-inner">
                    <button type="button" class="session-collapse-btn" data-target-session="${safeEsc}" onclick="toggleSession(this)" aria-expanded="true" aria-label="Collapse session">▾</button>
-                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);cursor:pointer;" title="Filter by this session" onclick="filterBySession(${JSON.stringify(sid)})">${escapeHtml(truncate(sid, 40))}</span>
+                   <span class="font-mono" style="font-size:0.8rem;color:var(--accent);cursor:pointer;" title="Filter by this session" data-session-id="${safeEsc}" onclick="filterBySession(this.dataset.sessionId)">${escapeHtml(truncate(sid, 40))}</span>
                    <span style="font-size:0.72rem;color:var(--subtle);">· ${countLabel} · latest ${escapeHtml(timeLabel)}</span>
                  </div>
                </td>
