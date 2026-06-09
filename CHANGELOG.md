@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-alpha.4] - 2026-06-09
+
+### Fixed
+
+- **Sub-agent grouping now works against live receipts** — the dashboard was reading sub-agent identity from `issuer.agent_id`, a flat field that the daemon never emitted. As of protocol v0.5.0 / daemon v0.18.0-alpha.1 (ADR-0026), agent identity lives under `issuer.runtime`. The session-grouping and list queries now extract `$.issuer.runtime.agent_id`; `$.issuer.runtime.agent_type` is also surfaced and shown as a badge on subagent swimlane headers and in the receipt detail modal. SDK bumped from 0.15.0 → 0.17.0-alpha.1 to pick up the updated `Issuer.Runtime` struct.
+
 ## [0.7.0-alpha.3] - 2026-06-09
 
 ### Fixed
