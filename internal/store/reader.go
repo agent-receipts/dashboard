@@ -610,9 +610,10 @@ type SessionRow struct {
 // since parameter (ISO-8601 inclusive) restricts results to receipts at or
 // after that timestamp; nil means all-time.
 func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
+	// COALESCE session_id to '' so a single != '' check handles both NULL and
+	// empty-string exclusion, avoiding two json_extract calls per row in WHERE.
 	conds := []string{
-		"json_extract(receipt_json, '$.issuer.session_id') IS NOT NULL",
-		"json_extract(receipt_json, '$.issuer.session_id') != ''",
+		"COALESCE(json_extract(receipt_json, '$.issuer.session_id'), '') != ''",
 	}
 	var args []any
 	if since != nil {
@@ -625,7 +626,7 @@ func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
 		SELECT
 			json_extract(receipt_json, '$.issuer.session_id') AS session_id,
 			COUNT(*) AS receipt_count,
-			COUNT(DISTINCT COALESCE(json_extract(receipt_json, '$.issuer.agent_id'), '')) AS agent_count,
+			COUNT(DISTINCT NULLIF(json_extract(receipt_json, '$.issuer.agent_id'), '')) AS agent_count,
 			MIN(timestamp) AS first_seen,
 			MAX(timestamp) AS last_seen
 		FROM receipts

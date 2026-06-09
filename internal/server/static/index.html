@@ -1096,6 +1096,7 @@
 
     // ---------- View switching ----------
     function showView(view) {
+      nav.setSelector(null);
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + view).classList.remove('hidden');
@@ -2353,12 +2354,15 @@
       const sessionInput = document.getElementById('filter-session');
       if (sessionInput) sessionInput.value = sessionId;
       showView('receipts');
-      loadReceipts();
+      // showView already calls loadReceipts(); do not call it again here.
     }
 
     // filterBySession pre-fills the Session ID filter with sid and reloads the
     // receipts table. Called when the user clicks a session header in the grouped view.
     function filterBySession(sid) {
+      const url = new URL(location.href);
+      url.searchParams.set('session_id', sid);
+      history.replaceState(null, '', url.toString());
       const el = document.getElementById('filter-session');
       if (el) { el.value = sid; loadReceipts(); }
     }
@@ -3002,7 +3006,7 @@
           <div>
             <div class="muted text-xs mb-1">Session</div>
             <div class="text-sm">
-              <span class="font-mono text-xs accent" style="cursor:pointer;" title="${escapeAttr(r.issuer.session_id)}" data-session-id="${escapeAttr(r.issuer.session_id)}" onclick="closeModal(); filterBySession(this.dataset.sessionId)">${escapeHtml(truncate(r.issuer.session_id, 8))}</span>
+              <span class="font-mono text-xs accent" style="cursor:pointer;" title="${escapeAttr(r.issuer.session_id)}" data-session-id="${escapeAttr(r.issuer.session_id)}" onclick="closeModal(); applySessionFilter(this.dataset.sessionId)">${escapeHtml(truncate(r.issuer.session_id, 8))}</span>
             </div>
           </div>
           ` : ''}

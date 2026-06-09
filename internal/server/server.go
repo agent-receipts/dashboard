@@ -321,9 +321,9 @@ func (s *Server) handleTimeseriesStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 	var since *string
 	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
-		d, err := time.ParseDuration(rangeStr)
+		d, err := parseFlexibleDuration(rangeStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "range must be a positive Go duration (e.g. 24h)")
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
 			return
 		}
 		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
@@ -343,9 +343,9 @@ func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 	var since *string
 	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
-		d, err := time.ParseDuration(rangeStr)
+		d, err := parseFlexibleDuration(rangeStr)
 		if err != nil || d <= 0 {
-			writeError(w, http.StatusBadRequest, "range must be a positive Go duration (e.g. 24h)")
+			writeError(w, http.StatusBadRequest, "range must be a positive duration (e.g. 24h, 7d)")
 			return
 		}
 		t := time.Now().UTC().Add(-d).Format(time.RFC3339)
