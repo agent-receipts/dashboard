@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0-alpha.5] - 2026-06-10
+
+### Fixed
+
+- **Session ID filter no longer sticky** — clearing the Session ID filter (via the chip ×, "Clear all", or emptying the input) now removes `session_id` from the URL instead of leaving a stale value behind. Previously only `?q=` was kept in sync, so a `?session_id=…` deep link or session click would survive a clear and get re-applied on the next reload/poll, forcing users to hand-edit the URL to widen the view.
+
 ## [0.7.0-alpha.4] - 2026-06-09
 
 ### Fixed
