@@ -3475,7 +3475,7 @@
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
             <span style="font-size:0.78rem;color:var(--muted);">Agent graph — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
-            <button type="button" class="icon-btn" style="font-size:0.7rem;padding:2px 6px;"
+            <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
               onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
           </div>
           <div id="inline-graph-body"></div>
@@ -3606,14 +3606,16 @@
       const maxCount  = Math.max(...nodes.map(n => n.receiptCount));
       const nodeR     = n => maxCount > 0 ? 22 + Math.round((n.receiptCount / maxCount) * 18) : 28;
 
-      // SVG coordinate space.
-      const VB_W    = 800;
+      // SVG coordinate space — width expands so each sub-agent has ≥130 px of horizontal room.
       const ROOT_Y  = 70;
       const SUB_Y   = 210;
-      const rootX   = VB_W / 2;
 
-      const subCount   = subs.length;
-      const subSpacing = subCount > 1 ? Math.min(160, (VB_W - 80) / subCount) : 0;
+      const subCount      = subs.length;
+      const naturalSpacing = subCount > 1 ? (800 - 80) / subCount : 0;
+      const subSpacing    = subCount > 1 ? Math.max(130, Math.min(160, naturalSpacing)) : 0;
+      const VB_W          = subCount > 1 ? Math.max(800, 80 + subCount * subSpacing) : 800;
+      const rootX         = VB_W / 2;
+
       const subStartX  = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
       const VB_H       = subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90;
 
