@@ -865,6 +865,7 @@
         <span class="match-count" id="match-count"></span>
       </div>
 
+      <div id="session-inline-graph" style="display:none;"></div>
       <div id="receipts-table"></div>
     </div>
 
@@ -1871,15 +1872,16 @@
           <tr style="cursor:pointer;" data-session-id="${escapeAttr(s.session_id)}" onclick="applySessionFilter(this.dataset.sessionId)">
             <td style="padding:10px 12px;" class="font-mono text-sm" title="${escapeAttr(s.session_id)}">${escapeHtml(truncate(s.session_id, 36))}</td>
             <td style="padding:10px 12px;" class="muted text-sm">${s.receipt_count}</td>
-            <td style="padding:10px 12px;" class="muted text-sm">${agentLabel}</td>
-            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.first_seen)}">${formatRelative(s.first_seen)}</td>
-            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.last_seen)}">${formatRelative(s.last_seen)}</td>
-            <td style="padding:6px 12px;">
-              <button type="button" class="icon-btn" style="font-size:0.7rem;padding:2px 8px;"
+            <td style="padding:10px 12px;" class="muted text-sm">
+              <button type="button" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);text-align:left;"
                 data-session-id="${escapeAttr(s.session_id)}"
                 onclick="event.stopPropagation();showSessionGraph(this.dataset.sessionId)"
-                title="View agent delegation graph">Graph</button>
+                title="View delegation graph">
+                ${escapeHtml(agentLabel)}<span style="color:var(--accent);margin-left:5px;font-size:0.78rem;">⬡</span>
+              </button>
             </td>
+            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.first_seen)}">${formatRelative(s.first_seen)}</td>
+            <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.last_seen)}">${formatRelative(s.last_seen)}</td>
           </tr>
         `;
       }).join('');
@@ -1895,7 +1897,6 @@
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Agents</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">First seen</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Last seen</th>
-                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;"></th>
                 </tr>
               </thead>
               <tbody>
@@ -2415,7 +2416,7 @@
         ? `<button type="button" class="session-pill" style="margin-left:4px;" title="${escapeAttr(r.session_id)}" aria-label="Filter by session ${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
         : '';
       return `
-        <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+        <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" data-agent-id="${escapeAttr(r.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
           <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
@@ -2490,6 +2491,7 @@
     function renderReceiptsTable(receipts, containerId, opts) {
       const container = document.getElementById(containerId);
       lastRenderedReceipts.set(containerId, { receipts: receipts || [], opts });
+      if (containerId === 'receipts-table') hideInlineSessionGraph();
       if (!receipts || receipts.length === 0) {
         const filtered = opts && opts.emptyHint;
         container.innerHTML = `
@@ -2510,8 +2512,10 @@
       if (containerId === 'receipts-table' && receipts.some(r => r.session_id)) {
         renderGroupedReceiptsTable(receipts, container, containerId);
         hydrateListDisclosurePreviews(receipts);
+        renderInlineSessionGraph(receipts);
         return;
       }
+      if (containerId === 'receipts-table') hideInlineSessionGraph();
 
       container.innerHTML = `
         <div class="receipts-table-wrap">
@@ -2697,7 +2701,7 @@
             ? `<span class="delegation-edge" title="Delegated from ${escapeAttr(agent.delegation.parent_chain_id)}">← ${escapeHtml(truncate(agent.delegation.parent_chain_id, 28))}</span>`
             : '';
 
-          const agentHeaderRow = `<tr class="agent-header-tr" data-session-id="${safeEsc}">
+          const agentHeaderRow = `<tr class="agent-header-tr" data-session-id="${safeEsc}" data-agent-id="${escapeAttr(aid || '')}">
                <td colspan="${COL_COUNT}">
                  <div class="agent-header-inner">${aLabel}${delEdge}</div>
                </td>
@@ -2747,7 +2751,7 @@
         : '';
       const sessionAttr = sessionId ? ` data-session-id="${escapeAttr(sessionId)}"` : '';
       return `
-        <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" onclick="showReceipt(this.dataset.receiptId)">
+        <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" data-agent-id="${escapeAttr(post.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsTitle}>${formatRelative(ts)}</td>
           <td class="font-mono text-xs muted">${server ? escapeHtml(server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${tool ? escapeHtml(tool) : '<span class="subtle">—</span>'}</td>
@@ -3448,7 +3452,75 @@
       if (!document.getElementById('session-graph-modal').hidden) closeSessionGraph();
     }
 
-    // ---------- Session graph ----------
+    // ---------- Session inline graph ----------
+
+    function hideInlineSessionGraph() {
+      const el = document.getElementById('session-inline-graph');
+      if (el) el.style.display = 'none';
+    }
+
+    // renderInlineSessionGraph renders a compact agent delegation graph above the
+    // receipts table whenever a session filter is active and the session has >1 agent.
+    function renderInlineSessionGraph(receipts) {
+      const container = document.getElementById('session-inline-graph');
+      if (!container) return;
+      const sessionId = document.getElementById('filter-session').value.trim();
+      if (!sessionId) { container.style.display = 'none'; return; }
+
+      const { nodes, edges } = buildSessionGraph(receipts);
+      if (nodes.length <= 1) { container.style.display = 'none'; return; }
+
+      container.style.display = '';
+      container.innerHTML = `
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <span style="font-size:0.78rem;color:var(--muted);">Agent graph — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
+            <button type="button" class="icon-btn" style="font-size:0.7rem;padding:2px 6px;"
+              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
+          </div>
+          <div id="inline-graph-body"></div>
+        </div>
+      `;
+      renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+    }
+
+    function toggleInlineGraph() {
+      const body = document.getElementById('inline-graph-body');
+      const btn  = document.getElementById('inline-graph-toggle');
+      if (!body || !btn) return;
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      btn.textContent = collapsed ? '▾' : '▸';
+      btn.setAttribute('aria-expanded', String(collapsed));
+    }
+
+    // selectInlineGraphNode handles node clicks in the receipts view inline graph.
+    // Clicking a node filters the receipts table to that agent's rows.
+    function selectInlineGraphNode(el) {
+      const nodeId   = el.dataset.nodeId;
+      const selected = el.classList.contains('sg-selected');
+      document.querySelectorAll('#inline-graph-body .sg-node').forEach(n => n.classList.remove('sg-selected'));
+      if (selected) {
+        filterInlineReceiptsByAgent(undefined);
+      } else {
+        el.classList.add('sg-selected');
+        filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
+      }
+    }
+
+    // filterInlineReceiptsByAgent shows/hides rows in #receipts-table by agent_id.
+    // Pass undefined to reset (show all). Pass null for the root/orchestrator agent.
+    function filterInlineReceiptsByAgent(agentId) {
+      const tbody = document.querySelector('#receipts-table tbody');
+      if (!tbody) return;
+      for (const row of tbody.rows) {
+        if (row.classList.contains('session-header-tr')) { row.hidden = false; continue; }
+        if (agentId === undefined) { row.hidden = false; continue; }
+        row.hidden = (row.dataset.agentId || '') !== (agentId === null ? '' : agentId);
+      }
+    }
+
+    // ---------- Session graph modal ----------
 
     // sessionGraphState holds the last-fetched receipts so node clicks can re-filter
     // without a round-trip.
@@ -3522,7 +3594,7 @@
     // renderSessionGraphSVG renders a two-level hierarchical node-link graph.
     // Root is centred at the top; sub-agents spread across the row below.
     // Node area is proportional to receipt count.
-    function renderSessionGraphSVG(nodes, edges, container) {
+    function renderSessionGraphSVG(nodes, edges, container, clickFn = 'selectGraphNode') {
       const root = nodes.find(n => n.isRoot);
       const subs = nodes.filter(n => !n.isRoot);
 
@@ -3563,9 +3635,9 @@
         const fill = n.isRoot ? 'var(--accent)' : '#238636';
         const safeId = escapeAttr(n.id);
         return `
-          <g class="sg-node" data-node-id="${safeId}" onclick="selectGraphNode(this)"
+          <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
              role="button" tabindex="0" aria-label="${escapeAttr(n.label)}, ${n.receiptCount} receipts"
-             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectGraphNode(this)}">
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
             <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
             <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
                   style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
@@ -4222,6 +4294,38 @@
         }
         if (e.key === 'k' || e.key === 'ArrowUp') {
           e.preventDefault(); navigateReceipt(-1); return;
+        }
+      }
+
+      // When the session-graph modal is open without a receipt on top, j/k moves
+      // a cursor through the graph's receipt panel and Enter opens the focused row.
+      if (!document.getElementById('session-graph-modal').hidden
+          && document.getElementById('receipt-modal').hidden) {
+        const panel = document.getElementById('session-graph-receipts-panel');
+        const rows  = Array.from(panel.querySelectorAll('tbody tr[data-receipt-id]'));
+        if (rows.length > 0) {
+          if (e.key === 'j' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const cur  = rows.findIndex(r => r.classList.contains('kbd-focused'));
+            rows.forEach(r => r.classList.remove('kbd-focused'));
+            const next = cur < 0 ? 0 : Math.min(cur + 1, rows.length - 1);
+            rows[next].classList.add('kbd-focused');
+            rows[next].scrollIntoView({ block: 'nearest' });
+            return;
+          }
+          if (e.key === 'k' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const cur  = rows.findIndex(r => r.classList.contains('kbd-focused'));
+            rows.forEach(r => r.classList.remove('kbd-focused'));
+            const next = cur < 0 ? rows.length - 1 : Math.max(cur - 1, 0);
+            rows[next].classList.add('kbd-focused');
+            rows[next].scrollIntoView({ block: 'nearest' });
+            return;
+          }
+          if (e.key === 'Enter') {
+            const focused = rows.find(r => r.classList.contains('kbd-focused'));
+            if (focused) { e.preventDefault(); showReceipt(focused.dataset.receiptId); return; }
+          }
         }
       }
 
