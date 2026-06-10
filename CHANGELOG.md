@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Forensic key parsing no longer fails for keys ending in a line-ending byte** — `parseForensicPrivateKey` was using `bytes.TrimSpace` to handle raw keys with a trailing newline, but `TrimSpace` strips any whitespace byte (0x0A, 0x0D, 0x09, 0x20). Since X25519 keys are random bytes, ~2% of keys end in such a byte, causing the trailing-newline and CRLF upload paths to silently consume a real key byte and return "unrecognised key encoding or wrong length". Fixed by stripping trailing `\r`/`\n` bytes only while the slice exceeds 32 bytes, so the parser never trims into the key itself.
+
 ## [0.7.0-alpha.5] - 2026-06-10
 
 ### Fixed

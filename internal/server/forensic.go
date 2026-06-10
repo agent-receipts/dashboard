@@ -423,6 +423,18 @@ func parseForensicPrivateKey(raw []byte) ([]byte, error) {
 		return append([]byte(nil), raw...), nil
 	}
 
+	// A raw key file commonly arrives with a trailing newline or CRLF added by
+	// text editors or shell redirections. Strip trailing line-ending bytes only
+	// while the slice is longer than 32, so we never consume a real key byte
+	// (which could itself be 0x0A or 0x0D).
+	stripped := raw
+	for len(stripped) > 32 && (stripped[len(stripped)-1] == '\n' || stripped[len(stripped)-1] == '\r') {
+		stripped = stripped[:len(stripped)-1]
+	}
+	if len(stripped) == 32 {
+		return append([]byte(nil), stripped...), nil
+	}
+
 	trimmed := bytes.TrimSpace(raw)
 
 	if block, _ := pem.Decode(trimmed); block != nil {
@@ -435,14 +447,6 @@ func parseForensicPrivateKey(raw []byte) ([]byte, error) {
 			return nil, fmt.Errorf("PEM key is not an X25519 private key")
 		}
 		return xkey.Bytes(), nil
-	}
-
-	// A raw key file commonly arrives with a trailing newline, so the exact-32
-	// check above misses it. If trimming leaves exactly 32 bytes, treat it as
-	// raw: no text encoding of a 32-byte X25519 key is 32 characters long
-	// (hex is 64, base64 is 43/44), so this is unambiguous.
-	if len(trimmed) == 32 {
-		return append([]byte(nil), trimmed...), nil
 	}
 
 	s := string(trimmed)
