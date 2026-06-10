@@ -413,6 +413,15 @@
     .modal-title { font-size: 1rem; font-weight: 600; }
     .modal-body { padding: 16px; }
 
+    /* ---------- Session graph ---------- */
+    .sg-node { cursor: pointer; }
+    .sg-node circle { transition: filter 0.12s; }
+    .sg-node:hover circle { filter: brightness(1.25); }
+    .sg-node.sg-selected circle { stroke: var(--accent); stroke-width: 3; }
+    .sg-edge { stroke: var(--border-strong); stroke-width: 1.5; fill: none; }
+    .sg-label { font-family: var(--font-sans); pointer-events: none; }
+    .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
+
     pre {
       background: var(--surface-sunken);
       border: 1px solid var(--border);
@@ -907,6 +916,23 @@
           </div>
         </div>
         <div id="chain-modal-content" class="modal-body"></div>
+      </div>
+    </div>
+
+    <!-- Session graph modal -->
+    <div id="session-graph-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="session-graph-title" aria-modal="true" style="max-width:960px;max-height:90vh;">
+        <div class="modal-head">
+          <div>
+            <h2 class="modal-title" id="session-graph-title">Session Graph</h2>
+            <div id="session-graph-session-id" class="font-mono" style="font-size:0.72rem;color:var(--muted);margin-top:2px;"></div>
+          </div>
+          <button class="icon-btn" type="button" onclick="closeSessionGraph()" aria-label="Close">×</button>
+        </div>
+        <div>
+          <div id="session-graph-svg-panel" style="padding:16px;border-bottom:1px solid var(--border);min-height:80px;"></div>
+          <div id="session-graph-receipts-panel" style="max-height:420px;overflow-y:auto;"></div>
+        </div>
       </div>
     </div>
 
@@ -1848,6 +1874,12 @@
             <td style="padding:10px 12px;" class="muted text-sm">${agentLabel}</td>
             <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.first_seen)}">${formatRelative(s.first_seen)}</td>
             <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.last_seen)}">${formatRelative(s.last_seen)}</td>
+            <td style="padding:6px 12px;">
+              <button type="button" class="icon-btn" style="font-size:0.7rem;padding:2px 8px;"
+                data-session-id="${escapeAttr(s.session_id)}"
+                onclick="event.stopPropagation();showSessionGraph(this.dataset.sessionId)"
+                title="View agent delegation graph">Graph</button>
+            </td>
           </tr>
         `;
       }).join('');
@@ -1863,6 +1895,7 @@
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Agents</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">First seen</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Last seen</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;"></th>
                 </tr>
               </thead>
               <tbody>
@@ -3401,13 +3434,202 @@
     }
 
     function isModalOpen() {
-      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].some(id => !document.getElementById(id).hidden);
+      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].some(id => !document.getElementById(id).hidden);
     }
     function closeAnyOpenModal() {
       if (!document.getElementById('forensic-modal').hidden) closeForensic();
       if (!document.getElementById('shortcuts-modal').hidden) closeShortcuts();
       if (!document.getElementById('chain-modal').hidden) closeChainModal();
       if (!document.getElementById('receipt-modal').hidden) closeModal();
+      if (!document.getElementById('session-graph-modal').hidden) closeSessionGraph();
+    }
+
+    // ---------- Session graph ----------
+
+    // sessionGraphState holds the last-fetched receipts so node clicks can re-filter
+    // without a round-trip.
+    const sessionGraphState = { receipts: [], selectedAgentId: undefined };
+
+    async function showSessionGraph(sessionId) {
+      const svgPanel    = document.getElementById('session-graph-svg-panel');
+      const rcptPanel   = document.getElementById('session-graph-receipts-panel');
+      const subtitle    = document.getElementById('session-graph-session-id');
+
+      subtitle.textContent = sessionId;
+      svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
+      rcptPanel.innerHTML  = '';
+      sessionGraphState.receipts         = [];
+      sessionGraphState.selectedAgentId  = undefined;
+      openModal('session-graph-modal');
+
+      try {
+        const rows = await fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sessionId) + '&limit=2000');
+        sessionGraphState.receipts = rows || [];
+        const { nodes, edges } = buildSessionGraph(sessionGraphState.receipts);
+        renderSessionGraphSVG(nodes, edges, svgPanel);
+        renderSessionGraphReceipts(sessionGraphState.receipts, rcptPanel);
+      } catch (err) {
+        svgPanel.innerHTML = '<div class="muted text-sm">Could not load session: ' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function closeSessionGraph() { closeModalById('session-graph-modal'); }
+
+    // buildSessionGraph extracts nodes (one per unique agent) and edges (delegation
+    // links) from a flat receipt array. The root/orchestrator agent has agentId null
+    // in the receipt data and is represented as '__root__' internally.
+    function buildSessionGraph(receipts) {
+      const agentMap = new Map(); // key: agentId (or '__root__') → metadata
+
+      for (const r of receipts) {
+        const key = r.agent_id || '__root__';
+        if (!agentMap.has(key)) {
+          agentMap.set(key, { agentType: null, receiptCount: 0, delegation: null });
+        }
+        const a = agentMap.get(key);
+        a.receiptCount++;
+        if (!a.agentType && r.agent_type) a.agentType = r.agent_type;
+        if (!a.delegation && r.delegation) a.delegation = r.delegation;
+      }
+
+      const nodes = [];
+      const edges = [];
+
+      for (const [key, info] of agentMap) {
+        const isRoot = key === '__root__';
+        nodes.push({
+          id:           key,
+          label:        isRoot ? 'Orchestrator' : (info.agentType || 'agent'),
+          sublabel:     isRoot ? null : key.substring(0, 12),
+          receiptCount: info.receiptCount,
+          isRoot,
+        });
+        if (!isRoot && info.delegation) {
+          edges.push({
+            from:          '__root__',
+            to:            key,
+            parentChainId: info.delegation.parent_chain_id,
+          });
+        }
+      }
+
+      return { nodes, edges };
+    }
+
+    // renderSessionGraphSVG renders a two-level hierarchical node-link graph.
+    // Root is centred at the top; sub-agents spread across the row below.
+    // Node area is proportional to receipt count.
+    function renderSessionGraphSVG(nodes, edges, container) {
+      const root = nodes.find(n => n.isRoot);
+      const subs = nodes.filter(n => !n.isRoot);
+
+      if (!root) {
+        container.innerHTML = '<div class="muted text-sm">No agent data found.</div>';
+        return;
+      }
+
+      const maxCount  = Math.max(...nodes.map(n => n.receiptCount));
+      const nodeR     = n => maxCount > 0 ? 22 + Math.round((n.receiptCount / maxCount) * 18) : 28;
+
+      // SVG coordinate space.
+      const VB_W    = 800;
+      const ROOT_Y  = 70;
+      const SUB_Y   = 210;
+      const rootX   = VB_W / 2;
+
+      const subCount   = subs.length;
+      const subSpacing = subCount > 1 ? Math.min(160, (VB_W - 80) / subCount) : 0;
+      const subStartX  = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
+      const VB_H       = subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90;
+
+      const pos = new Map();
+      pos.set(root.id, { x: rootX, y: ROOT_Y });
+      subs.forEach((n, i) => pos.set(n.id, { x: subStartX + i * subSpacing, y: SUB_Y }));
+
+      const edgeSVG = edges.map(e => {
+        const f = pos.get(e.from);
+        const t = pos.get(e.to);
+        if (!f || !t) return '';
+        return `<line class="sg-edge" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
+      }).join('');
+
+      const nodeSVG = nodes.map(n => {
+        const p = pos.get(n.id);
+        if (!p) return '';
+        const r    = nodeR(n);
+        const fill = n.isRoot ? 'var(--accent)' : '#238636';
+        const safeId = escapeAttr(n.id);
+        return `
+          <g class="sg-node" data-node-id="${safeId}" onclick="selectGraphNode(this)"
+             role="button" tabindex="0" aria-label="${escapeAttr(n.label)}, ${n.receiptCount} receipts"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectGraphNode(this)}">
+            <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
+            <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
+                  style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
+            <text class="sg-label" x="${p.x}" y="${p.y + r + 14}" text-anchor="middle"
+                  style="fill:var(--text);font-size:11px;">${escapeHtml(n.label)}</text>
+            ${n.sublabel ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 26}" text-anchor="middle" style="fill:var(--muted);font-size:10px;font-family:var(--font-mono);">${escapeHtml(n.sublabel)}…</text>` : ''}
+          </g>`;
+      }).join('');
+
+      container.innerHTML = `
+        <p class="sg-hint">Click a node to filter receipts below · click again to reset</p>
+        <svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" preserveAspectRatio="xMidYMid meet"
+             style="max-height:${VB_H}px;display:block;margin:0 auto;" aria-label="Agent delegation graph">
+          ${edgeSVG}
+          ${nodeSVG}
+        </svg>
+      `;
+    }
+
+    // selectGraphNode toggles the selected state of a graph node and re-renders
+    // the receipts panel filtered to that agent. A second click on the same node
+    // resets the filter and shows all receipts.
+    function selectGraphNode(el) {
+      const nodeId   = el.dataset.nodeId;
+      const selected = el.classList.contains('sg-selected');
+
+      document.querySelectorAll('#session-graph-svg-panel .sg-node').forEach(n => n.classList.remove('sg-selected'));
+
+      const panel = document.getElementById('session-graph-receipts-panel');
+
+      if (selected) {
+        sessionGraphState.selectedAgentId = undefined;
+        renderSessionGraphReceipts(sessionGraphState.receipts, panel);
+      } else {
+        el.classList.add('sg-selected');
+        sessionGraphState.selectedAgentId = nodeId;
+        const agentId   = nodeId === '__root__' ? null : nodeId;
+        const filtered  = sessionGraphState.receipts.filter(r =>
+          agentId === null ? !r.agent_id : r.agent_id === agentId
+        );
+        renderSessionGraphReceipts(filtered, panel);
+      }
+    }
+
+    // renderSessionGraphReceipts renders a compact flat receipt table into the
+    // session graph modal's receipts panel.
+    function renderSessionGraphReceipts(receipts, panel) {
+      if (!receipts || receipts.length === 0) {
+        panel.innerHTML = '<div class="empty-state" style="padding:24px;"><div class="empty-title" style="font-size:0.85rem;">No receipts</div></div>';
+        return;
+      }
+      const rows = receipts.map(r => receiptRowHTML(r, {})).join('');
+      panel.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll">
+            <table class="receipts">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
+                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th><th>Session</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
     }
 
     // ---------- Forensic decryption key ----------
@@ -4057,7 +4279,7 @@
     document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
 
     // Close modals on backdrop click.
-    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].forEach(id => {
+    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].forEach(id => {
       document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModalById(id);
       });

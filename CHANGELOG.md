@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session graph view** — each row in the Sessions table now has a "Graph" button that opens a node-link graph of the session's agent delegation tree. Nodes represent agents (orchestrator + sub-agents), sized by receipt count and labelled by `agent_type`. Delegation edges connect orchestrators to their sub-agents. Clicking a node filters the receipt list below the graph to that agent's receipts; clicking again resets the filter. Works for single-agent sessions (just the root node) and multi-agent sessions.
+
 ### Fixed
 
 - **Forensic key parsing no longer fails for keys ending in a line-ending byte** — `parseForensicPrivateKey` was using `bytes.TrimSpace` to handle raw keys with a trailing newline, but `TrimSpace` strips any whitespace byte (0x0A, 0x0D, 0x09, 0x20). Since X25519 keys are random bytes, ~2% of keys end in such a byte, causing the trailing-newline and CRLF upload paths to silently consume a real key byte and return "unrecognised key encoding or wrong length". Fixed by stripping trailing `\r`/`\n` bytes only while the slice exceeds 32 bytes, so the parser never trims into the key itself.
