@@ -3397,7 +3397,7 @@
     let lastFocusedBeforeModal = null;
     function openModal(id) {
       const el = document.getElementById(id);
-      lastFocusedBeforeModal = document.activeElement;
+      if (!isModalOpen()) lastFocusedBeforeModal = document.activeElement;
       el.hidden = false;
       // Move focus inside the modal so keyboard / screen-reader users don't
       // get stuck behind the overlay. Esc and backdrop-click still close.
@@ -3423,7 +3423,11 @@
     let receiptNavigating = false;
     function navigateReceipt(delta) {
       if (!currentReceipt || receiptNavigating) return;
-      const rows = Array.from(document.querySelectorAll('#receipts-table tbody tr[data-receipt-id]'));
+      const graphOpen = !document.getElementById('session-graph-modal').hidden;
+      const tbodySelector = graphOpen
+        ? '#session-graph-receipts-panel tbody tr[data-receipt-id]'
+        : '#receipts-table tbody tr[data-receipt-id]';
+      const rows = Array.from(document.querySelectorAll(tbodySelector));
       if (rows.length === 0) return;
       const idx = rows.findIndex(r => r.dataset.receiptId === currentReceipt.id);
       if (idx < 0) return;
@@ -3448,7 +3452,7 @@
 
     // sessionGraphState holds the last-fetched receipts so node clicks can re-filter
     // without a round-trip.
-    const sessionGraphState = { receipts: [], selectedAgentId: undefined };
+    const sessionGraphState = { receipts: [] };
 
     async function showSessionGraph(sessionId) {
       const svgPanel    = document.getElementById('session-graph-svg-panel');
@@ -3458,8 +3462,7 @@
       subtitle.textContent = sessionId;
       svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
       rcptPanel.innerHTML  = '';
-      sessionGraphState.receipts         = [];
-      sessionGraphState.selectedAgentId  = undefined;
+      sessionGraphState.receipts = [];
       openModal('session-graph-modal');
 
       try {
@@ -3594,12 +3597,10 @@
       const panel = document.getElementById('session-graph-receipts-panel');
 
       if (selected) {
-        sessionGraphState.selectedAgentId = undefined;
         renderSessionGraphReceipts(sessionGraphState.receipts, panel);
       } else {
         el.classList.add('sg-selected');
-        sessionGraphState.selectedAgentId = nodeId;
-        const agentId   = nodeId === '__root__' ? null : nodeId;
+        const agentId = nodeId === '__root__' ? null : nodeId;
         const filtered  = sessionGraphState.receipts.filter(r =>
           agentId === null ? !r.agent_id : r.agent_id === agentId
         );
@@ -3615,9 +3616,11 @@
         return;
       }
       const rows = receipts.map(r => receiptRowHTML(r, {})).join('');
+      // max-height:none on .receipts-table-scroll lets the outer panel (max-height:420px)
+      // be the sole scroll container, keeping the sticky thead working correctly.
       panel.innerHTML = `
         <div class="receipts-table-wrap">
-          <div class="receipts-table-scroll">
+          <div class="receipts-table-scroll" style="max-height:none;">
             <table class="receipts">
               <thead>
                 <tr>
@@ -3630,6 +3633,7 @@
           </div>
         </div>
       `;
+      hydrateListDisclosurePreviews(receipts);
     }
 
     // ---------- Forensic decryption key ----------
