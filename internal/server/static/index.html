@@ -3559,11 +3559,12 @@
       for (const r of receipts) {
         const key = r.agent_id || '__root__';
         if (!agentMap.has(key)) {
-          agentMap.set(key, { agentType: null, receiptCount: 0, delegation: null });
+          agentMap.set(key, { agentType: null, model: null, receiptCount: 0, delegation: null });
         }
         const a = agentMap.get(key);
         a.receiptCount++;
         if (!a.agentType && r.agent_type) a.agentType = r.agent_type;
+        if (!a.model && r.issuer_model) a.model = r.issuer_model;
         if (!a.delegation && r.delegation) a.delegation = r.delegation;
       }
 
@@ -3576,6 +3577,7 @@
           id:           key,
           label:        isRoot ? 'Orchestrator' : (info.agentType || 'agent'),
           sublabel:     isRoot ? null : key.substring(0, 12),
+          model:        info.model || null,
           receiptCount: info.receiptCount,
           isRoot,
         });
@@ -3617,7 +3619,8 @@
       const rootX         = VB_W / 2;
 
       const subStartX  = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
-      const VB_H       = subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90;
+      const hasModel   = nodes.some(n => n.model);
+      const VB_H       = (subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90) + (hasModel ? 12 : 0);
 
       const pos = new Map();
       pos.set(root.id, { x: rootX, y: ROOT_Y });
@@ -3638,7 +3641,7 @@
         const safeId = escapeAttr(n.id);
         return `
           <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
-             role="button" tabindex="0" aria-label="${escapeAttr(n.label)}, ${n.receiptCount} receipts"
+             role="button" tabindex="0" aria-label="${escapeAttr(n.label)}${n.model ? ', ' + escapeAttr(n.model) : ''}, ${n.receiptCount} receipts"
              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
             <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
             <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
@@ -3646,6 +3649,7 @@
             <text class="sg-label" x="${p.x}" y="${p.y + r + 14}" text-anchor="middle"
                   style="fill:var(--text);font-size:11px;">${escapeHtml(n.label)}</text>
             ${n.sublabel ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 26}" text-anchor="middle" style="fill:var(--muted);font-size:10px;font-family:var(--font-mono);">${escapeHtml(n.sublabel)}…</text>` : ''}
+            ${n.model ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 38}" text-anchor="middle" style="fill:var(--muted);font-size:10px;">${escapeHtml(n.model)}</text>` : ''}
           </g>`;
       }).join('');
 
