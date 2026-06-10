@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Session graph view** — each row in the Sessions table now has a "Graph" button that opens a node-link graph of the session's agent delegation tree. Nodes represent agents (orchestrator + sub-agents), sized by receipt count and labelled by `agent_type`. Delegation edges connect orchestrators to their sub-agents. Clicking a node filters the receipt list below the graph to that agent's receipts; clicking again resets the filter. Works for single-agent sessions (just the root node) and multi-agent sessions.
+- **Model label in session graph** — each agent node in the delegation graph now shows the model name (e.g. `claude-sonnet-4-6`) when it is present in the receipt data (`issuer.model`). The field is exposed through the store layer as `issuer_model` on every `ReceiptRow`.
 
 ### Fixed
 

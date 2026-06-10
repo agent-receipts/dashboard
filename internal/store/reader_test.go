@@ -1816,8 +1816,8 @@ func TestReader_Layer3_GracefulDegradation(t *testing.T) {
 }
 
 // TestReader_Layer3_NewFields verifies that correlation_id, agent_id,
-// session_id, and delegation are correctly extracted from receipts emitted by
-// daemon ≥ v0.17.0 / hook ≥ v0.14.0.
+// issuer_model, session_id, and delegation are correctly extracted from
+// receipts emitted by daemon ≥ v0.17.0 / hook ≥ v0.14.0.
 func TestReader_Layer3_NewFields(t *testing.T) {
 	dbPath := t.TempDir() + "/layer3-test.db"
 	s, err := sdkstore.Open(dbPath)
@@ -1825,10 +1825,11 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 		t.Fatalf("open sdk store: %v", err)
 	}
 
-	// Base receipt using the current Issuer struct with session_id set.
+	// Base receipt using the current Issuer struct with session_id and model set.
 	base := makeReceipt("urn:receipt:l3a", "chain-l3", 1, "tool.call",
 		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
 	base.Issuer.SessionID = "session-abc"
+	base.Issuer.Model = "claude-sonnet-4-6"
 
 	del := &DelegationInfo{
 		ParentChainID:   "urn:chain:parent",
@@ -1885,6 +1886,9 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	if rowA.AgentType != "general-purpose" {
 		t.Errorf("l3a AgentType: got %q, want general-purpose", rowA.AgentType)
 	}
+	if rowA.IssuerModel != "claude-sonnet-4-6" {
+		t.Errorf("l3a IssuerModel: got %q, want claude-sonnet-4-6", rowA.IssuerModel)
+	}
 	if rowA.SessionID != "session-abc" {
 		t.Errorf("l3a SessionID: got %q, want session-abc", rowA.SessionID)
 	}
@@ -1907,6 +1911,9 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	}
 	if rowB.AgentID != "" {
 		t.Errorf("l3b AgentID: got %q, want empty", rowB.AgentID)
+	}
+	if rowB.IssuerModel != "" {
+		t.Errorf("l3b IssuerModel: got %q, want empty", rowB.IssuerModel)
 	}
 	if rowB.SessionID != "session-abc" {
 		t.Errorf("l3b SessionID: got %q, want session-abc", rowB.SessionID)

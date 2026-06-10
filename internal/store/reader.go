@@ -68,6 +68,9 @@ type ReceiptRow struct {
 	// AgentType is the runtime-reported agent type label (e.g. "general-purpose"),
 	// from issuer.runtime.agent_type.
 	AgentType string `json:"agent_type,omitempty"`
+	// IssuerModel is the AI model that issued the receipt (e.g. "claude-sonnet-4-6"),
+	// from issuer.model in the receipt JSON.
+	IssuerModel string `json:"issuer_model,omitempty"`
 	// SessionID groups all receipts from the same agent session together.
 	// Comes from issuer.session_id in the receipt JSON.
 	SessionID string `json:"session_id,omitempty"`
@@ -316,9 +319,10 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	// on text that json_valid has cleared — SQL AND does not short-circuit,
 	// and json_extract on non-JSON text raises a "malformed JSON" error.
 	//
-	// The last five columns are Layer 3 attribution fields. correlation_id and
+	// The last six columns are Layer 3 attribution fields. correlation_id and
 	// delegation arrive with daemon ≥ v0.17.0; issuer.runtime.{agent_id,
-	// agent_type} with daemon ≥ v0.18.0 (ADR-0026). All are absent from older
+	// agent_type} with daemon ≥ v0.18.0 (ADR-0026); issuer.model is present
+	// whenever the daemon stamps the issuer identity. All are absent from older
 	// receipts and scan as empty strings / NULL.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
@@ -339,6 +343,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        COALESCE(json_extract(receipt_json, '$.credentialSubject.correlation_id'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_id'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.model'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.session_id'), ''),
 		        json_extract(receipt_json, '$.credentialSubject.delegation')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
@@ -367,7 +372,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.ParametersInputPreview, &row.ParametersOutputPreview,
 			&row.HasParametersDisclosure,
 			&row.OutputStatusMismatch,
-			&row.CorrelationID, &row.AgentID, &row.AgentType, &row.SessionID,
+			&row.CorrelationID, &row.AgentID, &row.AgentType, &row.IssuerModel, &row.SessionID,
 			&delegationJSON,
 		); err != nil {
 			return nil, err
