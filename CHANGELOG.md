@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-11
+
 ### Added
 
 - **Session graph view** — each row in the Sessions table now has a "Graph" button that opens a node-link graph of the session's agent delegation tree. Nodes represent agents (orchestrator + sub-agents), sized by receipt count and labelled by `agent_type`. Delegation edges connect orchestrators to their sub-agents. Clicking a node filters the receipt list below the graph to that agent's receipts; clicking again resets the filter. Works for single-agent sessions (just the root node) and multi-agent sessions.
@@ -228,7 +230,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Server now binds to `localhost` by default; `--host` flag added for custom binding
 
-[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/agent-receipts/dashboard/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/agent-receipts/dashboard/compare/v0.7.0-alpha.5...v0.7.0
 [0.6.0]: https://github.com/agent-receipts/dashboard/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/agent-receipts/dashboard/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/agent-receipts/dashboard/compare/v0.4.0...v0.5.0
