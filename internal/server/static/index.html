@@ -413,6 +413,15 @@
     .modal-title { font-size: 1rem; font-weight: 600; }
     .modal-body { padding: 16px; }
 
+    /* ---------- Session graph ---------- */
+    .sg-node { cursor: pointer; }
+    .sg-node circle { transition: filter 0.12s; }
+    .sg-node:hover circle { filter: brightness(1.25); }
+    .sg-node.sg-selected circle { stroke: var(--accent); stroke-width: 3; }
+    .sg-edge { stroke: var(--border-strong); stroke-width: 1.5; fill: none; }
+    .sg-label { font-family: var(--font-sans); pointer-events: none; }
+    .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
+
     pre {
       background: var(--surface-sunken);
       border: 1px solid var(--border);
@@ -856,6 +865,7 @@
         <span class="match-count" id="match-count"></span>
       </div>
 
+      <div id="session-inline-graph" style="display:none;"></div>
       <div id="receipts-table"></div>
     </div>
 
@@ -907,6 +917,23 @@
           </div>
         </div>
         <div id="chain-modal-content" class="modal-body"></div>
+      </div>
+    </div>
+
+    <!-- Session graph modal -->
+    <div id="session-graph-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="session-graph-title" aria-modal="true" style="max-width:960px;max-height:90vh;">
+        <div class="modal-head">
+          <div>
+            <h2 class="modal-title" id="session-graph-title">Session Graph</h2>
+            <div id="session-graph-session-id" class="font-mono" style="font-size:0.72rem;color:var(--muted);margin-top:2px;"></div>
+          </div>
+          <button class="icon-btn" type="button" onclick="closeSessionGraph()" aria-label="Close">×</button>
+        </div>
+        <div>
+          <div id="session-graph-svg-panel" style="padding:16px;border-bottom:1px solid var(--border);min-height:80px;"></div>
+          <div id="session-graph-receipts-panel" style="max-height:420px;overflow-y:auto;"></div>
+        </div>
       </div>
     </div>
 
@@ -1845,7 +1872,14 @@
           <tr style="cursor:pointer;" data-session-id="${escapeAttr(s.session_id)}" onclick="applySessionFilter(this.dataset.sessionId)">
             <td style="padding:10px 12px;" class="font-mono text-sm" title="${escapeAttr(s.session_id)}">${escapeHtml(truncate(s.session_id, 36))}</td>
             <td style="padding:10px 12px;" class="muted text-sm">${s.receipt_count}</td>
-            <td style="padding:10px 12px;" class="muted text-sm">${agentLabel}</td>
+            <td style="padding:10px 12px;" class="muted text-sm">
+              <button type="button" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);text-align:left;"
+                data-session-id="${escapeAttr(s.session_id)}"
+                onclick="event.stopPropagation();showSessionGraph(this.dataset.sessionId)"
+                title="View delegation graph">
+                ${escapeHtml(agentLabel)}<span style="color:var(--accent);margin-left:5px;font-size:0.78rem;">⬡</span>
+              </button>
+            </td>
             <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.first_seen)}">${formatRelative(s.first_seen)}</td>
             <td style="padding:10px 12px;" class="muted text-sm whitespace-nowrap" title="${escapeAttr(s.last_seen)}">${formatRelative(s.last_seen)}</td>
           </tr>
@@ -2382,7 +2416,7 @@
         ? `<button type="button" class="session-pill" style="margin-left:4px;" title="${escapeAttr(r.session_id)}" aria-label="Filter by session ${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
         : '';
       return `
-        <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" onclick="showReceipt(this.dataset.receiptId)">
+        <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" data-agent-id="${escapeAttr(r.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
           <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
@@ -2457,6 +2491,7 @@
     function renderReceiptsTable(receipts, containerId, opts) {
       const container = document.getElementById(containerId);
       lastRenderedReceipts.set(containerId, { receipts: receipts || [], opts });
+      if (containerId === 'receipts-table') hideInlineSessionGraph();
       if (!receipts || receipts.length === 0) {
         const filtered = opts && opts.emptyHint;
         container.innerHTML = `
@@ -2477,8 +2512,10 @@
       if (containerId === 'receipts-table' && receipts.some(r => r.session_id)) {
         renderGroupedReceiptsTable(receipts, container, containerId);
         hydrateListDisclosurePreviews(receipts);
+        renderInlineSessionGraph(receipts);
         return;
       }
+      if (containerId === 'receipts-table') hideInlineSessionGraph();
 
       container.innerHTML = `
         <div class="receipts-table-wrap">
@@ -2664,7 +2701,7 @@
             ? `<span class="delegation-edge" title="Delegated from ${escapeAttr(agent.delegation.parent_chain_id)}">← ${escapeHtml(truncate(agent.delegation.parent_chain_id, 28))}</span>`
             : '';
 
-          const agentHeaderRow = `<tr class="agent-header-tr" data-session-id="${safeEsc}">
+          const agentHeaderRow = `<tr class="agent-header-tr" data-session-id="${safeEsc}" data-agent-id="${escapeAttr(aid || '')}">
                <td colspan="${COL_COUNT}">
                  <div class="agent-header-inner">${aLabel}${delEdge}</div>
                </td>
@@ -2714,7 +2751,7 @@
         : '';
       const sessionAttr = sessionId ? ` data-session-id="${escapeAttr(sessionId)}"` : '';
       return `
-        <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" onclick="showReceipt(this.dataset.receiptId)">
+        <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" data-agent-id="${escapeAttr(post.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsTitle}>${formatRelative(ts)}</td>
           <td class="font-mono text-xs muted">${server ? escapeHtml(server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${tool ? escapeHtml(tool) : '<span class="subtle">—</span>'}</td>
@@ -3364,7 +3401,7 @@
     let lastFocusedBeforeModal = null;
     function openModal(id) {
       const el = document.getElementById(id);
-      lastFocusedBeforeModal = document.activeElement;
+      if (!isModalOpen()) lastFocusedBeforeModal = document.activeElement;
       el.hidden = false;
       // Move focus inside the modal so keyboard / screen-reader users don't
       // get stuck behind the overlay. Esc and backdrop-click still close.
@@ -3390,7 +3427,11 @@
     let receiptNavigating = false;
     function navigateReceipt(delta) {
       if (!currentReceipt || receiptNavigating) return;
-      const rows = Array.from(document.querySelectorAll('#receipts-table tbody tr[data-receipt-id]'));
+      const graphOpen = !document.getElementById('session-graph-modal').hidden;
+      const tbodySelector = graphOpen
+        ? '#session-graph-receipts-panel tbody tr[data-receipt-id]'
+        : '#receipts-table tbody tr[data-receipt-id]';
+      const rows = Array.from(document.querySelectorAll(tbodySelector));
       if (rows.length === 0) return;
       const idx = rows.findIndex(r => r.dataset.receiptId === currentReceipt.id);
       if (idx < 0) return;
@@ -3401,13 +3442,272 @@
     }
 
     function isModalOpen() {
-      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].some(id => !document.getElementById(id).hidden);
+      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].some(id => !document.getElementById(id).hidden);
     }
     function closeAnyOpenModal() {
       if (!document.getElementById('forensic-modal').hidden) closeForensic();
       if (!document.getElementById('shortcuts-modal').hidden) closeShortcuts();
       if (!document.getElementById('chain-modal').hidden) closeChainModal();
       if (!document.getElementById('receipt-modal').hidden) closeModal();
+      if (!document.getElementById('session-graph-modal').hidden) closeSessionGraph();
+    }
+
+    // ---------- Session inline graph ----------
+
+    function hideInlineSessionGraph() {
+      const el = document.getElementById('session-inline-graph');
+      if (el) el.style.display = 'none';
+    }
+
+    // renderInlineSessionGraph renders a compact agent delegation graph above the
+    // receipts table whenever a session filter is active and the session has >1 agent.
+    function renderInlineSessionGraph(receipts) {
+      const container = document.getElementById('session-inline-graph');
+      if (!container) return;
+      const sessionId = document.getElementById('filter-session').value.trim();
+      if (!sessionId) { container.style.display = 'none'; return; }
+
+      const { nodes, edges } = buildSessionGraph(receipts);
+      if (nodes.length <= 1) { container.style.display = 'none'; return; }
+
+      container.style.display = '';
+      container.innerHTML = `
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <span style="font-size:0.78rem;color:var(--muted);">Agent graph — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
+            <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
+              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
+          </div>
+          <div id="inline-graph-body"></div>
+        </div>
+      `;
+      renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+    }
+
+    function toggleInlineGraph() {
+      const body = document.getElementById('inline-graph-body');
+      const btn  = document.getElementById('inline-graph-toggle');
+      if (!body || !btn) return;
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      btn.textContent = collapsed ? '▾' : '▸';
+      btn.setAttribute('aria-expanded', String(collapsed));
+    }
+
+    // selectInlineGraphNode handles node clicks in the receipts view inline graph.
+    // Clicking a node filters the receipts table to that agent's rows.
+    function selectInlineGraphNode(el) {
+      const nodeId   = el.dataset.nodeId;
+      const selected = el.classList.contains('sg-selected');
+      document.querySelectorAll('#inline-graph-body .sg-node').forEach(n => n.classList.remove('sg-selected'));
+      if (selected) {
+        filterInlineReceiptsByAgent(undefined);
+      } else {
+        el.classList.add('sg-selected');
+        filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
+      }
+    }
+
+    // filterInlineReceiptsByAgent shows/hides rows in #receipts-table by agent_id.
+    // Pass undefined to reset (show all). Pass null for the root/orchestrator agent.
+    function filterInlineReceiptsByAgent(agentId) {
+      const tbody = document.querySelector('#receipts-table tbody');
+      if (!tbody) return;
+      for (const row of tbody.rows) {
+        if (row.classList.contains('session-header-tr')) { row.hidden = false; continue; }
+        if (agentId === undefined) { row.hidden = false; continue; }
+        row.hidden = (row.dataset.agentId || '') !== (agentId === null ? '' : agentId);
+      }
+    }
+
+    // ---------- Session graph modal ----------
+
+    // sessionGraphState holds the last-fetched receipts so node clicks can re-filter
+    // without a round-trip.
+    const sessionGraphState = { receipts: [] };
+
+    async function showSessionGraph(sessionId) {
+      const svgPanel    = document.getElementById('session-graph-svg-panel');
+      const rcptPanel   = document.getElementById('session-graph-receipts-panel');
+      const subtitle    = document.getElementById('session-graph-session-id');
+
+      subtitle.textContent = sessionId;
+      svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
+      rcptPanel.innerHTML  = '';
+      sessionGraphState.receipts = [];
+      openModal('session-graph-modal');
+
+      try {
+        const rows = await fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sessionId) + '&limit=2000');
+        sessionGraphState.receipts = rows || [];
+        const { nodes, edges } = buildSessionGraph(sessionGraphState.receipts);
+        renderSessionGraphSVG(nodes, edges, svgPanel);
+        renderSessionGraphReceipts(sessionGraphState.receipts, rcptPanel);
+      } catch (err) {
+        svgPanel.innerHTML = '<div class="muted text-sm">Could not load session: ' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function closeSessionGraph() { closeModalById('session-graph-modal'); }
+
+    // buildSessionGraph extracts nodes (one per unique agent) and edges (delegation
+    // links) from a flat receipt array. The root/orchestrator agent has agentId null
+    // in the receipt data and is represented as '__root__' internally.
+    function buildSessionGraph(receipts) {
+      const agentMap = new Map(); // key: agentId (or '__root__') → metadata
+
+      for (const r of receipts) {
+        const key = r.agent_id || '__root__';
+        if (!agentMap.has(key)) {
+          agentMap.set(key, { agentType: null, receiptCount: 0, delegation: null });
+        }
+        const a = agentMap.get(key);
+        a.receiptCount++;
+        if (!a.agentType && r.agent_type) a.agentType = r.agent_type;
+        if (!a.delegation && r.delegation) a.delegation = r.delegation;
+      }
+
+      const nodes = [];
+      const edges = [];
+
+      for (const [key, info] of agentMap) {
+        const isRoot = key === '__root__';
+        nodes.push({
+          id:           key,
+          label:        isRoot ? 'Orchestrator' : (info.agentType || 'agent'),
+          sublabel:     isRoot ? null : key.substring(0, 12),
+          receiptCount: info.receiptCount,
+          isRoot,
+        });
+        if (!isRoot && info.delegation) {
+          edges.push({
+            from:          '__root__',
+            to:            key,
+            parentChainId: info.delegation.parent_chain_id,
+          });
+        }
+      }
+
+      return { nodes, edges };
+    }
+
+    // renderSessionGraphSVG renders a two-level hierarchical node-link graph.
+    // Root is centred at the top; sub-agents spread across the row below.
+    // Node area is proportional to receipt count.
+    function renderSessionGraphSVG(nodes, edges, container, clickFn = 'selectGraphNode') {
+      const root = nodes.find(n => n.isRoot);
+      const subs = nodes.filter(n => !n.isRoot);
+
+      if (!root) {
+        container.innerHTML = '<div class="muted text-sm">No agent data found.</div>';
+        return;
+      }
+
+      const maxCount  = Math.max(...nodes.map(n => n.receiptCount));
+      const nodeR     = n => maxCount > 0 ? 22 + Math.round((n.receiptCount / maxCount) * 18) : 28;
+
+      // SVG coordinate space — width expands so each sub-agent has ≥130 px of horizontal room.
+      const ROOT_Y  = 70;
+      const SUB_Y   = 210;
+
+      const subCount      = subs.length;
+      const naturalSpacing = subCount > 1 ? (800 - 80) / subCount : 0;
+      const subSpacing    = subCount > 1 ? Math.max(130, Math.min(160, naturalSpacing)) : 0;
+      const VB_W          = subCount > 1 ? Math.max(800, 80 + subCount * subSpacing) : 800;
+      const rootX         = VB_W / 2;
+
+      const subStartX  = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
+      const VB_H       = subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90;
+
+      const pos = new Map();
+      pos.set(root.id, { x: rootX, y: ROOT_Y });
+      subs.forEach((n, i) => pos.set(n.id, { x: subStartX + i * subSpacing, y: SUB_Y }));
+
+      const edgeSVG = edges.map(e => {
+        const f = pos.get(e.from);
+        const t = pos.get(e.to);
+        if (!f || !t) return '';
+        return `<line class="sg-edge" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
+      }).join('');
+
+      const nodeSVG = nodes.map(n => {
+        const p = pos.get(n.id);
+        if (!p) return '';
+        const r    = nodeR(n);
+        const fill = n.isRoot ? 'var(--accent)' : '#238636';
+        const safeId = escapeAttr(n.id);
+        return `
+          <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
+             role="button" tabindex="0" aria-label="${escapeAttr(n.label)}, ${n.receiptCount} receipts"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
+            <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
+            <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
+                  style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
+            <text class="sg-label" x="${p.x}" y="${p.y + r + 14}" text-anchor="middle"
+                  style="fill:var(--text);font-size:11px;">${escapeHtml(n.label)}</text>
+            ${n.sublabel ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 26}" text-anchor="middle" style="fill:var(--muted);font-size:10px;font-family:var(--font-mono);">${escapeHtml(n.sublabel)}…</text>` : ''}
+          </g>`;
+      }).join('');
+
+      container.innerHTML = `
+        <p class="sg-hint">Click a node to filter receipts below · click again to reset</p>
+        <svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" preserveAspectRatio="xMidYMid meet"
+             style="max-height:${VB_H}px;display:block;margin:0 auto;" aria-label="Agent delegation graph">
+          ${edgeSVG}
+          ${nodeSVG}
+        </svg>
+      `;
+    }
+
+    // selectGraphNode toggles the selected state of a graph node and re-renders
+    // the receipts panel filtered to that agent. A second click on the same node
+    // resets the filter and shows all receipts.
+    function selectGraphNode(el) {
+      const nodeId   = el.dataset.nodeId;
+      const selected = el.classList.contains('sg-selected');
+
+      document.querySelectorAll('#session-graph-svg-panel .sg-node').forEach(n => n.classList.remove('sg-selected'));
+
+      const panel = document.getElementById('session-graph-receipts-panel');
+
+      if (selected) {
+        renderSessionGraphReceipts(sessionGraphState.receipts, panel);
+      } else {
+        el.classList.add('sg-selected');
+        const agentId = nodeId === '__root__' ? null : nodeId;
+        const filtered  = sessionGraphState.receipts.filter(r =>
+          agentId === null ? !r.agent_id : r.agent_id === agentId
+        );
+        renderSessionGraphReceipts(filtered, panel);
+      }
+    }
+
+    // renderSessionGraphReceipts renders a compact flat receipt table into the
+    // session graph modal's receipts panel.
+    function renderSessionGraphReceipts(receipts, panel) {
+      if (!receipts || receipts.length === 0) {
+        panel.innerHTML = '<div class="empty-state" style="padding:24px;"><div class="empty-title" style="font-size:0.85rem;">No receipts</div></div>';
+        return;
+      }
+      const rows = receipts.map(r => receiptRowHTML(r, {})).join('');
+      // max-height:none on .receipts-table-scroll lets the outer panel (max-height:420px)
+      // be the sole scroll container, keeping the sticky thead working correctly.
+      panel.innerHTML = `
+        <div class="receipts-table-wrap">
+          <div class="receipts-table-scroll" style="max-height:none;">
+            <table class="receipts">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
+                  <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th><th>Session</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+      hydrateListDisclosurePreviews(receipts);
     }
 
     // ---------- Forensic decryption key ----------
@@ -3999,6 +4299,38 @@
         }
       }
 
+      // When the session-graph modal is open without a receipt on top, j/k moves
+      // a cursor through the graph's receipt panel and Enter opens the focused row.
+      if (!document.getElementById('session-graph-modal').hidden
+          && document.getElementById('receipt-modal').hidden) {
+        const panel = document.getElementById('session-graph-receipts-panel');
+        const rows  = Array.from(panel.querySelectorAll('tbody tr[data-receipt-id]'));
+        if (rows.length > 0) {
+          if (e.key === 'j' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const cur  = rows.findIndex(r => r.classList.contains('kbd-focused'));
+            rows.forEach(r => r.classList.remove('kbd-focused'));
+            const next = cur < 0 ? 0 : Math.min(cur + 1, rows.length - 1);
+            rows[next].classList.add('kbd-focused');
+            rows[next].scrollIntoView({ block: 'nearest' });
+            return;
+          }
+          if (e.key === 'k' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const cur  = rows.findIndex(r => r.classList.contains('kbd-focused'));
+            rows.forEach(r => r.classList.remove('kbd-focused'));
+            const next = cur < 0 ? rows.length - 1 : Math.max(cur - 1, 0);
+            rows[next].classList.add('kbd-focused');
+            rows[next].scrollIntoView({ block: 'nearest' });
+            return;
+          }
+          if (e.key === 'Enter') {
+            const focused = rows.find(r => r.classList.contains('kbd-focused'));
+            if (focused) { e.preventDefault(); showReceipt(focused.dataset.receiptId); return; }
+          }
+        }
+      }
+
       // Don't intercept while a modal is open (Esc handled above is the only key).
       if (isModalOpen()) return;
 
@@ -4057,7 +4389,7 @@
     document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
 
     // Close modals on backdrop click.
-    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal'].forEach(id => {
+    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].forEach(id => {
       document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModalById(id);
       });
