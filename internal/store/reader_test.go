@@ -1342,6 +1342,316 @@ func seedEmptyDB(t *testing.T) string {
 	return dbPath
 }
 
+// ---------- SessionAttribution tests ----------
+
+// makeAttrReceipt builds a receipt with session, agent, and resource fields set.
+func makeAttrReceipt(id, chainID string, seq int, actionType string,
+	risk receipt.RiskLevel, status receipt.OutcomeStatus, ts,
+	sessionID, agentID, agentType, resource string) receipt.AgentReceipt {
+	ar := makeReceipt(id, chainID, seq, actionType, risk, status, ts, nil)
+	ar.Issuer.SessionID = sessionID
+	if agentID != "" || agentType != "" {
+		ar.Issuer.Runtime = &receipt.Runtime{AgentID: agentID, AgentType: agentType}
+	}
+	if resource != "" {
+		ar.CredentialSubject.Action.Target = &receipt.ActionTarget{Resource: resource}
+	}
+	return ar
+}
+
+func insertAttr(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt) {
+	t.Helper()
+	h, err := receipt.HashReceipt(r)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r, h); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+}
+
+// TestSessionAttribution_Empty checks that a session ID with no receipts returns
+// an empty result without error.
+func TestSessionAttribution_Empty(t *testing.T) {
+	dbPath := seedEmptyDB(t)
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution("session-nonexistent")
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if res.Coverage.TotalReceipts != 0 {
+		t.Errorf("TotalReceipts = %d, want 0", res.Coverage.TotalReceipts)
+	}
+	if len(res.Nodes) != 0 {
+		t.Errorf("Nodes len = %d, want 0", len(res.Nodes))
+	}
+	if len(res.StateDeps) != 0 {
+		t.Errorf("StateDeps len = %d, want 0", len(res.StateDeps))
+	}
+	if res.BlastRadius == nil {
+		t.Error("BlastRadius should be non-nil map")
+	}
+}
+
+// TestSessionAttribution_Coverage verifies that coverage fraction is computed
+// correctly when only some receipts carry a target.resource path.
+func TestSessionAttribution_Coverage(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-coverage-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-cov"
+	// 2 receipts with a resource, 1 without.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:c1", "chain-c", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "src/main.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:c2", "chain-c", 2, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sid, "", "", "src/util.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:c3", "chain-c", 3, "system.bash.execute",
+		receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:02:00Z", sid, "", "", ""))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if res.Coverage.TotalReceipts != 3 {
+		t.Errorf("TotalReceipts = %d, want 3", res.Coverage.TotalReceipts)
+	}
+	if res.Coverage.IdentityReceipts != 2 {
+		t.Errorf("IdentityReceipts = %d, want 2", res.Coverage.IdentityReceipts)
+	}
+	wantFrac := 2.0 / 3.0
+	if diff := res.Coverage.Fraction - wantFrac; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("Fraction = %f, want %f", res.Coverage.Fraction, wantFrac)
+	}
+	// One node: the root agent (no agent_id set).
+	if len(res.Nodes) != 1 || res.Nodes[0].AgentKey != "__root__" {
+		t.Errorf("Nodes = %+v, want one root node", res.Nodes)
+	}
+	if res.Nodes[0].ReceiptCount != 3 {
+		t.Errorf("root ReceiptCount = %d, want 3", res.Nodes[0].ReceiptCount)
+	}
+	if res.Nodes[0].IdentityCount != 2 {
+		t.Errorf("root IdentityCount = %d, want 2", res.Nodes[0].IdentityCount)
+	}
+	if res.Nodes[0].MaxRisk != "high" {
+		t.Errorf("root MaxRisk = %q, want high", res.Nodes[0].MaxRisk)
+	}
+}
+
+// TestSessionAttribution_CrossAgentStateDep verifies that cross-agent state dep
+// edges are produced when two agents touch the same resource.
+func TestSessionAttribution_CrossAgentStateDep(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-statedep-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-statedep"
+	const subAgent = "subagent-xyz"
+	// Orchestrator (root) reads index.html first.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:sd1", "chain-root", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "index.html"))
+	// Subagent writes index.html later → cross-agent state dep.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:sd2", "chain-sub", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sid, subAgent, "general-purpose", "index.html"))
+	// Subagent also reads util.go (no root touch → no cross-agent dep for this file).
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:sd3", "chain-sub", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", sid, subAgent, "general-purpose", "util.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+
+	// Exactly one cross-agent state dep: root → subagent via index.html.
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if sd.FromAgent != "__root__" {
+		t.Errorf("FromAgent = %q, want __root__", sd.FromAgent)
+	}
+	if sd.ToAgent != subAgent {
+		t.Errorf("ToAgent = %q, want %s", sd.ToAgent, subAgent)
+	}
+	if !sd.CrossAgent {
+		t.Error("CrossAgent = false, want true")
+	}
+	if len(sd.Resources) != 1 || sd.Resources[0] != "index.html" {
+		t.Errorf("Resources = %v, want [index.html]", sd.Resources)
+	}
+
+	// Blast radius: root touched index.html, subagent touched index.html + util.go.
+	rootRes := res.BlastRadius["__root__"]
+	if len(rootRes) != 1 || rootRes[0] != "index.html" {
+		t.Errorf("BlastRadius[root] = %v, want [index.html]", rootRes)
+	}
+	subRes := res.BlastRadius[subAgent]
+	if len(subRes) != 2 {
+		t.Errorf("BlastRadius[sub] = %v, want [index.html util.go]", subRes)
+	}
+
+	// Two nodes.
+	if len(res.Nodes) != 2 {
+		t.Fatalf("Nodes len = %d, want 2", len(res.Nodes))
+	}
+}
+
+// TestSessionAttribution_MoveOp checks that has_move_ops is set when the session
+// contains a move or rename action type.
+func TestSessionAttribution_MoveOp(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-moveop-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-moveop"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:mv1", "chain-mv", 1, "filesystem.file.move",
+		receipt.RiskHigh, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "old/path.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:mv2", "chain-mv", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sid, "", "", "new/path.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if !res.HasMoveOps {
+		t.Error("HasMoveOps = false, want true for session with filesystem.file.move")
+	}
+}
+
+// TestSessionAttribution_NoMoveOp checks that has_move_ops is false when there
+// are no move or rename operations.
+func TestSessionAttribution_NoMoveOp(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-nomoveop-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-nomoveop"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:nm1", "chain-nm", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "file.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if res.HasMoveOps {
+		t.Error("HasMoveOps = true, want false for session with only read operations")
+	}
+}
+
+// TestSessionAttribution_MultiResource verifies that a state dep edge aggregates
+// all shared resources between two agents into a single edge entry.
+func TestSessionAttribution_MultiResource(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-multiresource-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-multi"
+	const subAgent = "subagent-abc"
+	// Root touches two files, subagent later touches both.
+	for i, res := range []string{"a.go", "b.go"} {
+		insertAttr(t, s, makeAttrReceipt(
+			fmt.Sprintf("urn:receipt:mr-root-%d", i), "chain-root", i+1, "filesystem.file.read",
+			receipt.RiskLow, receipt.StatusSuccess, fmt.Sprintf("2026-04-01T10:%02d:00Z", i),
+			sid, "", "", res))
+	}
+	for i, res := range []string{"a.go", "b.go"} {
+		insertAttr(t, s, makeAttrReceipt(
+			fmt.Sprintf("urn:receipt:mr-sub-%d", i), "chain-sub", i+1, "filesystem.file.write",
+			receipt.RiskMedium, receipt.StatusSuccess, fmt.Sprintf("2026-04-01T10:%02d:00Z", i+2),
+			sid, subAgent, "Explore", res))
+	}
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	// One edge aggregating both files.
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1 (two resources merged into one edge): %+v", len(res.StateDeps), res.StateDeps)
+	}
+	if len(res.StateDeps[0].Resources) != 2 {
+		t.Errorf("Resources len = %d, want 2", len(res.StateDeps[0].Resources))
+	}
+}
+
+// TestSessionAttribution_IsolatesSessions verifies that receipts from a different
+// session_id are not included in the attribution result.
+func TestSessionAttribution_IsolatesSessions(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-isolate-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:iso1", "chain-a", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", "session-A", "", "", "file.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:iso2", "chain-b", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", "session-B", "", "", "file.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution("session-A")
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if res.Coverage.TotalReceipts != 1 {
+		t.Errorf("TotalReceipts = %d, want 1 (only session-A)", res.Coverage.TotalReceipts)
+	}
+	// session-B's receipt should not create a state dep.
+	if len(res.StateDeps) != 0 {
+		t.Errorf("StateDeps len = %d, want 0 (cross-session file touches are not deps)", len(res.StateDeps))
+	}
+}
+
 func TestActionStats(t *testing.T) {
 	// Seed: three action types —
 	//   "cmd.exec":    6 receipts (4 failure, 2 success) → 66.7% failure rate
@@ -2457,3 +2767,4 @@ func seedFileDB(t *testing.T) string {
 	s.Close()
 	return dbPath
 }
+
