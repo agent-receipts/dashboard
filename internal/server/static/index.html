@@ -3485,13 +3485,16 @@
 
     // renderInlineSessionGraph renders a compact agent delegation graph above the
     // receipts table whenever a session filter is active and the session has >1 agent.
-    function renderInlineSessionGraph(receipts) {
+    async function renderInlineSessionGraph(receipts) {
       const container = document.getElementById('session-inline-graph');
       if (!container) return;
       const sessionId = document.getElementById('filter-session').value.trim();
       if (!sessionId) { container.style.display = 'none'; return; }
 
-      const { nodes, edges } = buildSessionGraph(receipts);
+      const attribution = await fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null);
+      inlineGraphState.attribution = attribution;
+
+      const { nodes, edges } = buildSessionGraph(receipts, attribution);
       if (nodes.length <= 1) { container.style.display = 'none'; return; }
 
       container.style.display = '';
@@ -3502,6 +3505,7 @@
             <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
               onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
           </div>
+          <div id="inline-graph-blast" style="display:none;padding:6px 4px 4px;border-bottom:1px solid var(--border);margin-bottom:6px;"></div>
           <div id="inline-graph-body"></div>
         </div>
       `;
@@ -3519,16 +3523,20 @@
     }
 
     // selectInlineGraphNode handles node clicks in the receipts view inline graph.
-    // Clicking a node filters the receipts table to that agent's rows.
+    // Clicking a node filters the receipts table to that agent's rows and shows
+    // the blast-radius panel when attribution data is available.
     function selectInlineGraphNode(el) {
       const nodeId   = el.dataset.nodeId;
       const selected = el.classList.contains('sg-selected');
       document.querySelectorAll('#inline-graph-body .sg-node').forEach(n => n.classList.remove('sg-selected'));
+      const blastPanel = document.getElementById('inline-graph-blast');
       if (selected) {
         filterInlineReceiptsByAgent(undefined);
+        if (blastPanel) blastPanel.style.display = 'none';
       } else {
         el.classList.add('sg-selected');
         filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
+        if (blastPanel) renderBlastRadius(nodeId, blastPanel, inlineGraphState.attribution);
       }
     }
 
@@ -3549,6 +3557,9 @@
     // sessionGraphState holds the last-fetched receipts and attribution data so
     // node clicks can re-filter and show blast-radius without a round-trip.
     const sessionGraphState = { receipts: [], attribution: null };
+
+    // inlineGraphState holds attribution for the receipts-view inline graph.
+    const inlineGraphState = { attribution: null };
 
     async function showSessionGraph(sessionId) {
       const svgPanel    = document.getElementById('session-graph-svg-panel');
@@ -3785,8 +3796,9 @@
     // renderBlastRadius populates the attribution panel for the selected node.
     // Shows file coverage, cross-agent state deps (drawn edges), and the heuristic
     // semantic dep warning count. Semantic deps are never drawn as edges per ADR-0029 §4.
-    function renderBlastRadius(agentKey, panel) {
-      const attr = sessionGraphState.attribution;
+    // attr defaults to sessionGraphState.attribution when omitted (modal path).
+    function renderBlastRadius(agentKey, panel, attr) {
+      if (attr === undefined) attr = sessionGraphState.attribution;
       if (!attr) { panel.style.display = 'none'; return; }
 
       const resources = (attr.blast_radius && attr.blast_radius[agentKey]) || [];
