@@ -1945,10 +1945,12 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 }
 
 // insertRuntimeModel augments a receipt's issuer.runtime with transcript-derived
-// model, capture_method, and usage fields (obsigna PR #779) and inserts it via
-// InsertRaw, mirroring how the daemon injects fields the SDK doesn't yet type.
-// Merges into any pre-existing runtime keys so this helper composes with
-// insertLayer3 when testing receipts that carry both sets of fields.
+// model, capture_method, and (optionally) usage fields (obsigna PR #779) and
+// inserts it via InsertRaw, mirroring how the daemon injects fields the SDK
+// doesn't yet type. usage is only injected when at least one token count is
+// non-zero, so callers can represent the "model present, usage absent" case by
+// passing all zeros. Merges into any pre-existing runtime keys so this helper
+// composes with insertLayer3 when testing receipts that carry both sets of fields.
 func insertRuntimeModel(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, model, captureMethod string, inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens int) {
 	t.Helper()
 	rawJSON, err := json.Marshal(r)
@@ -1969,11 +1971,13 @@ func insertRuntimeModel(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt,
 	}
 	rt["model"] = model
 	rt["capture_method"] = captureMethod
-	rt["usage"] = map[string]any{
-		"input_tokens":                inputTokens,
-		"output_tokens":               outputTokens,
-		"cache_read_input_tokens":     cacheReadTokens,
-		"cache_creation_input_tokens": cacheCreateTokens,
+	if inputTokens != 0 || outputTokens != 0 || cacheReadTokens != 0 || cacheCreateTokens != 0 {
+		rt["usage"] = map[string]any{
+			"input_tokens":                inputTokens,
+			"output_tokens":               outputTokens,
+			"cache_read_input_tokens":     cacheReadTokens,
+			"cache_creation_input_tokens": cacheCreateTokens,
+		}
 	}
 	issuer["runtime"] = rt
 	m["issuer"] = issuer
@@ -1990,9 +1994,11 @@ func insertRuntimeModel(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt,
 	}
 }
 
-// TestReader_RuntimeModelUsage verifies that transcript-derived runtime fields
-// (issuer.runtime.model, capture_method, usage.*) are extracted correctly and
-// that older receipts without these fields return zero values without error.
+// TestReader_RuntimeModelUsage verifies that issuer.runtime.model is extracted
+// into ReceiptRow.RuntimeModel and that older receipts without this field return
+// an empty string without error. capture_method and usage are not extracted into
+// ReceiptRow; they reach the detail modal through the detail endpoint's raw JSON
+// passthrough (runtime.Extra preserves them across the GetByID round-trip).
 func TestReader_RuntimeModelUsage(t *testing.T) {
 	dbPath := t.TempDir() + "/runtime-model-test.db"
 	s, err := sdkstore.Open(dbPath)
