@@ -1605,7 +1605,8 @@ func TestSessionAttribution_RemoveNotMove(t *testing.T) {
 
 // TestSessionAttribution_BidirectionalEdgeCollapse verifies that alternating
 // writes by two agents on the same resource produce a single state-dep edge,
-// not contradictory A→B and B→A edges.
+// not contradictory A→B and B→A edges, and that from_agent reflects the
+// temporally-first agent regardless of alphabetical ID order.
 func TestSessionAttribution_BidirectionalEdgeCollapse(t *testing.T) {
 	dbPath := t.TempDir() + "/attr-bidir-test.db"
 	s, err := sdkstore.Open(dbPath)
@@ -1616,6 +1617,9 @@ func TestSessionAttribution_BidirectionalEdgeCollapse(t *testing.T) {
 	const agentA = "agent-alpha"
 	const agentB = "agent-beta"
 	// A writes, B writes, A writes — three consecutive touches alternating agents.
+	// agentA ("agent-alpha") acts first; "agent-alpha" < "agent-beta" alphabetically,
+	// so this case would pass even with ID-sort. The second sub-test below uses an
+	// alphabetically-larger first-mover to catch regressions.
 	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd1", "chain-a", 1, "filesystem.file.write",
 		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, agentA, "worker", "shared.go"))
 	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd2", "chain-b", 1, "filesystem.file.write",
@@ -1635,7 +1639,55 @@ func TestSessionAttribution_BidirectionalEdgeCollapse(t *testing.T) {
 		t.Fatalf("SessionAttribution: %v", err)
 	}
 	if got := len(res.StateDeps); got != 1 {
-		t.Errorf("len(StateDeps) = %d, want 1 (bidirectional edges must collapse to one)", got)
+		t.Fatalf("len(StateDeps) = %d, want 1 (bidirectional edges must collapse to one)", got)
+	}
+	sd := res.StateDeps[0]
+	if sd.FromAgent != agentA {
+		t.Errorf("FromAgent = %q, want %q (temporally first)", sd.FromAgent, agentA)
+	}
+	if sd.ToAgent != agentB {
+		t.Errorf("ToAgent = %q, want %q", sd.ToAgent, agentB)
+	}
+}
+
+// TestSessionAttribution_TemporalDirectionOverridesAlpha verifies that from_agent
+// is the agent that acted first in time, even when its ID sorts after the other
+// agent's ID alphabetically.
+func TestSessionAttribution_TemporalDirectionOverridesAlpha(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-temporal-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-temporal"
+	// "zzz-agent" sorts after "aaa-agent" alphabetically, but acts first.
+	const firstAgent = "zzz-agent"
+	const secondAgent = "aaa-agent"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:td1", "chain-z", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, firstAgent, "worker", "main.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:td2", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sid, secondAgent, "worker", "main.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if got := len(res.StateDeps); got != 1 {
+		t.Fatalf("len(StateDeps) = %d, want 1", got)
+	}
+	sd := res.StateDeps[0]
+	if sd.FromAgent != firstAgent {
+		t.Errorf("FromAgent = %q, want %q (temporally first, alphabetically last)", sd.FromAgent, firstAgent)
+	}
+	if sd.ToAgent != secondAgent {
+		t.Errorf("ToAgent = %q, want %q", sd.ToAgent, secondAgent)
 	}
 }
 

@@ -1059,23 +1059,26 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 
 	// Cross-agent state dep edges: for each resource, each consecutive pair of
 	// touches where the agent key differs constitutes a provable state dep.
-	// Edge keys are canonicalised (from < to) so A→B and B→A on the same
-	// resource collapse to a single undirected edge instead of two
-	// contradictory arrows.
-	type edgeKey struct{ from, to string }
+	// Edge keys are canonicalised (smaller < larger ID) so A→B and B→A on the
+	// same resource collapse to a single edge. The temporal direction (from_agent
+	// = whoever touched first) is recorded separately on first encounter.
+	type edgeKey struct{ a, b string } // a <= b always
 	edgeResources := map[edgeKey]map[string]bool{}
+	edgeFrom := map[edgeKey]string{} // temporally-first agent for each edge
 	for resource, touches := range fileIndex {
 		for i := 1; i < len(touches); i++ {
-			if touches[i-1].agentKey == touches[i].agentKey {
+			prev, next := touches[i-1].agentKey, touches[i].agentKey
+			if prev == next {
 				continue // same-agent re-touch; captured in blast radius
 			}
-			a, b := touches[i-1].agentKey, touches[i].agentKey
+			a, b := prev, next
 			if a > b {
 				a, b = b, a
 			}
 			ek := edgeKey{a, b}
 			if edgeResources[ek] == nil {
 				edgeResources[ek] = map[string]bool{}
+				edgeFrom[ek] = prev // first encounter determines causal direction
 			}
 			edgeResources[ek][resource] = true
 		}
@@ -1088,9 +1091,14 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 			resources = append(resources, res)
 		}
 		sort.Strings(resources)
+		from := edgeFrom[ek]
+		to := ek.b
+		if from == ek.b {
+			to = ek.a
+		}
 		stateDeps = append(stateDeps, StatDepEdge{
-			FromAgent:  ek.from,
-			ToAgent:    ek.to,
+			FromAgent:  from,
+			ToAgent:    to,
 			Resources:  resources,
 			CrossAgent: true,
 		})
