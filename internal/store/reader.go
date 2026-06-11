@@ -77,6 +77,23 @@ type ReceiptRow struct {
 	// Delegation is non-nil on the first receipt of a subagent chain and
 	// carries the parent chain reference, enabling delegation edge rendering.
 	Delegation *DelegationInfo `json:"delegation,omitempty"`
+
+	// Transcript-derived runtime enrichment fields (obsigna PR #779).
+	// Present only on receipts from Claude Code hook ≥ the PR version.
+	// Empty/zero for older receipts; the UI degrades gracefully.
+
+	// RuntimeModel is the transcript-derived model identifier (e.g.
+	// "claude-opus-4-8"), from issuer.runtime.model.
+	RuntimeModel string `json:"runtime_model,omitempty"`
+	// RuntimeCaptureMethod describes how model/usage was captured (e.g.
+	// "transcript"), from issuer.runtime.capture_method.
+	RuntimeCaptureMethod string `json:"runtime_capture_method,omitempty"`
+	// RuntimeUsageInputTokens is the prompt token count from
+	// issuer.runtime.usage.input_tokens.
+	RuntimeUsageInputTokens int `json:"runtime_usage_input_tokens,omitempty"`
+	// RuntimeUsageOutputTokens is the completion token count from
+	// issuer.runtime.usage.output_tokens.
+	RuntimeUsageOutputTokens int `json:"runtime_usage_output_tokens,omitempty"`
 }
 
 // DelegationInfo holds parent-chain attribution fields emitted by subagents
@@ -319,11 +336,13 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	// on text that json_valid has cleared — SQL AND does not short-circuit,
 	// and json_extract on non-JSON text raises a "malformed JSON" error.
 	//
-	// The last six columns are Layer 3 attribution fields. correlation_id and
-	// delegation arrive with daemon ≥ v0.17.0; issuer.runtime.{agent_id,
-	// agent_type} with daemon ≥ v0.18.0 (ADR-0026); issuer.model is present
-	// whenever the daemon stamps the issuer identity. All are absent from older
-	// receipts and scan as empty strings / NULL.
+	// Layer 3 attribution fields: correlation_id and delegation arrive with
+	// daemon ≥ v0.17.0; issuer.runtime.{agent_id,agent_type} with daemon ≥
+	// v0.18.0 (ADR-0026); issuer.model whenever the daemon stamps the issuer
+	// identity. The final four columns are transcript-derived runtime
+	// enrichment (obsigna PR #779): issuer.runtime.{model,capture_method,
+	// usage.input_tokens,usage.output_tokens}. All are absent from older
+	// receipts and scan as empty strings / zero integers.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -345,7 +364,11 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.model'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.session_id'), ''),
-		        json_extract(receipt_json, '$.credentialSubject.delegation')
+		        json_extract(receipt_json, '$.credentialSubject.delegation'),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.model'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.capture_method'), ''),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.usage.input_tokens'), 0),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.usage.output_tokens'), 0)
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
@@ -374,6 +397,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.OutputStatusMismatch,
 			&row.CorrelationID, &row.AgentID, &row.AgentType, &row.IssuerModel, &row.SessionID,
 			&delegationJSON,
+			&row.RuntimeModel, &row.RuntimeCaptureMethod,
+			&row.RuntimeUsageInputTokens, &row.RuntimeUsageOutputTokens,
 		); err != nil {
 			return nil, err
 		}

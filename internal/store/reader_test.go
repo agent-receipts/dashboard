@@ -1937,6 +1937,140 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	}
 }
 
+// insertRuntimeModel augments a receipt's issuer.runtime with transcript-derived
+// model, capture_method, and usage fields (obsigna PR #779) and inserts it via
+// InsertRaw, mirroring how the daemon injects fields the SDK doesn't yet type.
+func insertRuntimeModel(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, model, captureMethod string, inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens int) {
+	t.Helper()
+	rawJSON, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawJSON, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	issuer, _ := m["issuer"].(map[string]any)
+	if issuer == nil {
+		issuer = map[string]any{}
+	}
+	rt := map[string]any{
+		"model":          model,
+		"capture_method": captureMethod,
+		"usage": map[string]any{
+			"input_tokens":                inputTokens,
+			"output_tokens":               outputTokens,
+			"cache_read_input_tokens":     cacheReadTokens,
+			"cache_creation_input_tokens": cacheCreateTokens,
+		},
+	}
+	issuer["runtime"] = rt
+	m["issuer"] = issuer
+	augmented, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
+	}
+	if err := s.InsertRaw(r, augmented, hash); err != nil {
+		t.Fatalf("insert receipt: %v", err)
+	}
+}
+
+// TestReader_RuntimeModelUsage verifies that transcript-derived runtime fields
+// (issuer.runtime.model, capture_method, usage.*) are extracted correctly and
+// that older receipts without these fields return zero values without error.
+func TestReader_RuntimeModelUsage(t *testing.T) {
+	dbPath := t.TempDir() + "/runtime-model-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Receipt with full transcript-derived enrichment (root agent — no agent_id).
+	r1 := makeReceipt("urn:receipt:rm1", "chain-rm", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	insertRuntimeModel(t, s, r1, "claude-opus-4-8", "transcript", 1954, 392, 0, 16762)
+
+	// Receipt with only model (no usage) — tests partial enrichment.
+	r2 := makeReceipt("urn:receipt:rm2", "chain-rm", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	insertRuntimeModel(t, s, r2, "claude-haiku-4-5-20251001", "transcript", 0, 0, 0, 0)
+
+	// Old-style receipt — no runtime enrichment at all.
+	r3 := makeReceipt("urn:receipt:rm3", "chain-rm-old", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+	hash3, err := receipt.HashReceipt(r3)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r3, hash3); err != nil {
+		t.Fatalf("insert old receipt: %v", err)
+	}
+
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	// Newest-first: rm3 (index 0), rm2 (index 1), rm1 (index 2).
+	rowOld := rows[0]
+	rowPartial := rows[1]
+	rowFull := rows[2]
+
+	// Full enrichment.
+	if rowFull.RuntimeModel != "claude-opus-4-8" {
+		t.Errorf("rm1 RuntimeModel: got %q, want claude-opus-4-8", rowFull.RuntimeModel)
+	}
+	if rowFull.RuntimeCaptureMethod != "transcript" {
+		t.Errorf("rm1 RuntimeCaptureMethod: got %q, want transcript", rowFull.RuntimeCaptureMethod)
+	}
+	if rowFull.RuntimeUsageInputTokens != 1954 {
+		t.Errorf("rm1 RuntimeUsageInputTokens: got %d, want 1954", rowFull.RuntimeUsageInputTokens)
+	}
+	if rowFull.RuntimeUsageOutputTokens != 392 {
+		t.Errorf("rm1 RuntimeUsageOutputTokens: got %d, want 392", rowFull.RuntimeUsageOutputTokens)
+	}
+
+	// Partial enrichment (model+method but zero tokens).
+	if rowPartial.RuntimeModel != "claude-haiku-4-5-20251001" {
+		t.Errorf("rm2 RuntimeModel: got %q, want claude-haiku-4-5-20251001", rowPartial.RuntimeModel)
+	}
+	if rowPartial.RuntimeCaptureMethod != "transcript" {
+		t.Errorf("rm2 RuntimeCaptureMethod: got %q, want transcript", rowPartial.RuntimeCaptureMethod)
+	}
+	if rowPartial.RuntimeUsageInputTokens != 0 {
+		t.Errorf("rm2 RuntimeUsageInputTokens: got %d, want 0", rowPartial.RuntimeUsageInputTokens)
+	}
+
+	// Old receipt — all new fields are zero/empty.
+	if rowOld.RuntimeModel != "" {
+		t.Errorf("rm3 RuntimeModel: got %q, want empty", rowOld.RuntimeModel)
+	}
+	if rowOld.RuntimeCaptureMethod != "" {
+		t.Errorf("rm3 RuntimeCaptureMethod: got %q, want empty", rowOld.RuntimeCaptureMethod)
+	}
+	if rowOld.RuntimeUsageInputTokens != 0 {
+		t.Errorf("rm3 RuntimeUsageInputTokens: got %d, want 0", rowOld.RuntimeUsageInputTokens)
+	}
+	if rowOld.RuntimeUsageOutputTokens != 0 {
+		t.Errorf("rm3 RuntimeUsageOutputTokens: got %d, want 0", rowOld.RuntimeUsageOutputTokens)
+	}
+}
+
 // TestReader_ListReceipts_FilterBySessionID verifies that the session_id filter
 // returns only receipts whose issuer.session_id matches the supplied value.
 func TestReader_ListReceipts_FilterBySessionID(t *testing.T) {
