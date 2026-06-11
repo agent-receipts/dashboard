@@ -3087,15 +3087,13 @@
       const parts = [];
       if (u.input_tokens != null) parts.push('in ' + u.input_tokens.toLocaleString());
       if (u.output_tokens != null) parts.push('out ' + u.output_tokens.toLocaleString());
-      if (u.cache_read_input_tokens) parts.push('cache-read ' + u.cache_read_input_tokens.toLocaleString());
-      if (u.cache_creation_input_tokens) parts.push('cache-write ' + u.cache_creation_input_tokens.toLocaleString());
+      if (u.cache_read_input_tokens != null) parts.push('cache-read ' + u.cache_read_input_tokens.toLocaleString());
+      if (u.cache_creation_input_tokens != null) parts.push('cache-write ' + u.cache_creation_input_tokens.toLocaleString());
       if (!parts.length) return '';
-      const method = issuer.runtime.capture_method;
-      const methodSuffix = method ? ' <span class="muted" style="font-size:0.65rem;">via ' + escapeHtml(method) + '</span>' : '';
-      return '<div>' +
-        '<div class="muted text-xs mb-1">Token usage' + methodSuffix + '</div>' +
-        '<div class="text-sm font-mono">' + escapeHtml(parts.join(' / ')) + '</div>' +
-        '</div>';
+      return `<div>
+        <div class="muted text-xs mb-1">Token usage</div>
+        <div class="text-sm font-mono">${escapeHtml(parts.join(' / '))}</div>
+      </div>`;
     }
 
     // ---------- Intent section (modal body) ----------
