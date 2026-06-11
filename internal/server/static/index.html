@@ -3025,12 +3025,16 @@
               ${r.issuer.name ? `<div class="muted text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
               ${r.issuer.runtime && r.issuer.runtime.agent_id ? `<div class="muted text-xs mt-1">runtime.agent_id <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_id)}</span></div>` : ''}
               ${r.issuer.runtime && r.issuer.runtime.agent_type ? `<div class="muted text-xs">runtime.agent_type <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_type)}</span></div>` : ''}
+              ${r.issuer.runtime && r.issuer.runtime.model ? `<div class="muted text-xs">runtime.model <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.model)}</span></div>` : ''}
+              ${r.issuer.runtime && r.issuer.runtime.capture_method ? `<div class="muted text-xs">runtime.capture_method <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.capture_method)}</span></div>` : ''}
             </div>
             <div>
               <div class="muted text-xs mb-1">Principal</div>
               <div class="font-mono text-xs">${escapeHtml(subj.principal.id)}</div>
             </div>
           </div>
+
+          ${tokenUsageSectionHTML(r.issuer)}
 
           ${intentSectionHTML(subj.intent)}
 
@@ -3074,6 +3078,22 @@
           <div class="${cls}">${valueHTML}</div>
         </div>
       `;
+    }
+
+    // ---------- Token usage section (modal body) ----------
+    function tokenUsageSectionHTML(issuer) {
+      if (!issuer || !issuer.runtime || !issuer.runtime.usage) return '';
+      const u = issuer.runtime.usage;
+      const parts = [];
+      if (u.input_tokens != null) parts.push('in ' + u.input_tokens.toLocaleString());
+      if (u.output_tokens != null) parts.push('out ' + u.output_tokens.toLocaleString());
+      if (u.cache_read_input_tokens != null) parts.push('cache-read ' + u.cache_read_input_tokens.toLocaleString());
+      if (u.cache_creation_input_tokens != null) parts.push('cache-write ' + u.cache_creation_input_tokens.toLocaleString());
+      if (!parts.length) return '';
+      return `<div>
+        <div class="muted text-xs mb-1">Token usage</div>
+        <div class="text-sm font-mono">${escapeHtml(parts.join(' / '))}</div>
+      </div>`;
     }
 
     // ---------- Intent section (modal body) ----------
@@ -3564,7 +3584,7 @@
         const a = agentMap.get(key);
         a.receiptCount++;
         if (!a.agentType && r.agent_type) a.agentType = r.agent_type;
-        if (!a.model && r.issuer_model) a.model = r.issuer_model;
+        if (!a.model) a.model = r.runtime_model || r.issuer_model || null;
         if (!a.delegation && r.delegation) a.delegation = r.delegation;
       }
 

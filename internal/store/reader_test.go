@@ -1761,13 +1761,20 @@ func insertLayer3(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, corre
 	m["credentialSubject"] = cs
 
 	// Inject agent_id into issuer.runtime (the open metadata sub-object, ADR-0026;
-	// daemon ≥ v0.18.0). Older receipts had no agent_id at all.
+	// daemon ≥ v0.18.0). Older receipts had no agent_id at all. Merge into any
+	// pre-existing runtime keys so this helper composes with insertRuntimeModel.
 	if agentID != "" {
 		issuer, _ := m["issuer"].(map[string]any)
 		if issuer == nil {
 			issuer = map[string]any{}
 		}
-		issuer["runtime"] = map[string]any{"agent_id": agentID, "agent_type": "general-purpose"}
+		rt, _ := issuer["runtime"].(map[string]any)
+		if rt == nil {
+			rt = map[string]any{}
+		}
+		rt["agent_id"] = agentID
+		rt["agent_type"] = "general-purpose"
+		issuer["runtime"] = rt
 		m["issuer"] = issuer
 	}
 
@@ -1934,6 +1941,181 @@ func TestReader_Layer3_NewFields(t *testing.T) {
 	}
 	if rowC.Delegation != nil {
 		t.Errorf("l3c Delegation: got %+v, want nil", rowC.Delegation)
+	}
+}
+
+// insertRuntimeModel augments a receipt's issuer.runtime with transcript-derived
+// model, capture_method, and (optionally) usage fields (obsigna PR #779) and
+// inserts it via InsertRaw, mirroring how the daemon injects fields the SDK
+// doesn't yet type. usage is only injected when at least one token count is
+// non-zero, so callers can represent the "model present, usage absent" case by
+// passing all zeros. Merges into any pre-existing runtime keys so this helper
+// composes with insertLayer3 when testing receipts that carry both sets of fields.
+func insertRuntimeModel(t *testing.T, s *sdkstore.Store, r receipt.AgentReceipt, model, captureMethod string, inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens int) {
+	t.Helper()
+	rawJSON, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal receipt: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawJSON, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	issuer, _ := m["issuer"].(map[string]any)
+	if issuer == nil {
+		issuer = map[string]any{}
+	}
+	rt, _ := issuer["runtime"].(map[string]any)
+	if rt == nil {
+		rt = map[string]any{}
+	}
+	rt["model"] = model
+	rt["capture_method"] = captureMethod
+	if inputTokens != 0 || outputTokens != 0 || cacheReadTokens != 0 || cacheCreateTokens != 0 {
+		rt["usage"] = map[string]any{
+			"input_tokens":                inputTokens,
+			"output_tokens":               outputTokens,
+			"cache_read_input_tokens":     cacheReadTokens,
+			"cache_creation_input_tokens": cacheCreateTokens,
+		}
+	}
+	issuer["runtime"] = rt
+	m["issuer"] = issuer
+	augmented, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal augmented: %v", err)
+	}
+	hash, err := receipt.HashRawReceipt(augmented)
+	if err != nil {
+		t.Fatalf("hash augmented receipt: %v", err)
+	}
+	if err := s.InsertRaw(r, augmented, hash); err != nil {
+		t.Fatalf("insert receipt: %v", err)
+	}
+}
+
+// TestReader_RuntimeModelUsage verifies that issuer.runtime.model is extracted
+// into ReceiptRow.RuntimeModel and that older receipts without this field return
+// an empty string without error. capture_method and usage are not extracted into
+// ReceiptRow; they reach the detail modal through the detail endpoint's raw JSON
+// passthrough (runtime.Extra preserves them across the GetByID round-trip).
+func TestReader_RuntimeModelUsage(t *testing.T) {
+	dbPath := t.TempDir() + "/runtime-model-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Receipt with full transcript-derived enrichment (root agent — no agent_id).
+	r1 := makeReceipt("urn:receipt:rm1", "chain-rm", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	insertRuntimeModel(t, s, r1, "claude-opus-4-8", "transcript", 1954, 392, 0, 16762)
+
+	// Receipt with only model (no usage) — tests partial enrichment.
+	r2 := makeReceipt("urn:receipt:rm2", "chain-rm", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	insertRuntimeModel(t, s, r2, "claude-haiku-4-5-20251001", "transcript", 0, 0, 0, 0)
+
+	// Old-style receipt — no runtime enrichment at all.
+	r3 := makeReceipt("urn:receipt:rm3", "chain-rm-old", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", nil)
+	hash3, err := receipt.HashReceipt(r3)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(r3, hash3); err != nil {
+		t.Fatalf("insert old receipt: %v", err)
+	}
+
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	// Newest-first: rm3 (index 0), rm2 (index 1), rm1 (index 2).
+	rowOld := rows[0]
+	rowPartial := rows[1]
+	rowFull := rows[2]
+
+	// Full enrichment: RuntimeModel must be populated.
+	if rowFull.RuntimeModel != "claude-opus-4-8" {
+		t.Errorf("rm1 RuntimeModel: got %q, want claude-opus-4-8", rowFull.RuntimeModel)
+	}
+
+	// Partial enrichment: model present, zero token counts are fine.
+	if rowPartial.RuntimeModel != "claude-haiku-4-5-20251001" {
+		t.Errorf("rm2 RuntimeModel: got %q, want claude-haiku-4-5-20251001", rowPartial.RuntimeModel)
+	}
+
+	// Old receipt: RuntimeModel must be empty.
+	if rowOld.RuntimeModel != "" {
+		t.Errorf("rm3 RuntimeModel: got %q, want empty", rowOld.RuntimeModel)
+	}
+}
+
+// TestReader_RuntimeModel_CombinedWithLayer3 verifies that a receipt carrying
+// both Layer 3 attribution (agent_id) and transcript-derived enrichment (model)
+// has all fields scanned correctly. The insertLayer3 and insertRuntimeModel
+// helpers must merge into issuer.runtime rather than wholesale-replacing it.
+func TestReader_RuntimeModel_CombinedWithLayer3(t *testing.T) {
+	dbPath := t.TempDir() + "/combined-runtime-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	base := makeReceipt("urn:receipt:combo1", "chain-combo", 1, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	// First inject agent_id, then model — both must survive.
+	insertLayer3(t, s, base, "corr-xyz", "subagent-q", nil)
+
+	// Re-augment the already-inserted receipt by reading it back, adding model,
+	// and re-inserting via a fresh store open. Simpler: insert a second receipt
+	// that has both fields set in one pass by calling insertRuntimeModel on a
+	// receipt that already has runtime fields baked in via the SDK struct.
+	base2 := makeReceipt("urn:receipt:combo2", "chain-combo", 2, "tool.call",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", nil)
+	base2.Issuer.Runtime = &receipt.Runtime{AgentID: "subagent-q", AgentType: "general-purpose"}
+	insertRuntimeModel(t, s, base2, "claude-sonnet-4-6", "transcript", 100, 50, 0, 0)
+
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	rows, err := reader.ListReceipts(Filter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	// Newest first: combo2, combo1.
+	rowCombined := rows[0]
+
+	if rowCombined.AgentID != "subagent-q" {
+		t.Errorf("combo2 AgentID: got %q, want subagent-q", rowCombined.AgentID)
+	}
+	if rowCombined.AgentType != "general-purpose" {
+		t.Errorf("combo2 AgentType: got %q, want general-purpose", rowCombined.AgentType)
+	}
+	if rowCombined.RuntimeModel != "claude-sonnet-4-6" {
+		t.Errorf("combo2 RuntimeModel: got %q, want claude-sonnet-4-6", rowCombined.RuntimeModel)
 	}
 }
 

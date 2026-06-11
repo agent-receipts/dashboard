@@ -77,6 +77,11 @@ type ReceiptRow struct {
 	// Delegation is non-nil on the first receipt of a subagent chain and
 	// carries the parent chain reference, enabling delegation edge rendering.
 	Delegation *DelegationInfo `json:"delegation,omitempty"`
+
+	// RuntimeModel is the transcript-derived model identifier (e.g.
+	// "claude-opus-4-8"), from issuer.runtime.model (obsigna PR #779).
+	// Used by the session delegation graph to label agent nodes.
+	RuntimeModel string `json:"runtime_model,omitempty"`
 }
 
 // DelegationInfo holds parent-chain attribution fields emitted by subagents
@@ -319,11 +324,12 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 	// on text that json_valid has cleared — SQL AND does not short-circuit,
 	// and json_extract on non-JSON text raises a "malformed JSON" error.
 	//
-	// The last six columns are Layer 3 attribution fields. correlation_id and
-	// delegation arrive with daemon ≥ v0.17.0; issuer.runtime.{agent_id,
-	// agent_type} with daemon ≥ v0.18.0 (ADR-0026); issuer.model is present
-	// whenever the daemon stamps the issuer identity. All are absent from older
-	// receipts and scan as empty strings / NULL.
+	// Layer 3 attribution fields: correlation_id and delegation arrive with
+	// daemon ≥ v0.17.0; issuer.runtime.{agent_id,agent_type} with daemon ≥
+	// v0.18.0 (ADR-0026); issuer.model whenever the daemon stamps the issuer
+	// identity. issuer.runtime.model is transcript-derived (obsigna PR #779)
+	// and used by the session graph to label agent nodes. All are absent from
+	// older receipts and scan as empty strings / NULL.
 	query := fmt.Sprintf(
 		`SELECT id, chain_id, sequence, action_type,
 		        COALESCE(tool_name, ''),
@@ -345,7 +351,8 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.model'), ''),
 		        COALESCE(json_extract(receipt_json, '$.issuer.session_id'), ''),
-		        json_extract(receipt_json, '$.credentialSubject.delegation')
+		        json_extract(receipt_json, '$.credentialSubject.delegation'),
+		        COALESCE(json_extract(receipt_json, '$.issuer.runtime.model'), '')
 		 FROM receipts %s ORDER BY %s LIMIT ?`,
 		where, orderBy,
 	)
@@ -374,6 +381,7 @@ func (r *Reader) ListReceipts(f Filter) ([]ReceiptRow, error) {
 			&row.OutputStatusMismatch,
 			&row.CorrelationID, &row.AgentID, &row.AgentType, &row.IssuerModel, &row.SessionID,
 			&delegationJSON,
+			&row.RuntimeModel,
 		); err != nil {
 			return nil, err
 		}
