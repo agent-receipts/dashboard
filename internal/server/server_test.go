@@ -1257,7 +1257,10 @@ func seedAttributionDB(t *testing.T) (*Server, string) {
 		return ar
 	}
 	insert := func(ar receipt.AgentReceipt) {
-		h, _ := receipt.HashReceipt(ar)
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
 		if err := s.Insert(ar, h); err != nil {
 			t.Fatalf("insert: %v", err)
 		}

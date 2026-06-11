@@ -385,7 +385,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
 	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session_id is required")
+		writeError(w, http.StatusBadRequest, "sessionID is required")
 		return
 	}
 	result, err := s.reader.SessionAttribution(sessionID)
