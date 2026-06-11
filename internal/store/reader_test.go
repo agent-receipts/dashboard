@@ -1575,6 +1575,70 @@ func TestSessionAttribution_NoMoveOp(t *testing.T) {
 	}
 }
 
+// TestSessionAttribution_RemoveNotMove checks that filesystem.file.remove does not
+// set has_move_ops (the old substring-match would falsely match "remove" ⊃ "move").
+func TestSessionAttribution_RemoveNotMove(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-remove-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-remove"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:rm1", "chain-rm", 1, "filesystem.file.remove",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "old.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if res.HasMoveOps {
+		t.Error("HasMoveOps = true, want false for session with filesystem.file.remove (not a move)")
+	}
+}
+
+// TestSessionAttribution_BidirectionalEdgeCollapse verifies that alternating
+// writes by two agents on the same resource produce a single state-dep edge,
+// not contradictory A→B and B→A edges.
+func TestSessionAttribution_BidirectionalEdgeCollapse(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-bidir-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-bidir"
+	const agentA = "agent-alpha"
+	const agentB = "agent-beta"
+	// A writes, B writes, A writes — three consecutive touches alternating agents.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd1", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, agentA, "worker", "shared.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd2", "chain-b", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sid, agentB, "worker", "shared.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd3", "chain-a", 2, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", sid, agentA, "worker", "shared.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if got := len(res.StateDeps); got != 1 {
+		t.Errorf("len(StateDeps) = %d, want 1 (bidirectional edges must collapse to one)", got)
+	}
+}
+
 // TestSessionAttribution_MultiResource verifies that a state dep edge aggregates
 // all shared resources between two agents into a single edge entry.
 func TestSessionAttribution_MultiResource(t *testing.T) {

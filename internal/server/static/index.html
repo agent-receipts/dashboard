@@ -3687,7 +3687,7 @@
       subs.forEach((n, i) => pos.set(n.id, { x: subStartX + i * subSpacing, y: SUB_Y }));
 
       // Delegation edges: dashed gray (structural spawn relationship).
-      const delegEdges = edges.filter(e => !e.type || e.type === 'delegation');
+      const delegEdges = edges.filter(e => e.type === 'delegation');
       const delegSVG = delegEdges.map(e => {
         const f = pos.get(e.from), t = pos.get(e.to);
         if (!f || !t) return '';
@@ -3809,11 +3809,11 @@
       const depParts = [
         ...stateFrom.map(sd => {
           const label = sd.resources.length === 1 ? escapeHtml(sd.resources[0]) : sd.resources.length + ' files';
-          return `→ <span style="color:var(--accent)">${escapeHtml((sd.to_agent || '').substring(0, 12))}…</span> via ${label}`;
+          return `→ <span style="color:var(--accent)">${escapeHtml(truncateHash(sd.to_agent || '', 12))}</span> via ${label}`;
         }),
         ...stateTo.map(sd => {
           const label = sd.resources.length === 1 ? escapeHtml(sd.resources[0]) : sd.resources.length + ' files';
-          return `← <span style="color:var(--accent)">${escapeHtml((sd.from_agent || '').substring(0, 12))}…</span> via ${label}`;
+          return `← <span style="color:var(--accent)">${escapeHtml(truncateHash(sd.from_agent || '', 12))}</span> via ${label}`;
         }),
       ];
 
@@ -3845,7 +3845,7 @@
       const mvWarn = attribution.has_move_ops
         ? ' <span style="color:var(--risk-medium)" title="Move/rename operations detected — path strings may not reliably identify file versions across renames">⚠ mv ops</span>'
         : '';
-      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)">${cv.identity_receipts} / ${cv.total_receipts} receipts identity-indexed (${pct}%)${mvWarn}</span>`;
+      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)">${escapeHtml(String(cv.identity_receipts))} / ${escapeHtml(String(cv.total_receipts))} receipts identity-indexed (${pct}%)${mvWarn}</span>`;
     }
 
     // renderSessionGraphReceipts renders a compact flat receipt table into the

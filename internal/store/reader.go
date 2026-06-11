@@ -998,6 +998,8 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 	if len(all) == 0 {
 		return AttributionResult{
 			Coverage:    AttributionCoverage{},
+			Nodes:       []NodeAttribution{},
+			StateDeps:   []StatDepEdge{},
 			BlastRadius: map[string][]string{},
 		}, nil
 	}
@@ -1045,8 +1047,8 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 		}
 		nd.timestamps = append(nd.timestamps, rr.timestamp)
 
-		at := strings.ToLower(rr.actionType)
-		if strings.Contains(at, "move") || strings.Contains(at, "rename") {
+		at := rr.actionType
+		if at == "filesystem.file.move" || at == "filesystem.file.rename" {
 			hasMoveOps = true
 		}
 		if rr.resource != "" {
@@ -1057,6 +1059,9 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 
 	// Cross-agent state dep edges: for each resource, each consecutive pair of
 	// touches where the agent key differs constitutes a provable state dep.
+	// Edge keys are canonicalised (from < to) so A→B and B→A on the same
+	// resource collapse to a single undirected edge instead of two
+	// contradictory arrows.
 	type edgeKey struct{ from, to string }
 	edgeResources := map[edgeKey]map[string]bool{}
 	for resource, touches := range fileIndex {
@@ -1064,7 +1069,11 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 			if touches[i-1].agentKey == touches[i].agentKey {
 				continue // same-agent re-touch; captured in blast radius
 			}
-			ek := edgeKey{touches[i-1].agentKey, touches[i].agentKey}
+			a, b := touches[i-1].agentKey, touches[i].agentKey
+			if a > b {
+				a, b = b, a
+			}
+			ek := edgeKey{a, b}
 			if edgeResources[ek] == nil {
 				edgeResources[ek] = map[string]bool{}
 			}
