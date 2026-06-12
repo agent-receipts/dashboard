@@ -81,9 +81,29 @@ dashboard -poll-interval 10s
 - **Read-only** — opens the SQLite database in read-only mode and never modifies your data
 - **Universal** — reads databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
 - **Filter** — narrow receipts by action type, risk level, status, time range, and chain ID
+- **Session attribution** — for multi-agent sessions, visualises delegation structure, cross-agent file dependencies, blast-radius, and risk rings (see below)
 - **Chain verification** — validates hash linkage and sequence ordering for any chain
 - **Detail view** — inspect any receipt with its full raw JSON payload
 - **Dark theme** — risk-level color coding for at-a-glance triage
+
+## Session attribution
+
+When a session involves multiple agents, the dashboard builds a provable dependency graph from `action.target.resource` paths in the receipts (requires obsigna hook v0.19.0+).
+
+![Session graph showing orchestrator and two sub-agents with a state-dependency edge, risk rings, and blast-radius panel listing touched files and cross-agent state deps](docs/session-attribution.png)
+
+**What you see:**
+
+- **Delegation edges** (dashed gray) — which agent spawned which
+- **State-dependency edges** (solid blue arrows) — two agents touched the same file; the arrow points from the agent that acted first to the one that acted after, making the causal order provable
+- **Risk rings** — orange (medium) or red (critical) outer rings on nodes with elevated-risk receipts
+- **Blast-radius panel** — click any node to see which files it touched, which other agents share a state dependency on those files, and a heuristic co-turn coupling count when agents operated on the same resource in overlapping time windows
+
+![Blast-radius panel detail showing file paths, directional state-dep arrows, and a semantic coupling warning](docs/session-attribution-detail.png)
+
+**Coverage fraction** — a `N / M receipts identity-indexed` indicator shows how complete the picture is. Receipts without a `target.resource` (Bash, MCP, spawn) are counted but cannot contribute to file-identity edges. A `⚠ mv ops` warning appears when move or rename operations are detected, because path strings may not reliably identify file versions across renames.
+
+The attribution data is served by `GET /api/sessions/{sessionID}/attribution`.
 
 ## Project structure
 

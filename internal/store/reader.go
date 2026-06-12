@@ -880,6 +880,341 @@ func (r *Reader) ServerStats(since *string) ([]ServerStat, error) {
 	return out, nil
 }
 
+// AttributionCoverage summarises how much of a session is identity-indexable.
+// Roughly half a session may carry no file identity (shell/MCP/spawn receipts),
+// so the fraction is surfaced in the UI so the view never implies blast-radius
+// covers actions it cannot see.
+type AttributionCoverage struct {
+	TotalReceipts    int     `json:"total_receipts"`
+	IdentityReceipts int     `json:"identity_receipts"`
+	Fraction         float64 `json:"fraction"`
+}
+
+// NodeAttribution summarises one agent's contribution within a session.
+type NodeAttribution struct {
+	AgentKey      string         `json:"agent_key"` // agent_id or "__root__"
+	AgentType     string         `json:"agent_type"`
+	ReceiptCount  int            `json:"receipt_count"`
+	IdentityCount int            `json:"identity_count"` // receipts with a resource path
+	MaxRisk       string         `json:"max_risk"`
+	RiskProfile   map[string]int `json:"risk_profile"`
+	// SemanticDeps is a heuristic count of potentially-related receipts from
+	// other agents within this agent's active time window, whose resources are
+	// not already captured by a provable state-dependency edge. Surfaced as a
+	// warning annotation in the UI — never a drawn edge (ADR-0029 §4).
+	SemanticDeps int `json:"semantic_deps"`
+}
+
+// StatDepEdge is a provable state-dependency between two agents via a shared
+// resource: agent FromAgent touched resource R, then ToAgent touched the same R
+// (ordered by timestamp + chain + sequence). CrossAgent is always true here —
+// same-agent re-touches are captured in BlastRadius, not as drawn edges.
+type StatDepEdge struct {
+	FromAgent  string   `json:"from_agent"`
+	ToAgent    string   `json:"to_agent"`
+	Resources  []string `json:"resources"`
+	CrossAgent bool     `json:"cross_agent"`
+}
+
+// AttributionResult is the §4 attribution payload for a session: file-identity
+// index, state-dependency edges, per-node blast-radius, and coverage fraction.
+type AttributionResult struct {
+	Coverage   AttributionCoverage `json:"coverage"`
+	HasMoveOps bool                `json:"has_move_ops"`
+	Nodes      []NodeAttribution   `json:"nodes"`
+	StateDeps  []StatDepEdge       `json:"state_deps"`
+	// BlastRadius maps each agent key to the sorted list of resource paths it
+	// touched. Used by the frontend to enumerate what a node can affect on click.
+	BlastRadius map[string][]string `json:"blast_radius"`
+}
+
+// riskOrder maps risk level strings to a numeric ordering for max-risk
+// comparison. An empty string (missing level) ranks below "low".
+var riskOrder = map[string]int{
+	"low":      1,
+	"medium":   2,
+	"high":     3,
+	"critical": 4,
+}
+
+// higherRisk returns whichever of a or b ranks higher by riskOrder.
+func higherRisk(a, b string) string {
+	if riskOrder[b] > riskOrder[a] {
+		return b
+	}
+	return a
+}
+
+// SessionAttribution computes the §4 attribution payload for a session.
+//
+// action.target.resource is extracted from receipt_json at query time (no
+// schema migration) and used as a proxy for logical file identity. When
+// move/rename operations are detected, HasMoveOps is set so the caller can
+// warn that path strings may not reliably identify file versions across renames.
+//
+// All computation is read-only; the database is not modified.
+func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error) {
+	rows, err := r.db.Query(`
+		SELECT chain_id,
+		       sequence,
+		       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_id'), '') AS agent_id,
+		       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), '') AS agent_type,
+		       action_type,
+		       risk_level,
+		       timestamp,
+		       COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.resource'), '') AS resource
+		FROM receipts
+		WHERE json_extract(receipt_json, '$.issuer.session_id') = ?
+		ORDER BY timestamp ASC, chain_id ASC, sequence ASC
+	`, sessionID)
+	if err != nil {
+		return AttributionResult{}, err
+	}
+	defer rows.Close()
+
+	type rawRow struct {
+		chainID    string
+		sequence   int
+		agentID    string
+		agentType  string
+		actionType string
+		riskLevel  string
+		timestamp  string
+		resource   string
+	}
+	var all []rawRow
+	for rows.Next() {
+		var rr rawRow
+		if err := rows.Scan(&rr.chainID, &rr.sequence, &rr.agentID, &rr.agentType,
+			&rr.actionType, &rr.riskLevel, &rr.timestamp, &rr.resource); err != nil {
+			return AttributionResult{}, err
+		}
+		all = append(all, rr)
+	}
+	if err := rows.Err(); err != nil {
+		return AttributionResult{}, err
+	}
+
+	if len(all) == 0 {
+		return AttributionResult{
+			Coverage:    AttributionCoverage{},
+			Nodes:       []NodeAttribution{},
+			StateDeps:   []StatDepEdge{},
+			BlastRadius: map[string][]string{},
+		}, nil
+	}
+
+	agentKeyOf := func(id string) string {
+		if id == "" {
+			return "__root__"
+		}
+		return id
+	}
+
+	type nodeAcc struct {
+		agentType     string
+		receiptCount  int
+		identityCount int
+		maxRisk       string
+		riskProfile   map[string]int
+		timestamps    []string
+		semCount      int
+	}
+	nodeMap := map[string]*nodeAcc{}
+
+	// file identity index: resource → ordered touches (agentKey + timestamp).
+	type touch struct {
+		agentKey  string
+		timestamp string
+	}
+	fileIndex := map[string][]touch{}
+
+	hasMoveOps := false
+	for _, rr := range all {
+		ak := agentKeyOf(rr.agentID)
+		nd := nodeMap[ak]
+		if nd == nil {
+			nd = &nodeAcc{riskProfile: map[string]int{}}
+			nodeMap[ak] = nd
+		}
+		if nd.agentType == "" && rr.agentType != "" {
+			nd.agentType = rr.agentType
+		}
+		nd.receiptCount++
+		if rr.riskLevel != "" {
+			nd.riskProfile[rr.riskLevel]++
+			nd.maxRisk = higherRisk(nd.maxRisk, rr.riskLevel)
+		}
+		nd.timestamps = append(nd.timestamps, rr.timestamp)
+
+		at := rr.actionType
+		if at == "filesystem.file.move" || at == "filesystem.file.rename" {
+			hasMoveOps = true
+		}
+		if rr.resource != "" {
+			fileIndex[rr.resource] = append(fileIndex[rr.resource], touch{ak, rr.timestamp})
+			nd.identityCount++
+		}
+	}
+
+	// Cross-agent state dep edges: for each resource, each consecutive pair of
+	// touches where the agent key differs constitutes a provable state dep.
+	// Edge keys are canonicalised (smaller < larger ID) so A→B and B→A on the
+	// same resource collapse to a single edge. The temporal direction (from_agent
+	// = whoever touched first) is recorded separately on first encounter.
+	type edgeKey struct{ a, b string } // a <= b always
+	edgeResources := map[edgeKey]map[string]bool{}
+	edgeFrom := map[edgeKey]string{} // temporally-first agent for each edge
+	for resource, touches := range fileIndex {
+		for i := 1; i < len(touches); i++ {
+			prev, next := touches[i-1].agentKey, touches[i].agentKey
+			if prev == next {
+				continue // same-agent re-touch; captured in blast radius
+			}
+			a, b := prev, next
+			if a > b {
+				a, b = b, a
+			}
+			ek := edgeKey{a, b}
+			if edgeResources[ek] == nil {
+				edgeResources[ek] = map[string]bool{}
+			}
+			// Elect the globally-earliest prev across all resources for this pair.
+			// ISO-8601 timestamps sort lexicographically, matching ORDER BY timestamp ASC.
+			if cur, ok := edgeFrom[ek]; !ok || prev < cur {
+				edgeFrom[ek] = prev
+			}
+			edgeResources[ek][resource] = true
+		}
+	}
+
+	stateDeps := make([]StatDepEdge, 0, len(edgeResources))
+	for ek, rset := range edgeResources {
+		resources := make([]string, 0, len(rset))
+		for res := range rset {
+			resources = append(resources, res)
+		}
+		sort.Strings(resources)
+		from := edgeFrom[ek]
+		to := ek.b
+		if from == ek.b {
+			to = ek.a
+		}
+		stateDeps = append(stateDeps, StatDepEdge{
+			FromAgent:  from,
+			ToAgent:    to,
+			Resources:  resources,
+			CrossAgent: true,
+		})
+	}
+	sort.Slice(stateDeps, func(i, j int) bool {
+		if stateDeps[i].FromAgent != stateDeps[j].FromAgent {
+			return stateDeps[i].FromAgent < stateDeps[j].FromAgent
+		}
+		return stateDeps[i].ToAgent < stateDeps[j].ToAgent
+	})
+
+	// Blast radius: per-agent sorted unique resource list.
+	blastRadius := map[string][]string{}
+	for resource, touches := range fileIndex {
+		seen := map[string]bool{}
+		for _, t := range touches {
+			if !seen[t.agentKey] {
+				seen[t.agentKey] = true
+				blastRadius[t.agentKey] = append(blastRadius[t.agentKey], resource)
+			}
+		}
+	}
+	for k := range blastRadius {
+		sort.Strings(blastRadius[k])
+	}
+
+	// Semantic dep heuristic: for each agent X, count distinct resources touched
+	// by other agents within X's active time window that are not already covered
+	// by a cross-agent state dep involving X. These represent potential co-turn
+	// couplings that are unproven and must never be drawn as edges (ADR-0029 §4).
+	agentStatDepRes := map[string]map[string]bool{}
+	for _, sd := range stateDeps {
+		if agentStatDepRes[sd.FromAgent] == nil {
+			agentStatDepRes[sd.FromAgent] = map[string]bool{}
+		}
+		if agentStatDepRes[sd.ToAgent] == nil {
+			agentStatDepRes[sd.ToAgent] = map[string]bool{}
+		}
+		for _, res := range sd.Resources {
+			agentStatDepRes[sd.FromAgent][res] = true
+			agentStatDepRes[sd.ToAgent][res] = true
+		}
+	}
+
+	for ak, nd := range nodeMap {
+		if len(nd.timestamps) == 0 {
+			continue
+		}
+		first, last := nd.timestamps[0], nd.timestamps[len(nd.timestamps)-1]
+		seen := map[string]bool{}
+		for _, rr := range all {
+			rk := agentKeyOf(rr.agentID)
+			if rk == ak || rr.resource == "" {
+				continue
+			}
+			if rr.timestamp < first || rr.timestamp > last {
+				continue
+			}
+			if agentStatDepRes[ak] != nil && agentStatDepRes[ak][rr.resource] {
+				continue
+			}
+			seen[rr.resource] = true
+		}
+		nd.semCount = len(seen)
+	}
+
+	// Build result nodes in deterministic order.
+	nodeKeys := make([]string, 0, len(nodeMap))
+	for k := range nodeMap {
+		nodeKeys = append(nodeKeys, k)
+	}
+	sort.Strings(nodeKeys)
+
+	resultNodes := make([]NodeAttribution, 0, len(nodeMap))
+	for _, ak := range nodeKeys {
+		nd := nodeMap[ak]
+		resultNodes = append(resultNodes, NodeAttribution{
+			AgentKey:      ak,
+			AgentType:     nd.agentType,
+			ReceiptCount:  nd.receiptCount,
+			IdentityCount: nd.identityCount,
+			MaxRisk:       nd.maxRisk,
+			RiskProfile:   nd.riskProfile,
+			SemanticDeps:  nd.semCount,
+		})
+	}
+
+	totalReceipts := len(all)
+	identityReceipts := 0
+	for _, rr := range all {
+		if rr.resource != "" {
+			identityReceipts++
+		}
+	}
+	frac := 0.0
+	if totalReceipts > 0 {
+		frac = float64(identityReceipts) / float64(totalReceipts)
+	}
+
+	return AttributionResult{
+		Coverage: AttributionCoverage{
+			TotalReceipts:    totalReceipts,
+			IdentityReceipts: identityReceipts,
+			Fraction:         frac,
+		},
+		HasMoveOps:  hasMoveOps,
+		Nodes:       resultNodes,
+		StateDeps:   stateDeps,
+		BlastRadius: blastRadius,
+	}, nil
+}
+
 // Close closes the database connection.
 func (r *Reader) Close() error {
 	return r.db.Close()

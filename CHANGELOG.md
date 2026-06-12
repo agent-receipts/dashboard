@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`⚠ mv ops` no longer fires on file deletions** — `has_move_ops` was detected with `strings.Contains(actionType, "move")`, which matched `filesystem.file.remove` (delete) because "remove" contains the substring "move". Detection now requires an exact match against `filesystem.file.move` or `filesystem.file.rename`.
+- **Bidirectional state-dep edges collapse to one** — when two agents alternately wrote the same file (A→B→A), both A→B and B→A edges were emitted, rendering as contradictory overlapping arrows. Edge keys are now canonicalised (sorted) so any pair of agents produces at most one state-dep edge per shared resource.
+- **Empty-session attribution response uses `[]` not `null`** — `/api/sessions/{id}/attribution` returned `"nodes":null,"state_deps":null` for sessions with no receipts; these fields now always serialize as `[]`.
+- **Unknown edge types no longer rendered as delegation** — the session graph filtered delegation edges with `!e.type || e.type === 'delegation'`; any future edge type without a frontend handler would silently appear as a dashed-gray delegation line. The filter is now an exact `type === 'delegation'` check.
+- **Agent-ID truncation in blast-radius panel no longer appends `…` to short IDs** — IDs shorter than 12 characters were labelled with a spurious trailing ellipsis implying truncation; the panel now uses `truncateHash` which only appends `…` when the string was actually clipped.
+- **Coverage integers wrapped with `escapeHtml`** — `identity_receipts` and `total_receipts` are now passed through `escapeHtml(String(...))` before being interpolated into the coverage bar `innerHTML`.
+
 ### Added
 
 - **Transcript-derived model and token usage in receipt detail** — the dashboard now surfaces `issuer.runtime.model`, `issuer.runtime.capture_method`, and token usage (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) from `issuer.runtime.usage` when present in a receipt (obsigna PR #779). These fields are shown in the receipt detail modal: `runtime.model` and `runtime.capture_method` appear alongside the existing `runtime.agent_id`/`agent_type` in the Issuer block, and a dedicated **Token usage** row shows the per-call token counts (including cache reads and writes when non-null). Older receipts without these fields degrade gracefully. The `runtime_model` field is also included in every `ReceiptRow` API response, and the session delegation graph now prefers the transcript-derived model over the static `issuer.model` when both are present.
+- **ADR-0029 §4 attribution and blast-radius view** — the session graph panel now shows cross-agent state-dependency edges alongside delegation edges. State deps (solid blue curved arrows with arrowheads) are drawn when two agents touch the same `action.target.resource` path, ordered by timestamp + chain + sequence; these are provably causal. Delegation edges are now dashed gray to stay visually distinct.
+- **Blast-radius panel on node click** — selecting a graph node reveals a compact attribution bar showing: the files the node touched (identity coverage), cross-agent state deps it participates in (→ / ← labels), and a heuristic semantic-coupling warning count. Semantic deps are surfaced as a warning annotation only and are never drawn as edges, per ADR-0029 §4.
+- **Risk rings on graph nodes** — nodes with high or critical maximum risk level now display a coloured outer ring (orange for high, red for critical) so high-risk nodes with large state-dependency sets are immediately visible.
+- **Coverage fraction in modal header** — the Session Graph modal header shows how many receipts in the session are identity-indexable (`N / M receipts identity-indexed (P%)`). When move/rename operations are present, a `⚠ mv ops` warning appears because path strings may not reliably identify file versions across renames.
+- **`GET /api/sessions/{sessionID}/attribution` endpoint** — returns the full §4 attribution payload: coverage fraction, has_move_ops flag, per-node attribution (receipt count, identity count, max risk, risk profile, semantic dep count), cross-agent state dep edges, and per-agent blast-radius resource lists. No schema migration; `action.target.resource` is extracted from `receipt_json` via `json_extract` at query time.
 
 ## [0.7.0] - 2026-06-11
 

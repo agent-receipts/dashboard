@@ -116,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats/actions", s.handleActionStats)
 	mux.HandleFunc("GET /api/stats/servers", s.handleServerStats)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
+	mux.HandleFunc("GET /api/sessions/{sessionID}/attribution", s.handleSessionAttribution)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -379,6 +380,21 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "sessionID is required")
+		return
+	}
+	result, err := s.reader.SessionAttribution(sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "attribution query failed")
+		log.Printf("session attribution error: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request) {

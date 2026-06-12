@@ -1232,3 +1232,100 @@ func TestStatsEndpoint_WithRange(t *testing.T) {
 		t.Errorf("filtered total (%d) must be less than all-time (%d)", filtered.Total, allTime.Total)
 	}
 }
+
+// ---------- Session attribution endpoint ----------
+
+func seedAttributionDB(t *testing.T) (*Server, string) {
+	t.Helper()
+	dbPath := t.TempDir() + "/attr-server-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-attr"
+	const subAgent = "sub-agent-001"
+
+	makeAttr := func(id, chainID string, seq int, actionType string, risk receipt.RiskLevel, ts, agentID, resource string) receipt.AgentReceipt {
+		ar := makeReceipt(id, chainID, seq, actionType, risk, receipt.StatusSuccess, ts, nil)
+		ar.Issuer.SessionID = sid
+		if agentID != "" {
+			ar.Issuer.Runtime = &receipt.Runtime{AgentID: agentID, AgentType: "general-purpose"}
+		}
+		if resource != "" {
+			ar.CredentialSubject.Action.Target = &receipt.ActionTarget{Resource: resource}
+		}
+		return ar
+	}
+	insert := func(ar receipt.AgentReceipt) {
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	// Orchestrator reads index.html, then subagent writes it.
+	insert(makeAttr("urn:receipt:a1", "chain-root", 1, "filesystem.file.read", receipt.RiskLow, "2026-04-01T10:00:00Z", "", "index.html"))
+	insert(makeAttr("urn:receipt:a2", "chain-sub", 1, "filesystem.file.write", receipt.RiskMedium, "2026-04-01T10:01:00Z", subAgent, "index.html"))
+	// Subagent does a bash command (no resource).
+	insert(makeAttr("urn:receipt:a3", "chain-sub", 2, "system.bash.execute", receipt.RiskHigh, "2026-04-01T10:02:00Z", subAgent, ""))
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return New(reader, Config{}), sid
+}
+
+func TestSessionAttributionEndpoint_OK(t *testing.T) {
+	srv, sid := seedAttributionDB(t)
+	req := httptest.NewRequest("GET", "/api/sessions/"+sid+"/attribution", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var result store.AttributionResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Coverage.TotalReceipts != 3 {
+		t.Errorf("TotalReceipts = %d, want 3", result.Coverage.TotalReceipts)
+	}
+	if result.Coverage.IdentityReceipts != 2 {
+		t.Errorf("IdentityReceipts = %d, want 2", result.Coverage.IdentityReceipts)
+	}
+	if len(result.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(result.StateDeps), result.StateDeps)
+	}
+	if !result.StateDeps[0].CrossAgent {
+		t.Error("StateDeps[0].CrossAgent = false, want true")
+	}
+	if len(result.Nodes) != 2 {
+		t.Errorf("Nodes len = %d, want 2 (root + sub)", len(result.Nodes))
+	}
+}
+
+func TestSessionAttributionEndpoint_MissingSession(t *testing.T) {
+	srv := setupServer(t)
+	req := httptest.NewRequest("GET", "/api/sessions/no-such-session/attribution", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	// An unknown session returns 200 with empty coverage (no receipts found).
+	if w.Code != http.StatusOK {
+		t.Errorf("got status %d, want 200 for unknown session", w.Code)
+	}
+	var result store.AttributionResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Coverage.TotalReceipts != 0 {
+		t.Errorf("TotalReceipts = %d, want 0 for unknown session", result.Coverage.TotalReceipts)
+	}
+}

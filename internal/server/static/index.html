@@ -419,6 +419,8 @@
     .sg-node:hover circle { filter: brightness(1.25); }
     .sg-node.sg-selected circle { stroke: var(--accent); stroke-width: 3; }
     .sg-edge { stroke: var(--border-strong); stroke-width: 1.5; fill: none; }
+    .sg-edge-delegation { stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
+    .sg-edge-state { stroke: var(--accent); stroke-width: 2; fill: none; opacity: 0.85; }
     .sg-label { font-family: var(--font-sans); pointer-events: none; }
     .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
 
@@ -922,16 +924,18 @@
 
     <!-- Session graph modal -->
     <div id="session-graph-modal" class="modal-backdrop" hidden>
-      <div class="modal-panel" role="dialog" aria-labelledby="session-graph-title" aria-modal="true" style="max-width:960px;max-height:90vh;">
+      <div class="modal-panel" role="dialog" aria-labelledby="session-graph-title" aria-modal="true" style="max-width:1100px;max-height:90vh;">
         <div class="modal-head">
           <div>
             <h2 class="modal-title" id="session-graph-title">Session Graph</h2>
             <div id="session-graph-session-id" class="font-mono" style="font-size:0.72rem;color:var(--muted);margin-top:2px;"></div>
           </div>
+          <div id="session-graph-coverage" style="flex:1;text-align:right;margin-right:12px;"></div>
           <button class="icon-btn" type="button" onclick="closeSessionGraph()" aria-label="Close">×</button>
         </div>
         <div>
           <div id="session-graph-svg-panel" style="padding:16px;border-bottom:1px solid var(--border);min-height:80px;"></div>
+          <div id="session-graph-blast-panel" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--surface-sunken);"></div>
           <div id="session-graph-receipts-panel" style="max-height:420px;overflow-y:auto;"></div>
         </div>
       </div>
@@ -3481,13 +3485,16 @@
 
     // renderInlineSessionGraph renders a compact agent delegation graph above the
     // receipts table whenever a session filter is active and the session has >1 agent.
-    function renderInlineSessionGraph(receipts) {
+    async function renderInlineSessionGraph(receipts) {
       const container = document.getElementById('session-inline-graph');
       if (!container) return;
       const sessionId = document.getElementById('filter-session').value.trim();
       if (!sessionId) { container.style.display = 'none'; return; }
 
-      const { nodes, edges } = buildSessionGraph(receipts);
+      const attribution = await fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null);
+      inlineGraphState.attribution = attribution;
+
+      const { nodes, edges } = buildSessionGraph(receipts, attribution);
       if (nodes.length <= 1) { container.style.display = 'none'; return; }
 
       container.style.display = '';
@@ -3498,6 +3505,7 @@
             <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
               onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
           </div>
+          <div id="inline-graph-blast" style="display:none;padding:6px 4px 4px;border-bottom:1px solid var(--border);margin-bottom:6px;"></div>
           <div id="inline-graph-body"></div>
         </div>
       `;
@@ -3515,16 +3523,20 @@
     }
 
     // selectInlineGraphNode handles node clicks in the receipts view inline graph.
-    // Clicking a node filters the receipts table to that agent's rows.
+    // Clicking a node filters the receipts table to that agent's rows and shows
+    // the blast-radius panel when attribution data is available.
     function selectInlineGraphNode(el) {
       const nodeId   = el.dataset.nodeId;
       const selected = el.classList.contains('sg-selected');
       document.querySelectorAll('#inline-graph-body .sg-node').forEach(n => n.classList.remove('sg-selected'));
+      const blastPanel = document.getElementById('inline-graph-blast');
       if (selected) {
         filterInlineReceiptsByAgent(undefined);
+        if (blastPanel) blastPanel.style.display = 'none';
       } else {
         el.classList.add('sg-selected');
         filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
+        if (blastPanel) renderBlastRadius(nodeId, blastPanel, inlineGraphState.attribution);
       }
     }
 
@@ -3542,26 +3554,39 @@
 
     // ---------- Session graph modal ----------
 
-    // sessionGraphState holds the last-fetched receipts so node clicks can re-filter
-    // without a round-trip.
-    const sessionGraphState = { receipts: [] };
+    // sessionGraphState holds the last-fetched receipts and attribution data so
+    // node clicks can re-filter and show blast-radius without a round-trip.
+    const sessionGraphState = { receipts: [], attribution: null };
+
+    // inlineGraphState holds attribution for the receipts-view inline graph.
+    const inlineGraphState = { attribution: null };
 
     async function showSessionGraph(sessionId) {
       const svgPanel    = document.getElementById('session-graph-svg-panel');
       const rcptPanel   = document.getElementById('session-graph-receipts-panel');
+      const blastPanel  = document.getElementById('session-graph-blast-panel');
       const subtitle    = document.getElementById('session-graph-session-id');
+      const coverageEl  = document.getElementById('session-graph-coverage');
 
       subtitle.textContent = sessionId;
       svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
       rcptPanel.innerHTML  = '';
-      sessionGraphState.receipts = [];
+      if (blastPanel)  blastPanel.style.display = 'none';
+      if (coverageEl)  coverageEl.innerHTML = '';
+      sessionGraphState.receipts   = [];
+      sessionGraphState.attribution = null;
       openModal('session-graph-modal');
 
       try {
-        const rows = await fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sessionId) + '&limit=2000');
-        sessionGraphState.receipts = rows || [];
-        const { nodes, edges } = buildSessionGraph(sessionGraphState.receipts);
+        const [rows, attribution] = await Promise.all([
+          fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sessionId) + '&limit=2000'),
+          fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null),
+        ]);
+        sessionGraphState.receipts    = rows || [];
+        sessionGraphState.attribution = attribution;
+        const { nodes, edges } = buildSessionGraph(sessionGraphState.receipts, attribution);
         renderSessionGraphSVG(nodes, edges, svgPanel);
+        renderSessionCoverage(attribution, coverageEl);
         renderSessionGraphReceipts(sessionGraphState.receipts, rcptPanel);
       } catch (err) {
         svgPanel.innerHTML = '<div class="muted text-sm">Could not load session: ' + escapeHtml(err.message) + '</div>';
@@ -3571,9 +3596,11 @@
     function closeSessionGraph() { closeModalById('session-graph-modal'); }
 
     // buildSessionGraph extracts nodes (one per unique agent) and edges (delegation
-    // links) from a flat receipt array. The root/orchestrator agent has agentId null
-    // in the receipt data and is represented as '__root__' internally.
-    function buildSessionGraph(receipts) {
+    // links + cross-agent state deps) from a flat receipt array. The root/orchestrator
+    // agent has agentId null in the receipt data and is represented as '__root__'.
+    // The optional attribution param (from /api/sessions/{id}/attribution) enriches
+    // nodes with risk metadata and adds provable state-dependency edges.
+    function buildSessionGraph(receipts, attribution) {
       const agentMap = new Map(); // key: agentId (or '__root__') → metadata
 
       for (const r of receipts) {
@@ -3605,8 +3632,30 @@
           edges.push({
             from:          '__root__',
             to:            key,
+            type:          'delegation',
             parentChainId: info.delegation.parent_chain_id,
           });
+        }
+      }
+
+      // Merge attribution metadata (risk profile, identity coverage, semantic
+      // dep counts) into nodes, and add cross-agent state-dependency edges.
+      // State dep edges are the §4 load-bearing signal: each edge represents a
+      // provable dependency via a shared resource path.
+      if (attribution) {
+        const attrMap = new Map((attribution.nodes || []).map(n => [n.agent_key, n]));
+        for (const node of nodes) {
+          const na = attrMap.get(node.id);
+          if (na) {
+            node.maxRisk       = na.max_risk;
+            node.identityCount = na.identity_count;
+            node.semanticDeps  = na.semantic_deps;
+          }
+        }
+        for (const sd of (attribution.state_deps || [])) {
+          if (sd.cross_agent) {
+            edges.push({ from: sd.from_agent, to: sd.to_agent, type: 'state_dep', resources: sd.resources });
+          }
         }
       }
 
@@ -3615,7 +3664,9 @@
 
     // renderSessionGraphSVG renders a two-level hierarchical node-link graph.
     // Root is centred at the top; sub-agents spread across the row below.
-    // Node area is proportional to receipt count.
+    // Node area is proportional to receipt count; high/critical-risk nodes carry
+    // a coloured outer ring. Delegation edges are dashed gray; state-dependency
+    // edges (provable cross-agent file overlap) are solid blue curved arrows.
     function renderSessionGraphSVG(nodes, edges, container, clickFn = 'selectGraphNode') {
       const root = nodes.find(n => n.isRoot);
       const subs = nodes.filter(n => !n.isRoot);
@@ -3632,37 +3683,63 @@
       const ROOT_Y  = 70;
       const SUB_Y   = 210;
 
-      const subCount      = subs.length;
+      const subCount       = subs.length;
       const naturalSpacing = subCount > 1 ? (800 - 80) / subCount : 0;
-      const subSpacing    = subCount > 1 ? Math.max(130, Math.min(160, naturalSpacing)) : 0;
-      const VB_W          = subCount > 1 ? Math.max(800, 80 + subCount * subSpacing) : 800;
-      const rootX         = VB_W / 2;
+      const subSpacing     = subCount > 1 ? Math.max(130, Math.min(160, naturalSpacing)) : 0;
+      const VB_W           = subCount > 1 ? Math.max(800, 80 + subCount * subSpacing) : 800;
+      const rootX          = VB_W / 2;
 
-      const subStartX  = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
-      const hasModel   = nodes.some(n => n.model);
-      const VB_H       = (subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90) + (hasModel ? 12 : 0);
+      const subStartX = subCount > 0 ? rootX - ((subCount - 1) * subSpacing) / 2 : rootX;
+      const hasModel  = nodes.some(n => n.model);
+      const VB_H      = (subCount > 0 ? SUB_Y + 90 : ROOT_Y + 90) + (hasModel ? 12 : 0);
 
       const pos = new Map();
       pos.set(root.id, { x: rootX, y: ROOT_Y });
       subs.forEach((n, i) => pos.set(n.id, { x: subStartX + i * subSpacing, y: SUB_Y }));
 
-      const edgeSVG = edges.map(e => {
-        const f = pos.get(e.from);
-        const t = pos.get(e.to);
+      // Delegation edges: dashed gray (structural spawn relationship).
+      const delegEdges = edges.filter(e => e.type === 'delegation');
+      const delegSVG = delegEdges.map(e => {
+        const f = pos.get(e.from), t = pos.get(e.to);
         if (!f || !t) return '';
-        return `<line class="sg-edge" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
+        return `<line class="sg-edge-delegation" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
       }).join('');
+
+      // State dep edges: solid blue curved arrows (provable cross-agent file overlap).
+      const stateEdges = edges.filter(e => e.type === 'state_dep');
+      const stateSVG = stateEdges.map(e => {
+        const f = pos.get(e.from), t = pos.get(e.to);
+        if (!f || !t) return '';
+        const dx = t.x - f.x, dy = t.y - f.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        // Curve perpendicular to the straight line so state dep edges are visually
+        // distinct from delegation edges between the same pair of nodes.
+        const cx = (f.x + t.x) / 2 + (len > 0 ? -dy / len * 20 : 0);
+        const cy = (f.y + t.y) / 2 + (len > 0 ?  dx / len * 20 : 0);
+        const rcount = e.resources ? e.resources.length : 0;
+        const label = rcount === 1 ? escapeHtml(e.resources[0]) : rcount + ' shared files';
+        return `<path class="sg-edge-state" d="M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}" marker-end="url(#sg-arr)"><title>state dep: ${label}</title></path>`;
+      }).join('');
+
+      // Risk ring colours. medium is muted; high/critical are prominent.
+      const riskRingColor = { medium: 'var(--risk-medium)', high: 'var(--risk-high)', critical: 'var(--risk-critical)' };
 
       const nodeSVG = nodes.map(n => {
         const p = pos.get(n.id);
         if (!p) return '';
-        const r    = nodeR(n);
-        const fill = n.isRoot ? 'var(--accent)' : '#238636';
+        const r      = nodeR(n);
+        const fill   = n.isRoot ? 'var(--accent)' : '#238636';
         const safeId = escapeAttr(n.id);
+        const ringColor = n.maxRisk && riskRingColor[n.maxRisk];
+        // Risk ring rendered before the node circle so it sits behind it.
+        const riskRing = ringColor
+          ? `<circle cx="${p.x}" cy="${p.y}" r="${r + 5}" fill="none" stroke="${ringColor}" stroke-width="2.5" opacity="0.8"/>`
+          : '';
         return `
           <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
              role="button" tabindex="0" aria-label="${escapeAttr(n.label)}${n.model ? ', ' + escapeAttr(n.model) : ''}, ${n.receiptCount} receipts"
              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
+            ${riskRing}
             <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
             <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
                   style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
@@ -3674,28 +3751,37 @@
       }).join('');
 
       container.innerHTML = `
-        <p class="sg-hint">Click a node to filter receipts below · click again to reset</p>
+        <p class="sg-hint">Click a node to see blast radius and filter receipts · click again to reset</p>
         <svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" preserveAspectRatio="xMidYMid meet"
-             style="max-height:${VB_H}px;display:block;margin:0 auto;" aria-label="Agent delegation graph">
-          ${edgeSVG}
+             style="max-height:${VB_H}px;display:block;margin:0 auto;" aria-label="Agent delegation and state-dependency graph">
+          <defs>
+            <marker id="sg-arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0.5, 7.5 3, 0 5.5" fill="var(--accent)" opacity="0.8"/>
+            </marker>
+          </defs>
+          ${delegSVG}
+          ${stateSVG}
           ${nodeSVG}
         </svg>
       `;
     }
 
     // selectGraphNode toggles the selected state of a graph node and re-renders
-    // the receipts panel filtered to that agent. A second click on the same node
-    // resets the filter and shows all receipts.
+    // the receipts panel filtered to that agent. On first click also shows the
+    // blast-radius panel (file coverage, state deps, semantic dep warning).
+    // A second click on the same node resets the filter and hides the panel.
     function selectGraphNode(el) {
       const nodeId   = el.dataset.nodeId;
       const selected = el.classList.contains('sg-selected');
 
       document.querySelectorAll('#session-graph-svg-panel .sg-node').forEach(n => n.classList.remove('sg-selected'));
 
-      const panel = document.getElementById('session-graph-receipts-panel');
+      const panel      = document.getElementById('session-graph-receipts-panel');
+      const blastPanel = document.getElementById('session-graph-blast-panel');
 
       if (selected) {
         renderSessionGraphReceipts(sessionGraphState.receipts, panel);
+        if (blastPanel) blastPanel.style.display = 'none';
       } else {
         el.classList.add('sg-selected');
         const agentId = nodeId === '__root__' ? null : nodeId;
@@ -3703,7 +3789,75 @@
           agentId === null ? !r.agent_id : r.agent_id === agentId
         );
         renderSessionGraphReceipts(filtered, panel);
+        if (blastPanel) renderBlastRadius(nodeId, blastPanel);
       }
+    }
+
+    // renderBlastRadius populates the attribution panel for the selected node.
+    // Shows file coverage, cross-agent state deps (drawn edges), and the heuristic
+    // semantic dep warning count. Semantic deps are never drawn as edges per ADR-0029 §4.
+    // attr defaults to sessionGraphState.attribution when omitted (modal path).
+    function renderBlastRadius(agentKey, panel, attr) {
+      if (attr === undefined) attr = sessionGraphState.attribution;
+      if (!attr) { panel.style.display = 'none'; return; }
+
+      const resources = (attr.blast_radius && attr.blast_radius[agentKey]) || [];
+      const stateFrom = (attr.state_deps || []).filter(sd => sd.from_agent === agentKey && sd.cross_agent);
+      const stateTo   = (attr.state_deps || []).filter(sd => sd.to_agent   === agentKey && sd.cross_agent);
+      const nodeAttr  = (attr.nodes || []).find(n => n.agent_key === agentKey);
+      const semCount  = nodeAttr ? (nodeAttr.semantic_deps || 0) : 0;
+
+      if (!resources.length && !stateFrom.length && !stateTo.length && !semCount) {
+        panel.style.display = 'none';
+        return;
+      }
+
+      const MAX_RES = 20;
+      const resText = resources.length
+        ? resources.slice(0, MAX_RES).map(r => escapeHtml(r)).join(' · ')
+          + (resources.length > MAX_RES ? ` <span style="color:var(--muted)">+${resources.length - MAX_RES} more</span>` : '')
+        : '<em style="color:var(--muted)">none</em>';
+
+      const depParts = [
+        ...stateFrom.map(sd => {
+          const label = sd.resources.length === 1 ? escapeHtml(sd.resources[0]) : sd.resources.length + ' files';
+          return `→ <span style="color:var(--accent)">${escapeHtml(truncateHash(sd.to_agent || '', 12))}</span> via ${label}`;
+        }),
+        ...stateTo.map(sd => {
+          const label = sd.resources.length === 1 ? escapeHtml(sd.resources[0]) : sd.resources.length + ' files';
+          return `← <span style="color:var(--accent)">${escapeHtml(truncateHash(sd.from_agent || '', 12))}</span> via ${label}`;
+        }),
+      ];
+
+      const semWarn = semCount
+        ? `<span style="color:var(--risk-medium)">⚠ ${semCount} potential co-turn coupling${semCount !== 1 ? 's' : ''} (unproven — not a drawn edge)</span>`
+        : '';
+
+      const sections = [
+        `<span><span style="color:var(--muted)">Files (${resources.length}):</span> <span style="font-family:var(--font-mono)">${resText}</span></span>`,
+        depParts.length ? `<span><span style="color:var(--muted)">State deps:</span> ${depParts.join('  ')}</span>` : '',
+        semWarn,
+      ].filter(Boolean).join(' <span style="color:var(--border-strong);margin:0 4px">|</span> ');
+
+      panel.innerHTML = `<div style="font-size:0.78rem;line-height:1.8;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;">${sections}</div>`;
+      panel.style.display = '';
+    }
+
+    // renderSessionCoverage shows what fraction of the session is identity-indexable
+    // (has a target.resource path). Surfaced as an honesty metric so the view never
+    // implies blast-radius covers actions it cannot see (shell/MCP/spawn have no path).
+    function renderSessionCoverage(attribution, el) {
+      if (!el) return;
+      if (!attribution || !attribution.coverage || attribution.coverage.total_receipts === 0) {
+        el.innerHTML = '';
+        return;
+      }
+      const cv  = attribution.coverage;
+      const pct = Math.round(cv.fraction * 100);
+      const mvWarn = attribution.has_move_ops
+        ? ' <span style="color:var(--risk-medium)" title="Move/rename operations detected — path strings may not reliably identify file versions across renames">⚠ mv ops</span>'
+        : '';
+      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)">${escapeHtml(String(cv.identity_receipts))} / ${escapeHtml(String(cv.total_receipts))} receipts identity-indexed (${pct}%)${mvWarn}</span>`;
     }
 
     // renderSessionGraphReceipts renders a compact flat receipt table into the
