@@ -1078,7 +1078,11 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 			ek := edgeKey{a, b}
 			if edgeResources[ek] == nil {
 				edgeResources[ek] = map[string]bool{}
-				edgeFrom[ek] = prev // first encounter determines causal direction
+			}
+			// Elect the globally-earliest prev across all resources for this pair.
+			// ISO-8601 timestamps sort lexicographically, matching ORDER BY timestamp ASC.
+			if cur, ok := edgeFrom[ek]; !ok || prev < cur {
+				edgeFrom[ek] = prev
 			}
 			edgeResources[ek][resource] = true
 		}

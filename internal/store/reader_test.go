@@ -1617,9 +1617,8 @@ func TestSessionAttribution_BidirectionalEdgeCollapse(t *testing.T) {
 	const agentA = "agent-alpha"
 	const agentB = "agent-beta"
 	// A writes, B writes, A writes — three consecutive touches alternating agents.
-	// agentA ("agent-alpha") acts first; "agent-alpha" < "agent-beta" alphabetically,
-	// so this case would pass even with ID-sort. The second sub-test below uses an
-	// alphabetically-larger first-mover to catch regressions.
+	// agentA ("agent-alpha") acts first across all resources for this pair;
+	// the timestamp election picks it correctly regardless of map iteration order.
 	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd1", "chain-a", 1, "filesystem.file.write",
 		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, agentA, "worker", "shared.go"))
 	insertAttr(t, s, makeAttrReceipt("urn:receipt:bd2", "chain-b", 1, "filesystem.file.write",
