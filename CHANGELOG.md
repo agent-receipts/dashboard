@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-12
+
 ### Fixed
 
 - **`⚠ mv ops` no longer fires on file deletions** — `has_move_ops` was detected with `strings.Contains(actionType, "move")`, which matched `filesystem.file.remove` (delete) because "remove" contains the substring "move". Detection now requires an exact match against `filesystem.file.move` or `filesystem.file.rename`.
