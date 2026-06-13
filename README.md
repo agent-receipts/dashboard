@@ -2,7 +2,7 @@
 
 # Agent Receipts Dashboard
 
-Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-receipts/ar) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
+Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-receipts/obsigna) audit trails. Single Go binary; UI loads htmx and Tailwind from CDNs.
 
 [![CI](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/agent-receipts/dashboard/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/agent-receipts/dashboard)](https://github.com/agent-receipts/dashboard/releases/latest)
@@ -15,7 +15,7 @@ Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-
 
 ## What is this?
 
-[Agent Receipts](https://github.com/agent-receipts/ar) is a protocol for cryptographically signed, tamper-evident audit trails produced by AI agents. Every action an agent takes — file writes, API calls, shell commands — is recorded as a receipt: signed, chained, and verifiable.
+[Agent Receipts](https://github.com/agent-receipts/obsigna) is a protocol for cryptographically signed, tamper-evident audit trails produced by AI agents. Every action an agent takes — file writes, API calls, shell commands — is recorded as a receipt: signed, chained, and verifiable.
 
 The dashboard is a read-only local viewer for those receipt databases. Point it at any SQLite database written by an Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy, then browse, filter, and verify your agent's activity in your browser.
 
@@ -60,6 +60,8 @@ Opens http://localhost:8080 and reads `~/.local/share/agent-receipts/receipts.db
 | `-port` | `8080` | HTTP server port |
 | `-host` | `127.0.0.1` | Address to bind (use `0.0.0.0` for all interfaces) |
 | `-poll-interval` | `5s` | How often the UI polls for new receipts. Also honoured via `AR_DASHBOARD_POLL_INTERVAL`. |
+| `-version`, `--version` | | Print the version and exit |
+| `-h`, `--help` | | Print usage and exit |
 
 ```sh
 # Reads ~/.local/share/agent-receipts/receipts.db by default
@@ -73,6 +75,9 @@ dashboard -host 0.0.0.0 -port 9090
 
 # Slower live polling (env var also works: AR_DASHBOARD_POLL_INTERVAL=10s)
 dashboard -poll-interval 10s
+
+# Print version, then exit
+dashboard --version
 ```
 
 ## Features
@@ -207,10 +212,11 @@ go vet ./...               # lint
 
 | Project | Description |
 |---------|-------------|
-| [ar](https://github.com/agent-receipts/ar) | Agent Receipts Go SDK — receipt types, signing, and verification |
-| [mcp-proxy](https://github.com/agent-receipts/ar/tree/main/mcp-proxy) | MCP proxy — records agent activity as receipts transparently |
+| [obsigna](https://github.com/agent-receipts/obsigna) | Agent Receipts monorepo — protocol spec, the Go/TypeScript/Python SDKs, the `obsigna-daemon`, and the MCP proxy |
+| [obsigna-daemon](https://github.com/agent-receipts/obsigna/tree/main/daemon) | Signing daemon — holds the key, signs and chains receipts, and ships the `obsigna` read/verify CLI |
+| [mcp-proxy](https://github.com/agent-receipts/obsigna/tree/main/mcp-proxy) | MCP proxy — records agent activity as receipts transparently |
 | [openclaw](https://github.com/agent-receipts/openclaw) | Open-source autonomous personal AI agent |
-| [spec](https://github.com/agent-receipts/ar/tree/main/spec) | Agent Receipts protocol specification |
+| [spec](https://github.com/agent-receipts/obsigna/tree/main/spec) | Agent Receipts protocol specification |
 
 ## Contributing
 
