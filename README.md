@@ -212,6 +212,8 @@ go vet ./...               # lint
 
 | Project | Description |
 |---------|-------------|
+| [agentreceipts.ai](https://agentreceipts.ai) | Protocol site — specification and reference |
+| [obsigna.dev](https://obsigna.dev) | Tooling docs — SDKs, MCP proxy, hook, and the dashboard |
 | [obsigna](https://github.com/agent-receipts/obsigna) | Agent Receipts monorepo — protocol spec, the Go/TypeScript/Python SDKs, the `obsigna-daemon`, and the MCP proxy |
 | [obsigna-daemon](https://github.com/agent-receipts/obsigna/tree/main/daemon) | Signing daemon — holds the key, signs and chains receipts, and ships the `obsigna` read/verify CLI |
 | [mcp-proxy](https://github.com/agent-receipts/obsigna/tree/main/mcp-proxy) | MCP proxy — records agent activity as receipts transparently |
