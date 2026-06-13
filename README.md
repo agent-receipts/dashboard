@@ -82,9 +82,39 @@ dashboard -poll-interval 10s
 - **Universal** — reads databases produced by any Agent Receipts SDK (Go, TypeScript, Python) or MCP proxy
 - **Filter** — narrow receipts by action type, risk level, status, time range, and chain ID
 - **Session attribution** — for multi-agent sessions, visualises delegation structure, cross-agent file dependencies, blast-radius, and risk rings (see below)
-- **Chain verification** — validates hash linkage and sequence ordering for any chain
-- **Detail view** — inspect any receipt with its full raw JSON payload
+- **Chain verification** — validates hash linkage, sequence ordering, and (with a public key) Ed25519 signatures for any chain
+- **Forensic decryption** — when a forensic key is loaded, decrypts HPKE-encrypted parameter disclosures inline so you can preview the real tool inputs/outputs (loopback-only; see below)
+- **Insights & analytics** — activity timeline, error-rate and throughput trends, top actions by failure rate, and a per-server/tool breakdown, all scoped to a time-range picker
+- **Detail view** — inspect any receipt with its full raw JSON payload, and export any receipt or whole chain as JSON
 - **Dark theme** — risk-level color coding for at-a-glance triage
+
+## Verifying chains
+
+Verify any chain from the **Verify** control in the UI, or via the API:
+
+- **Structural** (no key) — recomputes each receipt's canonical hash from the verbatim bytes stored in the database and checks hash linkage and sequence ordering. A green result means the chain links and is correctly ordered; signatures are not checked.
+- **Full** (with a public key) — additionally verifies each receipt's Ed25519 signature. Paste the daemon's PEM public key into the textarea beside the Verify button, or pass it as `?public_key=<PEM>` to `GET /api/chains/{chainID}/verify`. Each receipt carries a `signature_valid` field, shown as a Sig ✓/✗ badge.
+
+Verification recomputes from the verbatim `receipt_json` bytes, so a chain that `obsigna receipt verify` accepts verifies here too.
+
+## Forensic decryption
+
+If your receipts carry HPKE-encrypted parameter disclosures (the daemon's parameter-disclosure mode, `--forensic-public-key`), the dashboard can decrypt them inline so you can preview the real tool inputs and outputs — without the key ever leaving the machine.
+
+- **Auto-load** — on startup, if the dashboard is bound to a loopback address and a key exists at the default path `~/.local/share/agent-receipts/forensic.key`, it is loaded automatically and previews are decrypted on the fly.
+- **Manual load** — the UI pre-fills the default path; point it at another absolute path, or paste a key. Accepted formats: raw 32-byte, hex, base64, or PKCS#8 PEM X25519 private key.
+- **Fingerprint & mismatch** — the loaded key's `sha256:` fingerprint is shown; receipts encrypted to a different key surface a "key mismatch" state rather than failing silently.
+
+Forensic key operations are **loopback-only** by design — see [Security model](#security-model).
+
+## Insights & analytics
+
+The **Overview**, **Actions**, and **Servers** views turn a store into operational signal, scoped by a time-range picker (`1h · 6h · 24h · 7d · 30d · All`):
+
+- **Activity timeline** — stacked success/failure/other receipts per time bucket
+- **Error-rate sparkline** and **throughput** ("receipts / hr" or "/ min") with trend arrows
+- **Top actions by failure rate** (Actions tab) and a **per-server/tool breakdown** with mini failure-rate bars
+- **Free-text search** plus server/tool/session filters on the Receipts tab, with deep-linkable URLs (`?q=`, `?session_id=`)
 
 ## Session attribution
 
@@ -104,6 +134,44 @@ When a session involves multiple agents, the dashboard builds a provable depende
 **Coverage fraction** — a `N / M receipts identity-indexed` indicator shows how complete the picture is. Receipts without a `target.resource` (Bash, MCP, spawn) are counted but cannot contribute to file-identity edges. A `⚠ mv ops` warning appears when move or rename operations are detected, because path strings may not reliably identify file versions across renames.
 
 The attribution data is served by `GET /api/sessions/{sessionID}/attribution`.
+
+## HTTP API
+
+Everything the UI shows is served by a small JSON API on the same loopback port. Read endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | Liveness check |
+| `GET /api/config` | Server config (db path, forensic availability) |
+| `GET /api/stats` | Summary stats; accepts `after`/`before` time-window params |
+| `GET /api/stats/timeseries` | Bucketed activity counts for the timeline |
+| `GET /api/stats/actions` | Top actions by failure rate |
+| `GET /api/stats/servers` | Per-server/tool breakdown (optional `?range=`) |
+| `GET /api/sessions` | All agent sessions (optional `?range=`) |
+| `GET /api/sessions/{sessionID}/attribution` | Full attribution / blast-radius payload |
+| `GET /api/receipts` | Receipts, filterable (`?q=`, `?session_id=`, `?limit=N`, …) |
+| `GET /api/receipts/{id}` | One receipt's raw JSON |
+| `GET /api/chains` | Chains in the store |
+| `GET /api/chains/{chainID}/verify` | Verify a chain; `?public_key=<PEM>` adds signature checks |
+
+Forensic endpoints (loopback-only — see [Security model](#security-model)):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/forensic-key` | Current key state (loaded?, fingerprint) |
+| `POST /api/forensic-key` | Load a key from the request body |
+| `POST /api/forensic-key/path` | Load a key from an absolute server-side path |
+| `DELETE /api/forensic-key` | Clear the loaded key |
+| `GET /api/disclosure/{id}` | Decrypt one receipt's parameter disclosure |
+
+## Security model
+
+The dashboard is **read-only** and binds to **`127.0.0.1` by default**. Forensic decryption — the only feature that touches key material — is deliberately constrained:
+
+- **Loopback-only** — forensic-key and disclosure endpoints return `403` unless the server is bound to a loopback address. Running with `-host 0.0.0.0` disables forensic decryption.
+- **Host-header validation** — requests whose `Host` header does not name loopback are rejected, blocking DNS-rebinding attacks where a remote page points its own domain at `127.0.0.1`.
+- **CSRF guard** — forensic `POST` endpoints require `Content-Type: application/json`, closing the same-browser cross-origin gap the loopback and Host-header guards don't cover.
+- The private key stays in the dashboard process; decrypted snippets are cached only in the browser tab and cleared when the key state changes.
 
 ## Project structure
 
