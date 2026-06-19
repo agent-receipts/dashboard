@@ -580,8 +580,9 @@ var errFileTooLarge = errors.New("file too large")
 // errors.Is to surface a precise message instead of a raw read error.
 var errNotRegularFile = errors.New("not a regular file")
 
-// readFileLimited reads up to limit bytes from path. It returns errFileTooLarge
-// when the file exceeds limit. Non-regular files (symlinks, FIFOs, devices,
+// readFileLimited reads up to limit+1 bytes from path — one past the limit, so
+// an over-size file can be detected without reading it whole — and returns
+// errFileTooLarge when the file exceeds limit. Non-regular files (symlinks, FIFOs, devices,
 // directories) are rejected via Lstat before opening, so a FIFO at the path
 // cannot hang startup and a device cannot be read through the path endpoint.
 // A residual Lstat/Open TOCTOU window remains, which is acceptable here: the

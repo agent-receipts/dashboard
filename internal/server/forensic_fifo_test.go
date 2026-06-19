@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"syscall"
@@ -20,8 +21,8 @@ func TestReadFileLimited_RejectsFIFO(t *testing.T) {
 		t.Skipf("cannot create FIFO: %v", err)
 	}
 	_, err := readFileLimited(fifo, 1024)
-	if err == nil {
-		t.Fatal("expected error for FIFO, got nil")
+	if !errors.Is(err, errNotRegularFile) {
+		t.Fatalf("got error %v, want errNotRegularFile", err)
 	}
 }
 

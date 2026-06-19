@@ -637,8 +637,8 @@ func TestReadFileLimited_RegularFile(t *testing.T) {
 func TestReadFileLimited_RejectsDirectory(t *testing.T) {
 	dir := t.TempDir()
 	_, err := readFileLimited(dir, 1024)
-	if err == nil {
-		t.Fatal("expected error for directory, got nil")
+	if !errors.Is(err, errNotRegularFile) {
+		t.Fatalf("got error %v, want errNotRegularFile", err)
 	}
 }
 
@@ -656,8 +656,8 @@ func TestReadFileLimited_RejectsSymlink(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	_, err := readFileLimited(link, 1024)
-	if err == nil {
-		t.Fatal("expected error for symlink, got nil")
+	if !errors.Is(err, errNotRegularFile) {
+		t.Fatalf("got error %v, want errNotRegularFile", err)
 	}
 }
 

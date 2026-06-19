@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Hardened forensic key file reads** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — `readFileLimited` now rejects non-regular files (symlinks, FIFOs, devices, directories) via `Lstat` before opening, preventing startup hangs on a FIFO at `ForensicKeyPath` and blocking `/dev/zero`-style reads via the path endpoint. The path endpoint (`POST /api/forensic-key/path`) now returns **413 Request Entity Too Large** when the file exceeds the size limit (previously 400). Over-size buffers are zeroed before the error is returned so key material does not linger in GC.
+- **Hardened forensic key file reads** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — `readFileLimited` now rejects non-regular files (symlinks, FIFOs, devices, directories) via `Lstat` before opening, preventing startup hangs on a FIFO at `ForensicKeyPath` and blocking `/dev/zero`-style reads via the path endpoint. The path endpoint (`POST /api/forensic-key/path`) now returns **413 Request Entity Too Large** when the file exceeds the size limit (previously 400). The over-size buffer is zeroed before the error is returned, narrowing the window in which discarded key material sits in memory (intermediate `io.ReadAll` allocations may still persist until GC).
 
 ## [0.9.0-alpha.2] - 2026-06-19
 
