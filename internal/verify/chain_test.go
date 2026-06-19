@@ -1,7 +1,11 @@
 package verify
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -317,5 +321,101 @@ func TestVerifyChainLinks_NoPublicKey_SignatureNotChecked(t *testing.T) {
 	result := VerifyChainLinks([]store.ChainReceipt{cr}, "")
 	if result.Receipts[0].SignatureValid != nil {
 		t.Error("SignatureValid should be nil when no public key provided")
+	}
+}
+
+// signRawPayload signs a generic receipt payload (without a proof block) and
+// returns the full wire bytes with the proof spliced in, the way an SDK newer
+// than this build would. It lets the test carry a signed field that the
+// AgentReceipt struct does not model.
+func signRawPayload(t *testing.T, payload map[string]any, privateKeyPEM string) []byte {
+	t.Helper()
+	block, _ := pem.Decode([]byte(privateKeyPEM))
+	if block == nil {
+		t.Fatal("decode private key PEM")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	priv, ok := key.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatal("private key is not Ed25519")
+	}
+	canonical, err := receipt.Canonicalize(payload)
+	if err != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	sig := ed25519.Sign(priv, []byte(canonical))
+	payload["proof"] = map[string]any{
+		"type":               "Ed25519Signature2020",
+		"proofValue":         "u" + base64.RawURLEncoding.EncodeToString(sig),
+		"verificationMethod": "did:agent:test#key-1",
+		"proofPurpose":       "assertionMethod",
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return raw
+}
+
+func TestVerifyChainLinks_SignatureValid_ForwardCompatNested(t *testing.T) {
+	// Issue #73: a newer SDK can sign over a field nested inside the payload
+	// (e.g. under credentialSubject) that this build's struct does not model.
+	// VerifyChainLinks must verify the signature against the verbatim wire bytes
+	// (receipt.VerifyRaw), not a re-marshal of the struct (receipt.Verify) that
+	// drops the field and false-negatives a genuinely valid signature.
+	kp, err := receipt.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generate key pair: %v", err)
+	}
+
+	r := makeReceipt("urn:receipt:fc-sig", "chain-fc-sig", 1, nil)
+	// Derive the signed payload from the struct so field names match the wire,
+	// then splice in one field nested under credentialSubject.
+	ub, err := json.Marshal(receipt.UnsignedAgentReceipt{
+		Context:           r.Context,
+		ID:                r.ID,
+		Type:              r.Type,
+		Version:           r.Version,
+		Issuer:            r.Issuer,
+		IssuanceDate:      r.IssuanceDate,
+		CredentialSubject: r.CredentialSubject,
+	})
+	if err != nil {
+		t.Fatalf("marshal unsigned: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ub, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	payload["credentialSubject"].(map[string]any)["_future_nested"] = "v2"
+
+	raw := signRawPayload(t, payload, kp.PrivateKey)
+	cr := store.ChainReceipt{Receipt: r, Raw: raw}
+
+	result := VerifyChainLinks([]store.ChainReceipt{cr}, kp.PublicKey)
+	sv := result.Receipts[0].SignatureValid
+	if sv == nil {
+		t.Fatal("SignatureValid should not be nil when public key provided")
+	}
+	if !*sv {
+		t.Fatal("signature over a nested forward-compat field should verify via raw bytes (issue #73)")
+	}
+
+	// Sanity check: the old struct-based path drops the nested field and
+	// false-negatives, proving the test exercises the real divergence the swap
+	// to VerifyRaw fixes — not a no-op.
+	var parsed receipt.AgentReceipt
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal parsed: %v", err)
+	}
+	structOK, err := receipt.Verify(parsed, kp.PublicKey)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if structOK {
+		t.Fatal("expected struct-based Verify to false-negative on the nested field")
 	}
 }
