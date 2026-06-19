@@ -8,7 +8,7 @@ Lightweight local dashboard for viewing Agent Receipts — cryptographically sig
 cmd/dashboard/          # CLI entry point
 internal/server/        # HTTP server, routes, handlers
 internal/server/static/ # Embedded HTML, htmx, CSS (no build step)
-internal/store/         # Read-only SQLite access, queries, multi-DB
+internal/store/         # Read-only SQLite access and queries
 internal/verify/        # Hash linkage and chain verification
 ```
 
