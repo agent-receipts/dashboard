@@ -28,13 +28,16 @@ func TestReadFileLimited_RejectsFIFO(t *testing.T) {
 
 // TestForensicKeyLoadPath_RejectsFIFO verifies that pointing the path endpoint
 // at a FIFO is rejected before open (preventing a hang waiting for a writer).
+// The dir is added to ForensicKeyDirs so the allowlist passes and rejection
+// comes from readFileLimited (Lstat sees a non-regular file).
 func TestForensicKeyLoadPath_RejectsFIFO(t *testing.T) {
-	fifo := t.TempDir() + "/forensic.fifo"
+	dir := t.TempDir()
+	fifo := dir + "/forensic.fifo"
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Skipf("cannot create FIFO: %v", err)
 	}
 
-	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
 	body, _ := json.Marshal(map[string]string{"path": fifo})
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))

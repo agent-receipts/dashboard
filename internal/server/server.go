@@ -49,6 +49,9 @@ type Config struct {
 	// loads it automatically so operators with a single-user install do not
 	// need to paste the key into the UI.
 	ForensicKeyPath string
+	// ForensicKeyDirs lists extra directories, in addition to the user's home
+	// directory, from which the forensic key path endpoint may load a key.
+	ForensicKeyDirs []string
 }
 
 //go:embed static
@@ -56,20 +59,39 @@ var staticFS embed.FS
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	reader   *store.Reader
-	cfg      Config
-	forensic *forensicKeyStore
+	reader          *store.Reader
+	cfg             Config
+	forensic        *forensicKeyStore
+	forensicKeyDirs []string // cleaned, absolute allowed roots for the key path endpoint
 }
 
 // New creates a new Server backed by the given reader. A zero PollInterval
 // in cfg falls back to DefaultPollInterval. When cfg.ForensicKeyPath names an
 // existing file and the server is bound to loopback, the forensic key is
 // loaded automatically so solo operators need no manual UI step.
+//
+// The allowed roots for the forensic key path endpoint are computed once here:
+// the user's home directory (silently omitted if unavailable) plus any
+// absolute paths in cfg.ForensicKeyDirs (non-absolute entries are skipped).
 func New(reader *store.Reader, cfg Config) *Server {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = DefaultPollInterval
 	}
-	s := &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}}
+
+	var dirs []string
+	if home, err := os.UserHomeDir(); err == nil {
+		if cleaned := filepath.Clean(home); filepath.IsAbs(cleaned) {
+			dirs = append(dirs, cleaned)
+		}
+	}
+	for _, d := range cfg.ForensicKeyDirs {
+		cleaned := filepath.Clean(d)
+		if filepath.IsAbs(cleaned) {
+			dirs = append(dirs, cleaned)
+		}
+	}
+
+	s := &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}, forensicKeyDirs: dirs}
 	s.tryLoadDefaultForensicKey()
 	return s
 }

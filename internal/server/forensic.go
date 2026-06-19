@@ -277,11 +277,14 @@ func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cleaned, err := validateForensicKeyPath(req.Path)
+	cleaned, err := validateForensicKeyPath(req.Path, s.forensicKeyDirs)
 	if err != nil {
-		if errors.Is(err, errPathNotAbsolute) {
+		switch {
+		case errors.Is(err, errPathNotAbsolute):
 			writeError(w, http.StatusBadRequest, "path must be absolute (or start with ~/)")
-		} else {
+		case errors.Is(err, errPathNotAllowed):
+			writeError(w, http.StatusForbidden, "key file path is not within an allowed directory")
+		default:
 			writeError(w, http.StatusBadRequest, "path must not contain '..' or a NUL byte")
 		}
 		return
@@ -331,21 +334,31 @@ func expandHomePath(p string) string {
 	return p
 }
 
-// errPathNotAbsolute and errPathInvalid are returned by validateForensicKeyPath
-// for an operator-supplied path that does not resolve to an absolute location
-// or that contains a traversal segment or NUL byte.
+// errPathNotAbsolute, errPathInvalid, and errPathNotAllowed are returned by
+// validateForensicKeyPath for an operator-supplied path that does not resolve
+// to an absolute location, that contains a traversal segment or NUL byte, or
+// that falls outside every allowed directory root.
 var (
 	errPathNotAbsolute = errors.New("path must be absolute")
 	errPathInvalid     = errors.New("path contains a traversal segment or NUL byte")
+	errPathNotAllowed  = errors.New("path not within an allowed directory")
 )
 
 // validateForensicKeyPath is the single validation barrier for the
 // operator-supplied forensic key path. It expands a leading ~, rejects an
 // embedded NUL byte and any ".." traversal segment outright (rather than
-// silently resolving it to an unexpected location), and requires the cleaned
-// result to be absolute. The returned cleaned path is the only value that
-// reaches the filesystem, so untrusted input cannot flow to a read unchecked.
-func validateForensicKeyPath(raw string) (string, error) {
+// silently resolving it to an unexpected location), requires the cleaned
+// result to be absolute, and then checks that the path equals one of the
+// allowed roots or sits beneath one (boundary-safe prefix check).
+//
+// The returned cleaned path is the only value that reaches the filesystem, so
+// untrusted input cannot flow to a read unchecked.
+//
+// Note: intermediate symlinked directories are not resolved here, but the
+// target file itself must be a regular file (readFileLimited already rejects
+// symlinks/non-regular via Lstat), so a symlinked key file cannot escape the
+// allowlist.
+func validateForensicKeyPath(raw string, allowedDirs []string) (string, error) {
 	if strings.ContainsRune(raw, 0) {
 		return "", errPathInvalid
 	}
@@ -357,7 +370,12 @@ func validateForensicKeyPath(raw string) (string, error) {
 	if !filepath.IsAbs(cleaned) {
 		return "", errPathNotAbsolute
 	}
-	return cleaned, nil
+	for _, root := range allowedDirs {
+		if cleaned == root || strings.HasPrefix(cleaned, root+string(os.PathSeparator)) {
+			return cleaned, nil
+		}
+	}
+	return "", errPathNotAllowed
 }
 
 // containsDotDot reports whether the path has a ".." element, splitting on both

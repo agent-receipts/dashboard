@@ -60,6 +60,7 @@ Opens http://localhost:8080 and reads `~/.local/share/agent-receipts/receipts.db
 | `-port` | `8080` | HTTP server port |
 | `-host` | `127.0.0.1` | Address to bind (use `0.0.0.0` for all interfaces) |
 | `-poll-interval` | `5s` | How often the UI polls for new receipts. Also honoured via `AR_DASHBOARD_POLL_INTERVAL`. |
+| `-forensic-key-dirs` | _(home dir)_ | Comma-separated list of extra absolute directories from which the forensic key path endpoint (`POST /api/forensic-key/path`) may load a key. The user's home directory is always allowed. Non-absolute entries are silently skipped. |
 | `-version`, `--version` | | Print the version and exit |
 | `-h`, `--help` | | Print usage and exit |
 
@@ -176,6 +177,7 @@ The dashboard is **read-only** and binds to **`127.0.0.1` by default**. Forensic
 - **Loopback-only** — forensic-key and disclosure endpoints return `403` unless the server is bound to a loopback address. Running with `-host 0.0.0.0` disables forensic decryption.
 - **Host-header validation** — requests whose `Host` header does not name loopback are rejected, blocking DNS-rebinding attacks where a remote page points its own domain at `127.0.0.1`.
 - **CSRF guard** — forensic `POST` endpoints require `Content-Type: application/json`, closing the same-browser cross-origin gap the loopback and Host-header guards don't cover.
+- **Path allowlist** — the key path endpoint (`POST /api/forensic-key/path`) only reads files inside the user's home directory or directories explicitly listed via `-forensic-key-dirs`. Paths outside every allowed root return `403 Forbidden`. Paths containing `..` or NUL bytes are rejected before any filesystem access.
 - The private key stays in the dashboard process; decrypted snippets are cached only in the browser tab and cleared when the key state changes.
 
 ## Project structure
