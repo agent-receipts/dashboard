@@ -742,3 +742,50 @@ func TestForensicAutoLoad_RejectsNonRegularFile(t *testing.T) {
 		t.Fatal("key was auto-loaded from a directory, should have been skipped")
 	}
 }
+
+// ---------- validateForensicKeyPath barrier tests ----------
+
+func TestValidateForensicKeyPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr error
+	}{
+		{"absolute", "/etc/agent-receipts/forensic.key", "/etc/agent-receipts/forensic.key", nil},
+		{"cleans redundant separators", "/var//lib/./forensic.key", "/var/lib/forensic.key", nil},
+		{"relative rejected", "forensic.key", "", errPathNotAbsolute},
+		{"dot-dot rejected", "/home/op/../../etc/passwd", "", errPathInvalid},
+		{"dot-dot backslash rejected", `/home/op\..\secret`, "", errPathInvalid},
+		{"nul byte rejected", "/home/op/forensic\x00.key", "", errPathInvalid},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateForensicKeyPath(tc.path)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("got err %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsTraversal verifies the path endpoint rejects a
+// traversal segment with 400 before any filesystem read.
+func TestForensicKeyLoadPath_RejectsTraversal(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": "/home/op/../../../etc/passwd"})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
