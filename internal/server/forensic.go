@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -175,6 +176,31 @@ func (s *Server) rejectNonLocalHost(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
+// rejectCrossOrigin writes a 403 and returns true when the request carries an
+// Origin header whose host:port does not match r.Host. Absent Origin is allowed
+// because curl, SDK clients, and same-origin navigations omit it. Browsers
+// always send Origin on cross-origin POSTs (including CORS-simple requests with
+// text/plain), so a cross-origin page cannot spoof a matching Origin without
+// triggering CORS preflight. The comparison is exact: Origin must carry the
+// same host and port as r.Host; a port-less Origin (e.g. http://127.0.0.1 for
+// the default HTTP port) against r.Host "127.0.0.1:8080" is treated as
+// cross-origin because the same-origin browser always includes the explicit
+// non-default port in the Origin it sends. An opaque "null" Origin (sandboxed
+// iframe, file://, some redirects) parses to an empty host and is likewise
+// rejected. Returns false when the request may proceed.
+func (s *Server) rejectCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host != r.Host {
+		writeError(w, http.StatusForbidden, "cross-origin requests to forensic endpoints are not allowed")
+		return true
+	}
+	return false
+}
+
 // guardForensic enforces both the Host-header check and the bind gate for
 // endpoints that load or use a forensic key. It returns true when the request
 // may proceed; on rejection it has already written the response.
@@ -204,6 +230,9 @@ func (s *Server) handleForensicKeyGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 	if !s.guardForensic(w, r) {
+		return
+	}
+	if s.rejectCrossOrigin(w, r) {
 		return
 	}
 
@@ -250,6 +279,9 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 // before any filesystem access.
 func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Request) {
 	if !s.guardForensic(w, r) {
+		return
+	}
+	if s.rejectCrossOrigin(w, r) {
 		return
 	}
 
@@ -395,6 +427,9 @@ func containsDotDot(p string) bool {
 
 func (s *Server) handleForensicKeyClear(w http.ResponseWriter, r *http.Request) {
 	if s.rejectNonLocalHost(w, r) {
+		return
+	}
+	if s.rejectCrossOrigin(w, r) {
 		return
 	}
 	s.forensic.clear()

@@ -921,3 +921,92 @@ func TestForensicKeyLoadPath_RejectsTraversal(t *testing.T) {
 		t.Fatalf("got %d, want 400", w.Code)
 	}
 }
+
+// localReqWithOrigin builds a local request (127.0.0.1:8080 Host) with the
+// given Origin header set. Use this to simulate same-origin or cross-origin
+// browser requests without changing the Host.
+func localReqWithOrigin(method, target string, body io.Reader, origin string) *http.Request {
+	r := localReq(method, target, body)
+	r.Header.Set("Origin", origin)
+	return r
+}
+
+// TestForensicCSRFGuardCrossOriginRawPost verifies that a cross-origin POST to
+// the raw key-load endpoint (text/plain, no preflight) is rejected with 403.
+func TestForensicCSRFGuardCrossOriginRawPost(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+
+	r := localReqWithOrigin("POST", "/api/forensic-key", bytes.NewReader(priv), "http://evil.example.com")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin raw POST: got %d, want 403", w.Code)
+	}
+}
+
+// TestForensicCSRFGuardCrossOriginDelete verifies that a cross-origin DELETE to
+// the key-clear endpoint is rejected with 403.
+func TestForensicCSRFGuardCrossOriginDelete(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+
+	r := localReqWithOrigin("DELETE", "/api/forensic-key", nil, "http://evil.example.com")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin DELETE: got %d, want 403", w.Code)
+	}
+}
+
+// TestForensicCSRFGuardAbsentOriginAllowed verifies that requests without an
+// Origin header (curl, SDK, same-origin navigations) are not blocked.
+func TestForensicCSRFGuardAbsentOriginAllowed(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	h := srv.Handler()
+
+	// Raw POST without Origin header must reach the key-load logic.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("POST", "/api/forensic-key", bytes.NewReader(priv)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("absent Origin POST: got %d, want 200", w.Code)
+	}
+
+	// DELETE without Origin header must succeed.
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, localReq("DELETE", "/api/forensic-key", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("absent Origin DELETE: got %d, want 200", w.Code)
+	}
+}
+
+// TestForensicCSRFGuardSameOriginAllowed verifies that a request carrying a
+// same-origin Origin (scheme://host:port matches r.Host) is allowed through.
+func TestForensicCSRFGuardSameOriginAllowed(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+
+	// r.Host is "127.0.0.1:8080" (set by localReq); Origin carries same host:port.
+	r := localReqWithOrigin("POST", "/api/forensic-key", bytes.NewReader(priv), "http://127.0.0.1:8080")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("same-origin POST: got %d, want 200", w.Code)
+	}
+}
+
+// TestForensicCSRFGuardCrossOriginPathEndpoint verifies that the path-load
+// endpoint is also protected by the Origin guard, in addition to the existing
+// Content-Type check.
+func TestForensicCSRFGuardCrossOriginPathEndpoint(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": "/some/key"})
+
+	r := localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body))
+	r.Header.Set("Origin", "http://evil.example.com")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin path POST: got %d, want 403", w.Code)
+	}
+}
