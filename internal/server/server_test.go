@@ -1362,6 +1362,11 @@ func TestTaxonomyEndpoint(t *testing.T) {
 			if a.Type == "" || a.Description == "" || a.RiskLevel == "" {
 				t.Errorf("incomplete entry in %q: %+v", c.Name, a)
 			}
+			// Each type must belong to exactly one category — overwriting here
+			// would hide a type duplicated across categories.
+			if _, dup := byType[a.Type]; dup {
+				t.Errorf("action type %q appears in more than one category", a.Type)
+			}
 			byType[a.Type] = a
 		}
 	}
