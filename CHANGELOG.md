@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-alpha.3] - 2026-06-20
+
 ### Added
 
 - **`-forensic-key-dirs` flag** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — comma-separated list of extra absolute directories from which the forensic key path endpoint (`POST /api/forensic-key/path`) may load a key. The user's home directory is always allowed; non-absolute entries are silently skipped.
