@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Structured issuer and principal details in the receipt detail view** — the detail modal now renders the issuer's `type` and (when present) top-level `model` and `operator` (`{name, id}`) as their own labelled fields, and shows the principal's `type` as a badge alongside its id. Previously these fields were only visible in the raw JSON blob. All new fields render conditionally and degrade gracefully when absent.
 - **Action type taxonomy awareness** — the dashboard now surfaces the SDK's built-in action-type registry so auditors can interpret raw action types without external docs. A new `GET /api/taxonomy` endpoint serves every known action type with its description and default risk level, grouped by category (Filesystem, System, Data, Network, Diagnostic, Other). The Actions view gains a collapsible **Action type reference** card listing all built-ins grouped by category, and known action types in the receipts list, Actions stats table, and receipt detail now carry a hover tooltip ("Read a file · default risk: low"); the detail modal additionally shows a **Meaning** row. Unknown action types degrade gracefully to plain text.
 
+### Fixed
+
+- **Chain signature verification no longer false-negatives on forward-compat receipts** ([#73](https://github.com/agent-receipts/dashboard/issues/73)) — `GET /api/chains/{id}/verify?public_key=…` now checks each Ed25519 signature against the receipt's verbatim wire bytes via the SDK's new `receipt.VerifyRaw`, instead of re-marshalling the parsed Go struct with `receipt.Verify`. The struct path dropped any field a newer SDK signed over but nested inside the payload (e.g. under `credentialSubject`), canonicalizing different bytes and reporting a genuinely valid signature as invalid. This is the signature-side twin of the hash-linkage fix for [#719](https://github.com/agent-receipts/ar/issues/719); the signature path now matches the existing `HashRawReceipt` hash path. Requires SDK `v0.20.0-alpha.2`.
+
 ## [0.9.0-alpha.1] - 2026-06-19
 
 ### Added

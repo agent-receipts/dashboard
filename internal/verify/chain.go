@@ -35,11 +35,13 @@ type ChainLinkResult struct {
 // verified using the ar SDK; SignatureValid will be set per receipt.
 // When publicKeyPEM is empty, signature checks are skipped (SignatureValid is nil).
 //
-// Hash linkage is recomputed from each receipt's verbatim wire bytes
-// (receipt.HashRawReceipt), which is the canonical hash form that the
-// collector stored and an auditor would reproduce. Hashing the re-marshalled Go struct
-// instead (receipt.HashReceipt) drops any forward-compat fields a newer SDK
-// emitted, making a valid chain look broken — issue #719.
+// Both hash linkage and signatures are recomputed from each receipt's verbatim
+// wire bytes — receipt.HashRawReceipt and receipt.VerifyRaw — the canonical
+// forms the collector stored and an auditor would reproduce. Round-tripping
+// through the Go struct instead (receipt.HashReceipt / receipt.Verify) drops any
+// forward-compat field a newer SDK emitted inside the signed payload before
+// hashing or canonicalizing, making a valid chain look broken (issue #719) or a
+// valid signature look forged (issue #73).
 func VerifyChainLinks(receipts []store.ChainReceipt, publicKeyPEM string) ChainLinkResult {
 	if len(receipts) == 0 {
 		return ChainLinkResult{Valid: true, Length: 0, BrokenAt: -1}
@@ -82,7 +84,7 @@ func VerifyChainLinks(receipts []store.ChainReceipt, publicKeyPEM string) ChainL
 		}
 
 		if publicKeyPEM != "" {
-			ok, err := receipt.Verify(r, publicKeyPEM)
+			ok, err := receipt.VerifyRaw(cr.Raw, publicKeyPEM)
 			if err != nil {
 				log.Printf("signature verify error for receipt %s: %v", r.ID, err)
 			}
