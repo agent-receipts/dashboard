@@ -3144,6 +3144,9 @@
               <div class="muted text-xs mb-1">Issuer</div>
               <div class="font-mono text-xs">${escapeHtml(r.issuer.id)}</div>
               ${r.issuer.name ? `<div class="muted text-xs">${escapeHtml(r.issuer.name)}</div>` : ''}
+              ${r.issuer.type ? `<div class="text-xs mt-1"><span class="badge badge-unknown">${escapeHtml(r.issuer.type)}</span></div>` : ''}
+              ${r.issuer.model ? `<div class="muted text-xs mt-1">model <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.model)}</span></div>` : ''}
+              ${r.issuer.operator ? `<div class="muted text-xs">operator <span style="color:var(--text);">${escapeHtml(r.issuer.operator.name || '')}</span>${r.issuer.operator.id ? ` <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.operator.id)}</span>` : ''}</div>` : ''}
               ${r.issuer.runtime && r.issuer.runtime.agent_id ? `<div class="muted text-xs mt-1">runtime.agent_id <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_id)}</span></div>` : ''}
               ${r.issuer.runtime && r.issuer.runtime.agent_type ? `<div class="muted text-xs">runtime.agent_type <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.agent_type)}</span></div>` : ''}
               ${r.issuer.runtime && r.issuer.runtime.model ? `<div class="muted text-xs">runtime.model <span class="font-mono" style="color:var(--text);">${escapeHtml(r.issuer.runtime.model)}</span></div>` : ''}
@@ -3152,6 +3155,7 @@
             <div>
               <div class="muted text-xs mb-1">Principal</div>
               <div class="font-mono text-xs">${escapeHtml(subj.principal.id)}</div>
+              ${subj.principal.type ? `<div class="text-xs mt-1"><span class="badge badge-unknown">${escapeHtml(subj.principal.type)}</span></div>` : ''}
             </div>
           </div>
 

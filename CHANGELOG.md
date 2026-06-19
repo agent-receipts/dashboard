@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured issuer and principal details in the receipt detail view** — the detail modal now renders the issuer's `type` and (when present) top-level `model` and `operator` (`{name, id}`) as their own labelled fields, and shows the principal's `type` as a badge alongside its id. Previously these fields were only visible in the raw JSON blob. All new fields render conditionally and degrade gracefully when absent.
 - **Action type taxonomy awareness** — the dashboard now surfaces the SDK's built-in action-type registry so auditors can interpret raw action types without external docs. A new `GET /api/taxonomy` endpoint serves every known action type with its description and default risk level, grouped by category (Filesystem, System, Data, Network, Diagnostic, Other). The Actions view gains a collapsible **Action type reference** card listing all built-ins grouped by category, and known action types in the receipts list, Actions stats table, and receipt detail now carry a hover tooltip ("Read a file · default risk: low"); the detail modal additionally shows a **Meaning** row. Unknown action types degrade gracefully to plain text.
 
 ## [0.9.0-alpha.1] - 2026-06-19
