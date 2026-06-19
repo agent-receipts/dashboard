@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Connected-component highlight in agent graph** — clicking a node now highlights its entire state-dep connected component (all agents reachable via shared-resource contention edges), dims everything outside it, and emphasizes the in-component state-dep edges. Delegation edges are excluded from component computation so the root node does not collapse the whole graph into one component. A node with no state-dep edges highlights only itself, preserving today's single-node behavior. The blast-radius panel and receipts filter remain keyed to the clicked node, unchanged.
+
 ## [0.8.0] - 2026-06-12
 
 ### Fixed

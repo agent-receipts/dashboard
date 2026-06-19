@@ -417,7 +417,15 @@
     .sg-node { cursor: pointer; }
     .sg-node circle { transition: filter 0.12s; }
     .sg-node:hover circle { filter: brightness(1.25); }
-    .sg-node.sg-selected circle { stroke: var(--accent); stroke-width: 3; }
+    /* Highlight strokes target the main node circle (circle:last-of-type), not the
+       optional risk ring (rendered first), so the risk signal stays visible. --text
+       reads clearly on both the green sub-agent fill and the blue root fill. */
+    .sg-node.sg-selected circle:last-of-type { stroke: var(--text); stroke-width: 3; }
+    .sg-node.sg-comp circle:last-of-type { stroke: var(--text); stroke-width: 2; stroke-dasharray: 3 2; }
+    svg.sg-has-selection .sg-node:not(.sg-selected):not(.sg-comp) { opacity: 0.3; }
+    svg.sg-has-selection .sg-edge-delegation,
+    svg.sg-has-selection .sg-edge-state:not(.sg-edge-active) { opacity: 0.15; }
+    .sg-edge-state.sg-edge-active { stroke-width: 3; opacity: 1; }
     .sg-edge { stroke: var(--border-strong); stroke-width: 1.5; fill: none; }
     .sg-edge-delegation { stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
     .sg-edge-state { stroke: var(--accent); stroke-width: 2; fill: none; opacity: 0.85; }
@@ -3522,22 +3530,76 @@
       btn.setAttribute('aria-expanded', String(collapsed));
     }
 
+    // graphComponent returns the set of node ids reachable from startId via
+    // state-dependency edges (the cross-agent contention edges) within one svg.
+    // Delegation edges are excluded — they connect every node through the root,
+    // which would make the whole graph one component. Isolated nodes return {startId}.
+    function graphComponent(startId, svg) {
+      const adj = new Map();
+      svg.querySelectorAll('.sg-edge-state').forEach(e => {
+        const a = e.dataset.from, b = e.dataset.to;
+        if (!a || !b) return;
+        if (!adj.has(a)) adj.set(a, []);
+        if (!adj.has(b)) adj.set(b, []);
+        adj.get(a).push(b);
+        adj.get(b).push(a);
+      });
+      const seen = new Set([startId]);
+      const stack = [startId];
+      while (stack.length) {
+        const cur = stack.pop();
+        for (const nb of (adj.get(cur) || [])) {
+          if (!seen.has(nb)) { seen.add(nb); stack.push(nb); }
+        }
+      }
+      return seen;
+    }
+
+    // applyComponentHighlight highlights the clicked node and its state-dep
+    // connected component within the node's own svg, emphasizing in-component
+    // state-dep edges and de-emphasizing everything outside. Toggling a node that
+    // is already selected clears the highlight. Returns the clicked node id when a
+    // component is now highlighted, or null when the click cleared the selection.
+    function applyComponentHighlight(el) {
+      const svg = el.closest('svg');
+      if (!svg) return null;
+      const nodeId = el.dataset.nodeId;
+      const wasSelected = el.classList.contains('sg-selected');
+
+      // Clear any prior highlight in this svg.
+      svg.querySelectorAll('.sg-node').forEach(n => n.classList.remove('sg-selected', 'sg-comp'));
+      svg.querySelectorAll('.sg-edge-state').forEach(e => e.classList.remove('sg-edge-active'));
+      svg.classList.remove('sg-has-selection');
+
+      if (wasSelected) return null;
+
+      const comp = graphComponent(nodeId, svg);
+      svg.classList.add('sg-has-selection');
+      svg.querySelectorAll('.sg-node').forEach(n => {
+        if (comp.has(n.dataset.nodeId)) {
+          n.classList.add(n.dataset.nodeId === nodeId ? 'sg-selected' : 'sg-comp');
+        }
+      });
+      svg.querySelectorAll('.sg-edge-state').forEach(e => {
+        if (comp.has(e.dataset.from) && comp.has(e.dataset.to)) e.classList.add('sg-edge-active');
+      });
+      return nodeId;
+    }
+
     // selectInlineGraphNode handles node clicks in the receipts view inline graph.
     // Clicking a node filters the receipts table to that agent's rows and shows
     // the blast-radius panel when attribution data is available.
     function selectInlineGraphNode(el) {
-      const nodeId   = el.dataset.nodeId;
-      const selected = el.classList.contains('sg-selected');
-      document.querySelectorAll('#inline-graph-body .sg-node').forEach(n => n.classList.remove('sg-selected'));
+      const nodeId = el.dataset.nodeId;
+      const selected = applyComponentHighlight(el);
       const blastPanel = document.getElementById('inline-graph-blast');
-      if (selected) {
+      if (!selected) {
         filterInlineReceiptsByAgent(undefined);
         if (blastPanel) blastPanel.style.display = 'none';
-      } else {
-        el.classList.add('sg-selected');
-        filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
-        if (blastPanel) renderBlastRadius(nodeId, blastPanel, inlineGraphState.attribution);
+        return;
       }
+      filterInlineReceiptsByAgent(nodeId === '__root__' ? null : nodeId);
+      if (blastPanel) renderBlastRadius(nodeId, blastPanel, inlineGraphState.attribution);
     }
 
     // filterInlineReceiptsByAgent shows/hides rows in #receipts-table by agent_id.
@@ -3718,7 +3780,7 @@
         const cy = (f.y + t.y) / 2 + (len > 0 ?  dx / len * 20 : 0);
         const rcount = e.resources ? e.resources.length : 0;
         const label = rcount === 1 ? escapeHtml(e.resources[0]) : rcount + ' shared files';
-        return `<path class="sg-edge-state" d="M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}" marker-end="url(#sg-arr)"><title>state dep: ${label}</title></path>`;
+        return `<path class="sg-edge-state" data-from="${escapeAttr(e.from)}" data-to="${escapeAttr(e.to)}" d="M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}" marker-end="url(#sg-arr)"><title>state dep: ${label}</title></path>`;
       }).join('');
 
       // Risk ring colours. medium is muted; high/critical are prominent.
@@ -3751,7 +3813,7 @@
       }).join('');
 
       container.innerHTML = `
-        <p class="sg-hint">Click a node to see blast radius and filter receipts · click again to reset</p>
+        <p class="sg-hint">Click a node to highlight its shared-resource group and filter receipts · click again to reset</p>
         <svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" preserveAspectRatio="xMidYMid meet"
              style="max-height:${VB_H}px;display:block;margin:0 auto;" aria-label="Agent delegation and state-dependency graph">
           <defs>
@@ -3770,27 +3832,24 @@
     // the receipts panel filtered to that agent. On first click also shows the
     // blast-radius panel (file coverage, state deps, semantic dep warning).
     // A second click on the same node resets the filter and hides the panel.
+    // The entire state-dep connected component is highlighted; blast radius and
+    // receipts filter remain keyed to the clicked node only.
     function selectGraphNode(el) {
-      const nodeId   = el.dataset.nodeId;
-      const selected = el.classList.contains('sg-selected');
-
-      document.querySelectorAll('#session-graph-svg-panel .sg-node').forEach(n => n.classList.remove('sg-selected'));
-
+      const nodeId = el.dataset.nodeId;
+      const selected = applyComponentHighlight(el);
       const panel      = document.getElementById('session-graph-receipts-panel');
       const blastPanel = document.getElementById('session-graph-blast-panel');
-
-      if (selected) {
+      if (!selected) {
         renderSessionGraphReceipts(sessionGraphState.receipts, panel);
         if (blastPanel) blastPanel.style.display = 'none';
-      } else {
-        el.classList.add('sg-selected');
-        const agentId = nodeId === '__root__' ? null : nodeId;
-        const filtered  = sessionGraphState.receipts.filter(r =>
-          agentId === null ? !r.agent_id : r.agent_id === agentId
-        );
-        renderSessionGraphReceipts(filtered, panel);
-        if (blastPanel) renderBlastRadius(nodeId, blastPanel);
+        return;
       }
+      const agentId = nodeId === '__root__' ? null : nodeId;
+      const filtered = sessionGraphState.receipts.filter(r =>
+        agentId === null ? !r.agent_id : r.agent_id === agentId
+      );
+      renderSessionGraphReceipts(filtered, panel);
+      if (blastPanel) renderBlastRadius(nodeId, blastPanel);
     }
 
     // renderBlastRadius populates the attribution panel for the selected node.
