@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -281,9 +282,14 @@ func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Reques
 	}
 	data, err := readFileLimited(expanded, maxForensicKeyBody)
 	if err != nil {
-		if isNotExist(err) {
+		switch {
+		case isNotExist(err):
 			writeError(w, http.StatusBadRequest, "key file not found: "+req.Path)
-		} else {
+		case errors.Is(err, errFileTooLarge):
+			writeError(w, http.StatusRequestEntityTooLarge, "forensic key file is too large")
+		case errors.Is(err, errNotRegularFile):
+			writeError(w, http.StatusBadRequest, "key file must be a regular file")
+		default:
 			writeError(w, http.StatusBadRequest, "could not read key file: "+err.Error())
 		}
 		return

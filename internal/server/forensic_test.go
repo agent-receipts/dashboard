@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -610,5 +611,134 @@ func TestForensicAutoLoadSkipsNonLoopback(t *testing.T) {
 	loaded, _ := srv.forensic.status()
 	if loaded {
 		t.Fatal("key was auto-loaded on non-loopback bind, should have been skipped")
+	}
+}
+
+// ---------- readFileLimited hardening tests ----------
+
+// TestReadFileLimited_RegularFile verifies the happy path still works.
+func TestReadFileLimited_RegularFile(t *testing.T) {
+	f := t.TempDir() + "/ok.bin"
+	want := []byte("hello forensic")
+	if err := os.WriteFile(f, want, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := readFileLimited(f, 1024)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestReadFileLimited_RejectsDirectory verifies that a directory path is
+// rejected as a non-regular file.
+func TestReadFileLimited_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	_, err := readFileLimited(dir, 1024)
+	if err == nil {
+		t.Fatal("expected error for directory, got nil")
+	}
+}
+
+// TestReadFileLimited_RejectsSymlink verifies that a symlink (even one that
+// points at a valid regular file) is rejected. We use Lstat, so the symlink
+// itself is seen as a non-regular file rather than its target.
+func TestReadFileLimited_RejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := dir + "/real.bin"
+	link := dir + "/link.bin"
+	if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	_, err := readFileLimited(link, 1024)
+	if err == nil {
+		t.Fatal("expected error for symlink, got nil")
+	}
+}
+
+// TestReadFileLimited_ReturnsTooLarge verifies errFileTooLarge is returned
+// when the file exceeds the limit.
+func TestReadFileLimited_ReturnsTooLarge(t *testing.T) {
+	f := t.TempDir() + "/big.bin"
+	if err := os.WriteFile(f, bytes.Repeat([]byte("x"), 10), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := readFileLimited(f, 5)
+	if !errors.Is(err, errFileTooLarge) {
+		t.Fatalf("got error %v, want errFileTooLarge", err)
+	}
+}
+
+// ---------- HTTP endpoint tests for the new hardening ----------
+
+// TestForensicKeyLoadPath_OversizedFile verifies that the path endpoint
+// returns 413 (not 400) when the key file exceeds the size limit.
+func TestForensicKeyLoadPath_OversizedFile(t *testing.T) {
+	// Write a file larger than maxForensicKeyBody.
+	bigFile := t.TempDir() + "/big.key"
+	if err := os.WriteFile(bigFile, bytes.Repeat([]byte("x"), maxForensicKeyBody+1), 0o600); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": bigFile})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d, want 413", w.Code)
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsDirectory verifies that pointing the path
+// endpoint at a directory returns 400 (not a hang or 500).
+func TestForensicKeyLoadPath_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": dir})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsSymlink verifies that pointing the path
+// endpoint at a symlink (even one pointing to a valid key file) is rejected.
+func TestForensicKeyLoadPath_RejectsSymlink(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	dir := t.TempDir()
+	target := dir + "/forensic.key"
+	link := dir + "/link.key"
+	if err := os.WriteFile(target, priv, 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": link})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
+// TestForensicAutoLoad_RejectsNonRegularFile verifies that tryLoadDefaultForensicKey
+// does not hang or crash when ForensicKeyPath points at a non-regular file such
+// as a directory. The server must start successfully and leave the key unloaded.
+func TestForensicAutoLoad_RejectsNonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	// Use the directory itself as the "key path" — clearly non-regular.
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyPath: dir})
+	loaded, _ := srv.forensic.status()
+	if loaded {
+		t.Fatal("key was auto-loaded from a directory, should have been skipped")
 	}
 }

@@ -570,21 +570,44 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// readFileLimited reads up to limit+1 bytes from path. Returns an error if the
-// file exceeds limit, so callers can reject oversized inputs without reading
-// the whole file into memory first.
+// errFileTooLarge is returned by readFileLimited when a file exceeds the byte
+// limit. Callers can test for it with errors.Is to distinguish an over-size
+// file from other read errors and map it to an appropriate HTTP status (413).
+var errFileTooLarge = errors.New("file too large")
+
+// errNotRegularFile is returned by readFileLimited when the path is not a
+// regular file (symlink, FIFO, device, directory). Callers can test for it with
+// errors.Is to surface a precise message instead of a raw read error.
+var errNotRegularFile = errors.New("not a regular file")
+
+// readFileLimited reads up to limit bytes from path. It returns errFileTooLarge
+// when the file exceeds limit. Non-regular files (symlinks, FIFOs, devices,
+// directories) are rejected via Lstat before opening, so a FIFO at the path
+// cannot hang startup and a device cannot be read through the path endpoint.
+// A residual Lstat/Open TOCTOU window remains, which is acceptable here: the
+// path is operator-supplied on a loopback-only, read-only dashboard.
 func readFileLimited(path string, limit int64) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errNotRegularFile
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("file exceeds %d byte limit", limit)
+		zero(data)
+		return nil, errFileTooLarge
 	}
 	return data, nil
 }
