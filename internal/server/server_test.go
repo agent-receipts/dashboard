@@ -10,6 +10,7 @@ import (
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
 	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
+	"github.com/agent-receipts/ar/sdk/go/taxonomy"
 	"github.com/agent-receipts/dashboard/internal/store"
 )
 
@@ -1327,5 +1328,79 @@ func TestSessionAttributionEndpoint_MissingSession(t *testing.T) {
 	}
 	if result.Coverage.TotalReceipts != 0 {
 		t.Errorf("TotalReceipts = %d, want 0 for unknown session", result.Coverage.TotalReceipts)
+	}
+}
+
+func TestTaxonomyEndpoint(t *testing.T) {
+	srv := setupServer(t)
+	req := httptest.NewRequest("GET", "/api/taxonomy", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", w.Code)
+	}
+
+	var body struct {
+		Categories []taxonomyCategory `json:"categories"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Every category must carry a name and at least one fully-populated entry —
+	// the frontend renders type, description and risk level for each.
+	byType := map[string]taxonomy.ActionTypeEntry{}
+	for _, c := range body.Categories {
+		if c.Name == "" {
+			t.Error("category with empty name")
+		}
+		if len(c.Actions) == 0 {
+			t.Errorf("category %q has no actions", c.Name)
+		}
+		for _, a := range c.Actions {
+			if a.Type == "" || a.Description == "" || a.RiskLevel == "" {
+				t.Errorf("incomplete entry in %q: %+v", c.Name, a)
+			}
+			// Each type must belong to exactly one category — overwriting here
+			// would hide a type duplicated across categories.
+			if _, dup := byType[a.Type]; dup {
+				t.Errorf("action type %q appears in more than one category", a.Type)
+			}
+			byType[a.Type] = a
+		}
+	}
+
+	// Completeness: every built-in the SDK knows about must appear in exactly
+	// one category. This turns an SDK upgrade that adds a new action type into a
+	// failing test rather than a built-in silently missing from the reference
+	// view and its tooltips.
+	for _, want := range taxonomy.AllActions() {
+		got, ok := byType[want.Type]
+		if !ok {
+			t.Errorf("AllActions entry %q missing from /api/taxonomy response", want.Type)
+			continue
+		}
+		if got != want {
+			t.Errorf("entry %q = %+v, want %+v", want.Type, got, want)
+		}
+	}
+
+	// Spot-check representative built-ins and their default risk levels so a
+	// regression in the SDK wiring is caught.
+	wantRisk := map[string]receipt.RiskLevel{
+		"filesystem.file.read":      receipt.RiskLow,
+		"system.command.execute":    receipt.RiskHigh,
+		taxonomy.UnknownAction.Type: receipt.RiskMedium,
+	}
+	for typ, risk := range wantRisk {
+		got, ok := byType[typ]
+		if !ok {
+			t.Errorf("taxonomy missing action type %q", typ)
+			continue
+		}
+		if got.RiskLevel != risk {
+			t.Errorf("%s risk = %q, want %q", typ, got.RiskLevel, risk)
+		}
 	}
 }

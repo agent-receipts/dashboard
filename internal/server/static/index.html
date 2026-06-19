@@ -190,6 +190,16 @@
     .badge-medium   { background: rgba(210,153,34,0.15); color: var(--risk-medium); }
     .badge-high     { background: rgba(248,81,73,0.15);  color: var(--risk-high); }
     .badge-critical { background: rgba(255,123,114,0.2); color: var(--risk-critical); border: 1px solid rgba(255,123,114,0.3); }
+    /* Action types that map to a known built-in taxonomy entry get a dotted
+       underline + help cursor, signalling that a hover tooltip explains their
+       meaning and default risk. Unknown types render as plain text. */
+    .taxonomy-known { cursor: help; border-bottom: 1px dotted var(--border); }
+    /* Reference table in the Actions view: known action types grouped by
+       category, each with its description and default risk level. */
+    .taxonomy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .taxonomy-group-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 6px; }
+    .taxonomy-table td { padding: 4px 8px; vertical-align: top; }
+    .taxonomy-table td:last-child { text-align: right; white-space: nowrap; }
     .badge-success      { background: rgba(63,185,80,0.15);   color: var(--status-success); }
     .badge-failure      { background: rgba(248,81,73,0.15);   color: var(--status-failure); }
     .badge-pending      { background: rgba(210,153,34,0.15);  color: var(--status-pending); }
@@ -881,6 +891,7 @@
 
     <!-- Actions view -->
     <div id="view-actions" class="hidden">
+      <div id="taxonomy-reference" class="card p-4 mb-6" data-card="taxonomy-reference" style="display:none;"></div>
       <div id="actions-table-container"></div>
     </div>
 
@@ -1514,8 +1525,105 @@
     let actionsShowAll = false;
     const ACTIONS_PAGE_SIZE = 10;
 
+    // ---------- Taxonomy reference ----------
+    // The SDK's built-in action-type registry, fetched once from /api/taxonomy.
+    // It powers the reference table in the Actions view and the hover tooltips
+    // that explain raw action types in receipt lists and detail. A load failure
+    // is non-fatal: the UI just renders action types without their meaning.
+    let taxonomyCategories = [];        // [{ name, actions: [{ type, description, risk_level }] }]
+    const taxonomyByType = new Map();   // type -> { description, risk_level }
+    let taxonomyPromise = null;         // cached fetch so we load the registry once
+
+    // ensureTaxonomy fetches the registry at most once and returns the in-flight
+    // (or settled) promise, so callers can await readiness without re-fetching.
+    function ensureTaxonomy() {
+      if (!taxonomyPromise) taxonomyPromise = loadTaxonomy();
+      return taxonomyPromise;
+    }
+
+    async function loadTaxonomy() {
+      try {
+        const data = await fetchJSON('/api/taxonomy');
+        taxonomyCategories = data.categories || [];
+        taxonomyByType.clear();
+        taxonomyCategories.forEach(c => (c.actions || []).forEach(a => {
+          taxonomyByType.set(a.type, { description: a.description, risk_level: a.risk_level });
+        }));
+      } catch (err) {
+        console.warn('taxonomy load failed:', err);
+        // Clear the cached promise so the next caller re-fetches; otherwise a
+        // transient boot-time failure would suppress tooltips and the reference
+        // card for the whole page lifetime.
+        taxonomyPromise = null;
+      }
+    }
+
+    // taxonomyTitle returns a tooltip string for a known action type
+    // ("Read a file · default risk: low"), or '' when the type is unknown so
+    // callers fall back to plain text.
+    function taxonomyTitle(type) {
+      const e = taxonomyByType.get(type);
+      return e ? `${e.description} · default risk: ${e.risk_level}` : '';
+    }
+
+    // actionTypeCell renders a raw action type, wrapping it in a tooltip span
+    // when the type is a known built-in so auditors can read its meaning and
+    // default risk on hover. Unknown types render as plain escaped text.
+    function actionTypeCell(type) {
+      const title = taxonomyTitle(type);
+      if (!title) return escapeHtml(type);
+      return `<span class="taxonomy-known" title="${escapeAttr(title)}">${escapeHtml(type)}</span>`;
+    }
+
+    // taxonomyMeaningBlock returns a receipt-detail "Meaning" row for a known
+    // action type (its description plus default risk level), or '' when the type
+    // is not a built-in.
+    function taxonomyMeaningBlock(type) {
+      const e = taxonomyByType.get(type);
+      if (!e) return '';
+      return kvBlock('Meaning', `${escapeHtml(e.description)} <span class="subtle">· default risk ${escapeHtml(e.risk_level)}</span>`, { small: true });
+    }
+
+    // renderTaxonomyReference fills the collapsible reference card in the Actions
+    // view with every known action type grouped by category, each showing its
+    // description and default risk level. Hidden entirely when the taxonomy could
+    // not be loaded.
+    function renderTaxonomyReference() {
+      const el = document.getElementById('taxonomy-reference');
+      if (!el) return;
+      const cats = taxonomyCategories.filter(c => (c.actions || []).length);
+      if (!cats.length) { el.style.display = 'none'; return; }
+      el.style.display = '';
+
+      const groups = cats.map(c => `
+        <div class="taxonomy-group">
+          <h4 class="taxonomy-group-title">${escapeHtml(c.name)}</h4>
+          <table class="receipts taxonomy-table">
+            <tbody>
+              ${c.actions.map(a => `
+                <tr>
+                  <td class="font-mono text-xs">${escapeHtml(a.type)}</td>
+                  <td class="muted text-xs">${escapeHtml(a.description)}</td>
+                  <td><span class="badge ${riskClass(a.risk_level)}">${escapeHtml(a.risk_level)}</span></td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`).join('');
+
+      el.innerHTML = `
+        <div class="card-head flex items-center justify-between mb-3">
+          <div>
+            <h3 class="text-sm font-medium muted">Action type reference</h3>
+            <p class="text-xs subtle" style="margin-top:2px;">Built-in action types from the Agent Receipts taxonomy, with their meaning and default risk level.</p>
+          </div>
+          <button class="card-collapse" type="button" aria-label="Collapse Action type reference" onclick="toggleCardCollapse('taxonomy-reference')">▾</button>
+        </div>
+        <div class="taxonomy-grid">${groups}</div>`;
+    }
+
     async function loadActions() {
       const gen = ++poller.generation;
+      ensureTaxonomy().then(() => { if (gen === poller.generation) renderTaxonomyReference(); });
       document.getElementById('actions-table-container').innerHTML = `
         <div class="receipts-table-wrap">
           <div class="receipts-table-scroll">
@@ -1604,7 +1712,7 @@
         </div>`;
         return `
           <tr style="cursor:pointer;" data-action="${escapeAttr(a.action_type)}" onclick="filterToActionFailures(this.dataset.action)" title="Click to view failure receipts for ${escapeAttr(a.action_type)}">
-            <td class="font-mono text-xs">${escapeHtml(a.action_type)}</td>
+            <td class="font-mono text-xs">${actionTypeCell(a.action_type)}</td>
             <td class="muted" style="font-variant-numeric:tabular-nums;">${a.total}</td>
             <td class="muted" style="font-variant-numeric:tabular-nums;">${a.failure}</td>
             <td style="min-width:160px;">${rateBar}</td>
@@ -2432,7 +2540,7 @@
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
           <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
-          <td class="font-mono text-xs">${escapeHtml(r.action_type)}${disclosureIndicatorHTML(r)}</td>
+          <td class="font-mono text-xs">${actionTypeCell(r.action_type)}${disclosureIndicatorHTML(r)}</td>
           <td><span class="badge ${riskClass(r.risk_level)}">${escapeHtml(r.risk_level)}</span></td>
           <td><span class="badge ${statusClass(r.status)}">${escapeHtml(r.status)}</span>${mismatchIndicatorHTML(r)}</td>
           <td class="muted font-mono text-xs" data-chain-id="${escapeAttr(r.chain_id)}" onclick="event.stopPropagation(); showChain(this.dataset.chainId)" style="cursor:pointer;">${escapeHtml(truncate(r.chain_id, 20))}</td>
@@ -3022,12 +3130,13 @@
           <div class="grid grid-cols-2 gap-4">
             ${kvBlock('Server',   subj.action.target ? escapeHtml(subj.action.target.system) : '<span class="subtle">—</span>', { mono: true })}
             ${kvBlock('Tool',     subj.action.tool_name ? escapeHtml(subj.action.tool_name) : '<span class="subtle">—</span>', { mono: true })}
-            ${kvBlock('Action type', escapeHtml(subj.action.type), { mono: true })}
+            ${kvBlock('Action type', actionTypeCell(subj.action.type), { mono: true })}
             ${kvBlock('Risk',     `<span class="badge ${riskClass(subj.action.risk_level)}">${escapeHtml(subj.action.risk_level)}</span>`)}
             ${kvBlock('Status',   `<span class="badge ${statusClass(subj.outcome.status)}">${escapeHtml(subj.outcome.status)}</span>`)}
             ${kvBlock('Timestamp', `<span title="${escapeAttr(subj.action.timestamp)}">${formatTime(subj.action.timestamp)}</span>`)}
           </div>
 
+          ${taxonomyMeaningBlock(subj.action.type)}
           ${subj.action.target && subj.action.target.resource ? kvBlock('Resource', escapeHtml(subj.action.target.resource), { mono: true, small: true }) : ''}
 
           <div class="grid grid-cols-2 gap-4">
@@ -4637,6 +4746,10 @@
     // a bookmarked #range=7d opens with the correct window selected.
     readOverviewRangeFromHash();
     applyRangeButtonState();
+
+    // Fetch the static action-type taxonomy once at boot so list/detail tooltips
+    // and the reference view have it ready. Non-blocking and non-fatal.
+    ensureTaxonomy();
 
     loadPollConfig().then(async () => {
       // If the URL contains ?q=<term>, pre-populate the search box and open

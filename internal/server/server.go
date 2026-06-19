@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-receipts/ar/sdk/go/taxonomy"
 	"github.com/agent-receipts/dashboard/internal/store"
 	"github.com/agent-receipts/dashboard/internal/verify"
 )
@@ -115,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats/timeseries", s.handleTimeseriesStats)
 	mux.HandleFunc("GET /api/stats/actions", s.handleActionStats)
 	mux.HandleFunc("GET /api/stats/servers", s.handleServerStats)
+	mux.HandleFunc("GET /api/taxonomy", s.handleTaxonomy)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/sessions/{sessionID}/attribution", s.handleSessionAttribution)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
@@ -339,6 +341,30 @@ func (s *Server) handleActionStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"actions": stats})
+}
+
+// taxonomyCategory groups built-in action types under a human-readable heading
+// for the reference view.
+type taxonomyCategory struct {
+	Name    string                     `json:"name"`
+	Actions []taxonomy.ActionTypeEntry `json:"actions"`
+}
+
+// handleTaxonomy serves the SDK's built-in action-type registry — every known
+// action type with its description and default risk level, grouped by category.
+// The frontend uses it to render a reference view and to annotate raw action
+// types in receipt lists and detail with their meaning. It is static reference
+// data (no store access), so it never depends on which receipts exist.
+func (s *Server) handleTaxonomy(w http.ResponseWriter, r *http.Request) {
+	categories := []taxonomyCategory{
+		{Name: "Filesystem", Actions: taxonomy.FilesystemActions},
+		{Name: "System", Actions: taxonomy.SystemActions},
+		{Name: "Data", Actions: taxonomy.DataActions},
+		{Name: "Network", Actions: taxonomy.NetworkActions},
+		{Name: "Diagnostic", Actions: taxonomy.DiagnosticActions},
+		{Name: "Other", Actions: []taxonomy.ActionTypeEntry{taxonomy.UnknownAction}},
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
 }
 
 func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
