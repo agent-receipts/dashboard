@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agent-receipts/ar/sdk/go/receipt"
@@ -442,12 +444,13 @@ func TestForensicKeyLoadPath(t *testing.T) {
 	priv, _, fp := forensicKeyPair(t)
 
 	// Write the raw private key to a temp file.
-	keyFile := t.TempDir() + "/forensic.key"
+	dir := t.TempDir()
+	keyFile := dir + "/forensic.key"
 	if err := os.WriteFile(keyFile, priv, 0o600); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
 
-	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
 	h := srv.Handler()
 
 	body, _ := json.Marshal(map[string]string{"path": keyFile})
@@ -467,8 +470,11 @@ func TestForensicKeyLoadPath(t *testing.T) {
 }
 
 func TestForensicKeyLoadPathNotFound(t *testing.T) {
-	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
-	body, _ := json.Marshal(map[string]string{"path": "/nonexistent/forensic.key"})
+	// Use a temp dir as an allowed root so the path passes the allowlist check
+	// but the file itself does not exist.
+	dir := t.TempDir()
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
+	body, _ := json.Marshal(map[string]string{"path": dir + "/nonexistent.key"})
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
 	if w.Code != http.StatusBadRequest {
@@ -477,12 +483,13 @@ func TestForensicKeyLoadPathNotFound(t *testing.T) {
 }
 
 func TestForensicKeyLoadPathInvalidKey(t *testing.T) {
-	keyFile := t.TempDir() + "/bad.key"
+	dir := t.TempDir()
+	keyFile := dir + "/bad.key"
 	if err := os.WriteFile(keyFile, []byte("not a valid key"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
-	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
 	body, _ := json.Marshal(map[string]string{"path": keyFile})
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
@@ -522,11 +529,12 @@ func TestForensicKeyLoadPathRequiresJSONContentType(t *testing.T) {
 	}
 
 	// Sanity-check: the helper that adds Content-Type: application/json reaches
-	// the path-validation branch (400) rather than being bounced at 415.
+	// the path-validation branch rather than being bounced at 415. The path
+	// /some/key is outside any allowed directory, so we expect 403 Forbidden.
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("with application/json: got %d, want 400 (file not found)", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("with application/json: got %d, want 403 (path not in allowed dir)", w.Code)
 	}
 }
 
@@ -610,5 +618,306 @@ func TestForensicAutoLoadSkipsNonLoopback(t *testing.T) {
 	loaded, _ := srv.forensic.status()
 	if loaded {
 		t.Fatal("key was auto-loaded on non-loopback bind, should have been skipped")
+	}
+}
+
+// ---------- readFileLimited hardening tests ----------
+
+// TestReadFileLimited_RegularFile verifies the happy path still works.
+func TestReadFileLimited_RegularFile(t *testing.T) {
+	f := t.TempDir() + "/ok.bin"
+	want := []byte("hello forensic")
+	if err := os.WriteFile(f, want, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := readFileLimited(f, 1024)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestReadFileLimited_RejectsDirectory verifies that a directory path is
+// rejected as a non-regular file.
+func TestReadFileLimited_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	_, err := readFileLimited(dir, 1024)
+	if !errors.Is(err, errNotRegularFile) {
+		t.Fatalf("got error %v, want errNotRegularFile", err)
+	}
+}
+
+// TestReadFileLimited_RejectsSymlink verifies that a symlink (even one that
+// points at a valid regular file) is rejected. We use Lstat, so the symlink
+// itself is seen as a non-regular file rather than its target.
+func TestReadFileLimited_RejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := dir + "/real.bin"
+	link := dir + "/link.bin"
+	if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	_, err := readFileLimited(link, 1024)
+	if !errors.Is(err, errNotRegularFile) {
+		t.Fatalf("got error %v, want errNotRegularFile", err)
+	}
+}
+
+// TestReadFileLimited_ReturnsTooLarge verifies errFileTooLarge is returned
+// when the file exceeds the limit.
+func TestReadFileLimited_ReturnsTooLarge(t *testing.T) {
+	f := t.TempDir() + "/big.bin"
+	if err := os.WriteFile(f, bytes.Repeat([]byte("x"), 10), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := readFileLimited(f, 5)
+	if !errors.Is(err, errFileTooLarge) {
+		t.Fatalf("got error %v, want errFileTooLarge", err)
+	}
+}
+
+// ---------- HTTP endpoint tests for the new hardening ----------
+
+// TestForensicKeyLoadPath_OversizedFile verifies that the path endpoint
+// returns 413 (not 400) when the key file exceeds the size limit.
+func TestForensicKeyLoadPath_OversizedFile(t *testing.T) {
+	// Write a file larger than maxForensicKeyBody.
+	dir := t.TempDir()
+	bigFile := dir + "/big.key"
+	if err := os.WriteFile(bigFile, bytes.Repeat([]byte("x"), maxForensicKeyBody+1), 0o600); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
+	body, _ := json.Marshal(map[string]string{"path": bigFile})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d, want 413", w.Code)
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsDirectory verifies that pointing the path
+// endpoint at a directory returns 400 (not a hang or 500). The directory
+// itself is added to ForensicKeyDirs so it passes the allowlist check and the
+// rejection comes from readFileLimited (non-regular file), not the allowlist.
+func TestForensicKeyLoadPath_RejectsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// Add the parent so the directory path itself (an exact-match of the root)
+	// passes the allowlist and is rejected by readFileLimited as non-regular.
+	parent := filepath.Dir(dir)
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{parent}})
+	body, _ := json.Marshal(map[string]string{"path": dir})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsSymlink verifies that pointing the path
+// endpoint at a symlink (even one pointing to a valid key file) is rejected.
+// The dir is added to ForensicKeyDirs so the allowlist passes and rejection
+// comes from readFileLimited (Lstat sees a symlink, not a regular file).
+func TestForensicKeyLoadPath_RejectsSymlink(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	dir := t.TempDir()
+	target := dir + "/forensic.key"
+	link := dir + "/link.key"
+	if err := os.WriteFile(target, priv, 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
+	body, _ := json.Marshal(map[string]string{"path": link})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+}
+
+// TestForensicAutoLoad_RejectsNonRegularFile verifies that tryLoadDefaultForensicKey
+// does not hang or crash when ForensicKeyPath points at a non-regular file such
+// as a directory. The server must start successfully and leave the key unloaded.
+func TestForensicAutoLoad_RejectsNonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	// Use the directory itself as the "key path" — clearly non-regular.
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyPath: dir})
+	loaded, _ := srv.forensic.status()
+	if loaded {
+		t.Fatal("key was auto-loaded from a directory, should have been skipped")
+	}
+}
+
+// ---------- validateForensicKeyPath barrier tests ----------
+
+func TestValidateForensicKeyPath(t *testing.T) {
+	// Allowed roots for these tests.
+	allowedDirs := []string{"/etc/agent-receipts", "/var/lib"}
+
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr error
+	}{
+		{"absolute", "/etc/agent-receipts/forensic.key", "/etc/agent-receipts/forensic.key", nil},
+		{"cleans redundant separators", "/var//lib/./forensic.key", "/var/lib/forensic.key", nil},
+		{"relative rejected", "forensic.key", "", errPathNotAbsolute},
+		{"dot-dot rejected", "/home/op/../../etc/passwd", "", errPathInvalid},
+		{"dot-dot backslash rejected", `/home/op\..\secret`, "", errPathInvalid},
+		{"nul byte rejected", "/home/op/forensic\x00.key", "", errPathInvalid},
+		{"outside allowed dirs", "/tmp/forensic.key", "", errPathNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateForensicKeyPath(tc.path, allowedDirs)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("got err %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateForensicKeyPathAllowlist verifies all allowlist edge cases.
+func TestValidateForensicKeyPathAllowlist(t *testing.T) {
+	root := "/home/user"
+	allowedDirs := []string{root}
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr error
+	}{
+		{
+			name:    "inside allowed dir",
+			path:    "/home/user/keys/forensic.key",
+			wantErr: nil,
+		},
+		{
+			name:    "equals allowed root",
+			path:    "/home/user",
+			wantErr: nil,
+		},
+		{
+			name:    "outside all roots",
+			path:    "/tmp/forensic.key",
+			wantErr: errPathNotAllowed,
+		},
+		{
+			// /home/user must not allow /home/usr2/x: the prefix check requires
+			// a path separator after the root to prevent a sibling directory from
+			// matching a root that is a prefix of its name.
+			name:    "boundary: sibling dir with common prefix not allowed",
+			path:    "/home/usr2/x",
+			wantErr: errPathNotAllowed,
+		},
+		{
+			name:    "still rejects dotdot",
+			path:    "/home/user/../etc/passwd",
+			wantErr: errPathInvalid,
+		},
+		{
+			name:    "still rejects NUL",
+			path:    "/home/user/forensic\x00.key",
+			wantErr: errPathInvalid,
+		},
+		{
+			name:    "still rejects relative",
+			path:    "forensic.key",
+			wantErr: errPathNotAbsolute,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateForensicKeyPath(tc.path, allowedDirs)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got err %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestForensicKeyPathEndpointAllowlist verifies that a key file in an
+// explicitly configured ForensicKeyDirs entry loads successfully (200).
+func TestForensicKeyPathEndpointAllowlist(t *testing.T) {
+	priv, _, fp := forensicKeyPair(t)
+	dir := t.TempDir()
+	keyFile := dir + "/forensic.key"
+	if err := os.WriteFile(keyFile, priv, 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{dir}})
+	body, _ := json.Marshal(map[string]string{"path": keyFile})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200 (body=%s)", w.Code, w.Body)
+	}
+	var st forensicKeyStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !st.Loaded || st.Fingerprint != fp {
+		t.Fatalf("status: loaded=%v fingerprint=%q want loaded=true fingerprint=%q", st.Loaded, st.Fingerprint, fp)
+	}
+}
+
+// TestForensicKeyPathEndpointNotAllowed verifies that a key file outside all
+// allowed directories is rejected with 403 Forbidden.
+func TestForensicKeyPathEndpointNotAllowed(t *testing.T) {
+	priv, _, _ := forensicKeyPair(t)
+	// Write the key to a temp dir, but do NOT add that dir to ForensicKeyDirs.
+	dir := t.TempDir()
+	keyFile := dir + "/forensic.key"
+	if err := os.WriteFile(keyFile, priv, 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	// Use a different temp dir as the allowed root so the key file is outside it.
+	allowedDir := t.TempDir()
+	srv := seedReceipts(t, Config{Host: "127.0.0.1", ForensicKeyDirs: []string{allowedDir}})
+	body, _ := json.Marshal(map[string]string{"path": keyFile})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403", w.Code)
+	}
+}
+
+// TestForensicKeyLoadPath_RejectsTraversal verifies the path endpoint rejects a
+// traversal segment with 400 before any filesystem read.
+func TestForensicKeyLoadPath_RejectsTraversal(t *testing.T) {
+	srv := seedReceipts(t, Config{Host: "127.0.0.1"})
+	body, _ := json.Marshal(map[string]string{"path": "/home/op/../../../etc/passwd"})
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, localJSONReq("POST", "/api/forensic-key/path", bytes.NewReader(body)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
 	}
 }

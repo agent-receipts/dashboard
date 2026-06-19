@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`-forensic-key-dirs` flag** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — comma-separated list of extra absolute directories from which the forensic key path endpoint (`POST /api/forensic-key/path`) may load a key. The user's home directory is always allowed; non-absolute entries are silently skipped.
+
+### Security
+
+- **Forensic key path endpoint confined to an allowlist** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — `POST /api/forensic-key/path` now requires the resolved path to equal or be nested under the user's home directory or an entry in `-forensic-key-dirs`. Paths outside every allowed root are rejected with **403 Forbidden** before any filesystem access, resolving the CodeQL `go/path-injection` alert on the `os.Lstat` sink. `..` traversal segments and NUL bytes continue to be rejected earlier in the same validation barrier.
+- **Hardened forensic key file reads** ([#78](https://github.com/agent-receipts/dashboard/issues/78)) — `readFileLimited` now rejects non-regular files (symlinks, FIFOs, devices, directories) via `Lstat` before opening, preventing startup hangs on a FIFO at `ForensicKeyPath` and blocking `/dev/zero`-style reads via the path endpoint. The path endpoint (`POST /api/forensic-key/path`) now returns **413 Request Entity Too Large** when the file exceeds the size limit (previously 400). The over-size buffer is zeroed before the error is returned, narrowing the window in which discarded key material sits in memory (intermediate `io.ReadAll` allocations may still persist until GC). The path endpoint now routes the operator-supplied path through a single `validateForensicKeyPath` barrier that rejects `..` traversal segments and embedded NUL bytes before any filesystem access.
+
 ## [0.9.0-alpha.2] - 2026-06-19
 
 ### Added

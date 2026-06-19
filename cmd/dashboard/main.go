@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/agent-receipts/dashboard/internal/server"
@@ -125,6 +126,7 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "address to bind to (use 0.0.0.0 for all interfaces)")
 	port := flag.Int("port", 8080, "HTTP server port")
 	pollInterval := flag.Duration("poll-interval", server.DefaultPollInterval, "interval between live receipt polls (e.g. 5s)")
+	forensicKeyDirsFlag := flag.String("forensic-key-dirs", "", "comma-separated list of extra absolute directories from which the forensic key path endpoint may load a key (the user's home directory is always allowed)")
 	flag.Parse()
 
 	pollFlagSet := false
@@ -169,12 +171,20 @@ func main() {
 	if abs, err := filepath.Abs(*dbPath); err == nil {
 		displayDBPath = abs
 	}
+	var forensicKeyDirs []string
+	for _, d := range strings.Split(*forensicKeyDirsFlag, ",") {
+		if d := strings.TrimSpace(d); d != "" {
+			forensicKeyDirs = append(forensicKeyDirs, d)
+		}
+	}
+
 	srv := server.New(reader, server.Config{
 		PollInterval:    *pollInterval,
 		DBPath:          displayDBPath,
 		Version:         resolveVersion(),
 		Host:            *host,
 		ForensicKeyPath: defaultForensicKeyPath(),
+		ForensicKeyDirs: forensicKeyDirs,
 	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -242,9 +243,11 @@ func (s *Server) handleForensicKeyLoad(w http.ResponseWriter, r *http.Request) {
 
 // handleForensicKeyLoadPath loads the forensic private key from an absolute
 // path on the server's filesystem. The path is supplied as JSON in the request
-// body and may use a leading ~ for the current user's home directory. Relative
-// paths are rejected so a typo like "forensic.key" does not silently resolve
-// against the dashboard's working directory.
+// body and may use a leading ~ for the current user's home directory. The path
+// is validated by validateForensicKeyPath: relative paths are rejected so a
+// typo like "forensic.key" does not silently resolve against the dashboard's
+// working directory, and ".." traversal segments and NUL bytes are rejected
+// before any filesystem access.
 func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Request) {
 	if !s.guardForensic(w, r) {
 		return
@@ -274,16 +277,28 @@ func (s *Server) handleForensicKeyLoadPath(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	expanded := expandHomePath(req.Path)
-	if !filepath.IsAbs(expanded) {
-		writeError(w, http.StatusBadRequest, "path must be absolute (or start with ~/)")
+	cleaned, err := validateForensicKeyPath(req.Path, s.forensicKeyDirs)
+	if err != nil {
+		switch {
+		case errors.Is(err, errPathNotAbsolute):
+			writeError(w, http.StatusBadRequest, "path must be absolute (or start with ~/)")
+		case errors.Is(err, errPathNotAllowed):
+			writeError(w, http.StatusForbidden, "key file path is not within an allowed directory")
+		default:
+			writeError(w, http.StatusBadRequest, "path must not contain '..' or a NUL byte")
+		}
 		return
 	}
-	data, err := readFileLimited(expanded, maxForensicKeyBody)
+	data, err := readFileLimited(cleaned, maxForensicKeyBody)
 	if err != nil {
-		if isNotExist(err) {
+		switch {
+		case isNotExist(err):
 			writeError(w, http.StatusBadRequest, "key file not found: "+req.Path)
-		} else {
+		case errors.Is(err, errFileTooLarge):
+			writeError(w, http.StatusRequestEntityTooLarge, "forensic key file is too large")
+		case errors.Is(err, errNotRegularFile):
+			writeError(w, http.StatusBadRequest, "key file must be a regular file")
+		default:
 			writeError(w, http.StatusBadRequest, "could not read key file: "+err.Error())
 		}
 		return
@@ -317,6 +332,65 @@ func expandHomePath(p string) string {
 		}
 	}
 	return p
+}
+
+// errPathNotAbsolute, errPathInvalid, and errPathNotAllowed are returned by
+// validateForensicKeyPath for an operator-supplied path that does not resolve
+// to an absolute location, that contains a traversal segment or NUL byte, or
+// that falls outside every allowed directory root.
+var (
+	errPathNotAbsolute = errors.New("path must be absolute")
+	errPathInvalid     = errors.New("path contains a traversal segment or NUL byte")
+	errPathNotAllowed  = errors.New("path not within an allowed directory")
+)
+
+// validateForensicKeyPath is the single validation barrier for the
+// operator-supplied forensic key path. It expands a leading ~, rejects an
+// embedded NUL byte and any ".." traversal segment outright (rather than
+// silently resolving it to an unexpected location), requires the cleaned
+// result to be absolute, and then checks that the path equals one of the
+// allowed roots or sits beneath one (boundary-safe prefix check).
+//
+// The returned cleaned path is the only value that reaches the filesystem, so
+// untrusted input cannot flow to a read unchecked.
+//
+// Note: intermediate symlinked directories are not resolved here, but the
+// target file itself must be a regular file (readFileLimited already rejects
+// symlinks/non-regular via Lstat), so a symlinked key file cannot escape the
+// allowlist.
+func validateForensicKeyPath(raw string, allowedDirs []string) (string, error) {
+	if strings.ContainsRune(raw, 0) {
+		return "", errPathInvalid
+	}
+	expanded := expandHomePath(raw)
+	if containsDotDot(expanded) {
+		return "", errPathInvalid
+	}
+	cleaned := filepath.Clean(expanded)
+	if !filepath.IsAbs(cleaned) {
+		return "", errPathNotAbsolute
+	}
+	for _, root := range allowedDirs {
+		if cleaned == root || strings.HasPrefix(cleaned, root+string(os.PathSeparator)) {
+			return cleaned, nil
+		}
+	}
+	return "", errPathNotAllowed
+}
+
+// containsDotDot reports whether the path has a ".." element, splitting on both
+// the forward and backward slash so the check holds regardless of platform
+// separator. Mirrors the guard net/http uses for file serving.
+func containsDotDot(p string) bool {
+	if !strings.Contains(p, "..") {
+		return false
+	}
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleForensicKeyClear(w http.ResponseWriter, r *http.Request) {
