@@ -417,8 +417,11 @@
     .sg-node { cursor: pointer; }
     .sg-node circle { transition: filter 0.12s; }
     .sg-node:hover circle { filter: brightness(1.25); }
-    .sg-node.sg-selected circle { stroke: var(--accent); stroke-width: 3; }
-    .sg-node.sg-comp circle { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+    /* Highlight strokes target the main node circle (circle:last-of-type), not the
+       optional risk ring (rendered first), so the risk signal stays visible. --text
+       reads clearly on both the green sub-agent fill and the blue root fill. */
+    .sg-node.sg-selected circle:last-of-type { stroke: var(--text); stroke-width: 3; }
+    .sg-node.sg-comp circle:last-of-type { stroke: var(--text); stroke-width: 2; stroke-dasharray: 3 2; }
     svg.sg-has-selection .sg-node:not(.sg-selected):not(.sg-comp) { opacity: 0.3; }
     svg.sg-has-selection .sg-edge-delegation,
     svg.sg-has-selection .sg-edge-state:not(.sg-edge-active) { opacity: 0.15; }
