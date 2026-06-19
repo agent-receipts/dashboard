@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-alpha.2] - 2026-06-19
+
 ### Added
 
 - **Structured issuer and principal details in the receipt detail view** — the detail modal now renders the issuer's `type` and (when present) top-level `model` and `operator` (`{name, id}`) as their own labelled fields, and shows the principal's `type` as a badge alongside its id. Previously these fields were only visible in the raw JSON blob. All new fields render conditionally and degrade gracefully when absent.
