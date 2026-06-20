@@ -11,7 +11,7 @@ Lightweight local web UI for browsing [Agent Receipts](https://github.com/agent-
 
 </div>
 
-![Dashboard overview showing stats, risk distribution, and recent receipts](docs/screenshot.png)
+![Dashboard overview — activity timeline, risk and action distribution, and live receipt feed](docs/screenshot.png)
 
 ## What is this?
 
@@ -113,6 +113,8 @@ If your receipts carry HPKE-encrypted parameter disclosures (the daemon's parame
 
 Forensic key operations are **loopback-only** by design — see [Security model](#security-model).
 
+![Receipt detail showing HPKE-decrypted parameter disclosure — action type, issuer, principal, token usage, and decrypted tool inputs rendered inline](docs/forensic-decryption-detail.png)
+
 ## Insights & analytics
 
 The **Overview**, **Actions**, and **Servers** views turn a store into operational signal, scoped by a time-range picker (`1h · 6h · 24h · 7d · 30d · All`):
@@ -126,7 +128,7 @@ The **Overview**, **Actions**, and **Servers** views turn a store into operation
 
 When a session involves multiple agents, the dashboard builds a provable dependency graph from `action.target.resource` paths in the receipts (requires obsigna hook v0.19.0+).
 
-![Session graph showing orchestrator and two sub-agents with a state-dependency edge, risk rings, and blast-radius panel listing touched files and cross-agent state deps](docs/session-attribution.png)
+![Receipts tab with a session filter active — agent graph showing an orchestrator and sub-agents with delegation edges, filtered receipt list below](docs/session-attribution.png)
 
 **What you see:**
 
@@ -134,8 +136,6 @@ When a session involves multiple agents, the dashboard builds a provable depende
 - **State-dependency edges** (solid blue arrows) — two agents touched the same file; the arrow points from the agent that acted first to the one that acted after, making the causal order provable
 - **Risk rings** — orange (medium) or red (critical) outer rings on nodes with elevated-risk receipts
 - **Blast-radius panel** — click any node to see which files it touched, which other agents share a state dependency on those files, and a heuristic co-turn coupling count when agents operated on the same resource in overlapping time windows
-
-![Blast-radius panel detail showing file paths, directional state-dep arrows, and a semantic coupling warning](docs/session-attribution-detail.png)
 
 **Coverage fraction** — a `N / M receipts identity-indexed` indicator shows how complete the picture is. Receipts without a `target.resource` (Bash, MCP, spawn) are counted but cannot contribute to file-identity edges. A `⚠ mv ops` warning appears when move or rename operations are detected, because path strings may not reliably identify file versions across renames.
 
