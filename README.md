@@ -113,7 +113,7 @@ If your receipts carry HPKE-encrypted parameter disclosures (the daemon's parame
 
 Forensic key operations are **loopback-only** by design — see [Security model](#security-model).
 
-![Receipt detail showing HPKE-decrypted parameter disclosure — action type, issuer, principal, token usage, and decrypted tool inputs rendered inline](docs/session-attribution-detail.png)
+![Receipt detail showing HPKE-decrypted parameter disclosure — action type, issuer, principal, token usage, and decrypted tool inputs rendered inline](docs/forensic-decryption-detail.png)
 
 ## Insights & analytics
 
