@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0-alpha.4] - 2026-06-20
 
+### Changed
+
+- **obsigna SDK `v0.21.0-alpha.1`** — shell `rm`/`mv`/`cp` receipts now carry an explicit delete target and risk level; inline `error` and `prompt_preview` fields are bounded by the daemon before storage.
+
 ## [0.9.0-alpha.3] - 2026-06-20
 
 ### Added
