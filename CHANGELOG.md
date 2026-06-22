@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Rebranded the dashboard UI from "Agent Receipts" to "Obsigna"** — the page title, header brand, action-type reference description, and the empty-database CLI hint now read "Obsigna". GitHub URLs, Go import paths, and on-disk `agent-receipts` paths are unchanged.
+
 ## [0.9.0-alpha.4] - 2026-06-20
 
 ### Changed
