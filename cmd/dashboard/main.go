@@ -157,7 +157,7 @@ func main() {
 	reader, err := store.OpenReadOnly(*dbPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) && !dbExplicit {
-			log.Fatalf("no receipts database at default path %s\n\nPass -db <path/to/receipts.db>, or run mcp-proxy / an Agent Receipts SDK to create one.", defaultDB)
+			log.Fatalf("no receipts database at default path %s\n\nPass -db <path/to/receipts.db>, or run mcp-proxy / an Obsigna SDK to create one.", defaultDB)
 		}
 		log.Fatalf("open database: %v", err)
 	}
