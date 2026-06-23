@@ -8,7 +8,7 @@ import (
 	"encoding/pem"
 	"testing"
 
-	"github.com/agent-receipts/ar/sdk/go/receipt"
+	"obsigna.dev/sdk/go/receipt"
 
 	"github.com/agent-receipts/dashboard/internal/store"
 )

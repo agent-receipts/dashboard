@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/agent-receipts/ar/sdk/go/receipt"
+	"obsigna.dev/sdk/go/receipt"
 )
 
 // maxForensicKeyBody bounds the request body accepted by the key-load endpoint.

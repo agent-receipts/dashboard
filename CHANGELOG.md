@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrated the Obsigna Go SDK to its production module path `obsigna.dev/sdk/go` at `v0.23.0`** — replaces the pre-release `github.com/agent-receipts/ar/sdk/go v0.22.0-alpha.1`. The vanity import path carries the same version history; no API changes.
+
 ## [0.9.0-alpha.5] - 2026-06-23
 
 ### Changed

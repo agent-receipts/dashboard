@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-receipts/ar/sdk/go/receipt"
+	"obsigna.dev/sdk/go/receipt"
 
 	_ "modernc.org/sqlite"
 )

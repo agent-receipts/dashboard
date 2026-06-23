@@ -50,8 +50,8 @@ internal/verify/        # Hash linkage and chain verification
 This project depends on the Agent Receipts Go SDK for receipt verification and taxonomy:
 
 ```
-github.com/agent-receipts/ar/sdk/go   # Receipt types, hashing, chain verification, taxonomy
-modernc.org/sqlite                     # Pure Go SQLite driver
+obsigna.dev/sdk/go   # Receipt types, hashing, chain verification, taxonomy
+modernc.org/sqlite   # Pure Go SQLite driver
 ```
 
 ## Security

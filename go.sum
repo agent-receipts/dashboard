@@ -1,5 +1,3 @@
-github.com/agent-receipts/ar/sdk/go v0.22.0-alpha.1 h1:5upEO6dI88n/a7/dnl1p8A5YUTNO1qGWWJiHYSZGzxs=
-github.com/agent-receipts/ar/sdk/go v0.22.0-alpha.1/go.mod h1:T1hd+n4TaLjMZ45zCAFK/2U/2BhR+/NVdNSuZkFGl6g=
 github.com/cloudflare/circl v1.6.3 h1:9GPOhQGF9MCYUeXyMYlqTR6a5gTrgR/fBLXvUgtVcg8=
 github.com/cloudflare/circl v1.6.3/go.mod h1:2eXP6Qfat4O/Yhh8BznvKnJ+uzEoTQ6jVKJRn81BiS4=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
@@ -55,3 +53,5 @@ modernc.org/strutil v1.2.1 h1:UneZBkQA+DX2Rp35KcM69cSsNES9ly8mQWD71HKlOA0=
 modernc.org/strutil v1.2.1/go.mod h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A=
 modernc.org/token v1.1.0 h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=
 modernc.org/token v1.1.0/go.mod h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=
+obsigna.dev/sdk/go v0.23.0 h1:vNiFOgkWtdAvNqZFa4I4hryp1erdhXVf5PeH6Z0H02w=
+obsigna.dev/sdk/go v0.23.0/go.mod h1:bz3S/FcTDwDwgQytB4CpyXJ1UCiuQ5uqCw+lNTBbiaI=
