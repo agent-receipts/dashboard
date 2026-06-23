@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-receipts/ar/sdk/go/receipt"
-	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
-	"github.com/agent-receipts/ar/sdk/go/taxonomy"
+	"obsigna.dev/sdk/go/receipt"
+	sdkstore "obsigna.dev/sdk/go/store"
+	"obsigna.dev/sdk/go/taxonomy"
 	"github.com/agent-receipts/dashboard/internal/store"
 )
 

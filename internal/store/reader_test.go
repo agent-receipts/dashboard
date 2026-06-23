@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-receipts/ar/sdk/go/receipt"
-	sdkstore "github.com/agent-receipts/ar/sdk/go/store"
+	"obsigna.dev/sdk/go/receipt"
+	sdkstore "obsigna.dev/sdk/go/store"
 )
 
 // testDisclosureEnvelope returns a sentinel HPKE disclosure envelope sized to

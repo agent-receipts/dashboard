@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-receipts/ar/sdk/go/taxonomy"
+	"obsigna.dev/sdk/go/taxonomy"
 	"github.com/agent-receipts/dashboard/internal/store"
 	"github.com/agent-receipts/dashboard/internal/verify"
 )
