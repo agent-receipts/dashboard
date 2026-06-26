@@ -3868,9 +3868,12 @@
         const { lanes, nodes, edges } = buildFleetGraph(perSession, attribution);
         renderFleetGraphSVG(lanes, nodes, edges, svgPanel);
         renderSessionCoverage(attribution, coverageEl);
-        const crossCount = edges.filter(e => e.crossSession).length;
-        subtitle.textContent = sessionIds.length + ' recently-active sessions'
-          + (crossCount ? ' · ' + crossCount + ' cross-session collision' + (crossCount !== 1 ? 's' : '') : ' · no collisions');
+        const cross       = edges.filter(e => e.crossSession);
+        const concurrent  = cross.filter(e => e.temporalOverlap).length;
+        const incidental  = cross.length - concurrent;
+        subtitle.textContent = sessionIds.length + ' recently-active sessions · '
+          + (concurrent ? concurrent + ' concurrent collision' + (concurrent !== 1 ? 's' : '') : 'no concurrent collisions')
+          + (incidental ? ' · ' + incidental + ' non-concurrent overlap' + (incidental !== 1 ? 's' : '') + ' hidden' : '');
       } catch (err) {
         svgPanel.innerHTML = '<div class="muted text-sm">Could not load fleet: ' + escapeHtml(err.message) + '</div>';
       }
@@ -3937,11 +3940,12 @@
       for (const sd of (attribution.state_deps || [])) {
         if (!sd.cross_agent) continue;
         edges.push({
-          from:         sd.from_agent,
-          to:           sd.to_agent,
-          type:         'state_dep',
-          crossSession: !!sd.cross_session,
-          resources:    sd.resources,
+          from:            sd.from_agent,
+          to:              sd.to_agent,
+          type:            'state_dep',
+          crossSession:    !!sd.cross_session,
+          temporalOverlap: !!sd.temporal_overlap,
+          resources:       sd.resources,
         });
       }
 
@@ -3997,6 +4001,10 @@
         if (e.type === 'delegation') {
           return `<line class="sg-edge-delegation" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
         }
+        // Only concurrent cross-session collisions are drawn. A cross-session
+        // overlap where the two sessions ran at different times is incidental
+        // same-file reuse, not contention — filtered here, counted in the subtitle.
+        if (e.crossSession && !e.temporalOverlap) return '';
         const dx = t.x - f.x, dy = t.y - f.y;
         const len = Math.sqrt(dx * dx + dy * dy) || 1;
         const off = e.crossSession ? 34 : 20; // larger arc on cross-lane edges so they clear nodes
@@ -4017,7 +4025,7 @@
       }).join('');
 
       container.innerHTML = `
-        <p class="sg-hint">Each lane is a session · solid blue = same-session state dep · <span style="color:var(--collision,#db61a2)">magenta dashed = cross-session collision</span> · click a node to highlight its collision group</p>
+        <p class="sg-hint">Each lane is a session · solid blue = same-session state dep · <span style="color:var(--collision,#db61a2)">magenta dashed = concurrent cross-session collision</span> · click a node to highlight its collision group</p>
         <svg viewBox="0 0 ${VB_W} ${VB_H}" width="${VB_W}" height="${VB_H}" style="display:block;max-width:none;" aria-label="Fleet agent graph across sessions">
           <defs>
             <marker id="sg-arr-fleet" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
