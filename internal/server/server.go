@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/taxonomy", s.handleTaxonomy)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/sessions/{sessionID}/attribution", s.handleSessionAttribution)
+	mux.HandleFunc("GET /api/fleet/attribution", s.handleFleetAttribution)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
@@ -447,6 +448,55 @@ func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "attribution query failed")
 		log.Printf("session attribution error: %v", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// defaultFleetSessions is how many recently-active sessions the fleet view
+// renders when no limit is given; maxFleetSessions caps it so the combined
+// graph stays legible and the IN(...) query bounded.
+const (
+	defaultFleetSessions = 6
+	maxFleetSessions     = 12
+)
+
+// handleFleetAttribution returns one combined attribution payload across the N
+// most recently-active sessions (by last_seen). State-dependency edges whose
+// endpoints span two sessions carry cross_session=true — the fleet collision
+// signal. N defaults to defaultFleetSessions and is capped at maxFleetSessions.
+func (s *Server) handleFleetAttribution(w http.ResponseWriter, r *http.Request) {
+	limit := defaultFleetSessions
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		if n > maxFleetSessions {
+			n = maxFleetSessions
+		}
+		limit = n
+	}
+
+	sessions, err := s.reader.SessionStats(nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session stats query failed")
+		log.Printf("fleet attribution session stats error: %v", err)
+		return
+	}
+	if len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
+	ids := make([]string, len(sessions))
+	for i, sess := range sessions {
+		ids[i] = sess.SessionID
+	}
+
+	result, err := s.reader.FleetAttribution(ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "fleet attribution query failed")
+		log.Printf("fleet attribution error: %v", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

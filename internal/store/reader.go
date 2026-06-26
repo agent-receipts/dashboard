@@ -652,7 +652,7 @@ func (r *Reader) SessionStats(since *string) ([]SessionRow, error) {
 		FROM receipts
 		%s
 		GROUP BY session_id
-		ORDER BY last_seen DESC
+		ORDER BY last_seen DESC, session_id ASC
 	`, where)
 
 	rows, err := r.db.Query(query, args...)
@@ -892,7 +892,10 @@ type AttributionCoverage struct {
 
 // NodeAttribution summarises one agent's contribution within a session.
 type NodeAttribution struct {
-	AgentKey      string         `json:"agent_key"` // agent_id or "__root__"
+	AgentKey string `json:"agent_key"` // agent_id or "__root__"
+	// SessionID is the issuer.session_id this agent belongs to. Single-session
+	// callers can ignore it; the fleet view uses it to cluster agents into lanes.
+	SessionID     string         `json:"session_id,omitempty"`
 	AgentType     string         `json:"agent_type"`
 	ReceiptCount  int            `json:"receipt_count"`
 	IdentityCount int            `json:"identity_count"` // receipts with a resource path
@@ -910,10 +913,15 @@ type NodeAttribution struct {
 // (ordered by timestamp + chain + sequence). CrossAgent is always true here —
 // same-agent re-touches are captured in BlastRadius, not as drawn edges.
 type StatDepEdge struct {
-	FromAgent  string   `json:"from_agent"`
-	ToAgent    string   `json:"to_agent"`
-	Resources  []string `json:"resources"`
-	CrossAgent bool     `json:"cross_agent"`
+	FromAgent string   `json:"from_agent"`
+	ToAgent   string   `json:"to_agent"`
+	Resources []string `json:"resources"`
+	// CrossAgent is always true for a drawn edge (same-agent re-touches live in
+	// BlastRadius, not here).
+	CrossAgent bool `json:"cross_agent"`
+	// CrossSession is true when the two agents belong to different sessions —
+	// the fleet-view collision signal. Always false within a single session.
+	CrossSession bool `json:"cross_session"`
 }
 
 // AttributionResult is the §4 attribution payload for a session: file-identity
@@ -945,7 +953,62 @@ func higherRisk(a, b string) string {
 	return a
 }
 
-// SessionAttribution computes the §4 attribution payload for a session.
+// attrRow is one receipt row scanned for attribution computation.
+type attrRow struct {
+	chainID    string
+	sequence   int
+	sessionID  string
+	agentID    string
+	agentType  string
+	actionType string
+	riskLevel  string
+	timestamp  string
+	resource   string
+}
+
+// agentKeyOf maps a missing agent_id to the orchestrator sentinel "__root__".
+func agentKeyOf(id string) string {
+	if id == "" {
+		return "__root__"
+	}
+	return id
+}
+
+// scanAttrRows runs an attribution query and scans every row. The query must
+// select the attrRow columns in order (chain_id, sequence, session_id, agent_id,
+// agent_type, action_type, risk_level, timestamp, resource).
+func (r *Reader) scanAttrRows(query string, args ...any) ([]attrRow, error) {
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var all []attrRow
+	for rows.Next() {
+		var rr attrRow
+		if err := rows.Scan(&rr.chainID, &rr.sequence, &rr.sessionID, &rr.agentID,
+			&rr.agentType, &rr.actionType, &rr.riskLevel, &rr.timestamp, &rr.resource); err != nil {
+			return nil, err
+		}
+		all = append(all, rr)
+	}
+	return all, rows.Err()
+}
+
+// attrColumns is the SELECT list shared by SessionAttribution and
+// FleetAttribution; column order must match scanAttrRows' Scan call.
+const attrColumns = `chain_id,
+	       sequence,
+	       COALESCE(json_extract(receipt_json, '$.issuer.session_id'), '') AS session_id,
+	       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_id'), '') AS agent_id,
+	       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), '') AS agent_type,
+	       action_type,
+	       risk_level,
+	       timestamp,
+	       COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.resource'), '') AS resource`
+
+// SessionAttribution computes the §4 attribution payload for a single session.
 //
 // action.target.resource is extracted from receipt_json at query time (no
 // schema migration) and used as a proxy for logical file identity. When
@@ -954,15 +1017,8 @@ func higherRisk(a, b string) string {
 //
 // All computation is read-only; the database is not modified.
 func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error) {
-	rows, err := r.db.Query(`
-		SELECT chain_id,
-		       sequence,
-		       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_id'), '') AS agent_id,
-		       COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), '') AS agent_type,
-		       action_type,
-		       risk_level,
-		       timestamp,
-		       COALESCE(json_extract(receipt_json, '$.credentialSubject.action.target.resource'), '') AS resource
+	all, err := r.scanAttrRows(`
+		SELECT `+attrColumns+`
 		FROM receipts
 		WHERE json_extract(receipt_json, '$.issuer.session_id') = ?
 		ORDER BY timestamp ASC, chain_id ASC, sequence ASC
@@ -970,48 +1026,74 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 	if err != nil {
 		return AttributionResult{}, err
 	}
-	defer rows.Close()
+	// Within one session, agent keys are the bare agent_id (or "__root__").
+	return buildAttribution(all, func(rr attrRow) string { return agentKeyOf(rr.agentID) }), nil
+}
 
-	type rawRow struct {
-		chainID    string
-		sequence   int
-		agentID    string
-		agentType  string
-		actionType string
-		riskLevel  string
-		timestamp  string
-		resource   string
+// FleetAttribution computes one combined §4 attribution payload across several
+// sessions. Agent keys are namespaced "<session_id>::<agentKey>" so each
+// session's orchestrator stays distinct, and state-dependency edges between
+// agents in different sessions are flagged CrossSession — the fleet collision
+// signal. The collision algorithm is otherwise identical to SessionAttribution:
+// two different agent keys touching the same action.target.resource produce an
+// edge, regardless of session boundary.
+//
+// Resource identity resolves correctly without extra work: distinct worktree
+// paths are distinct strings (no false collision), while a shared DB row / API
+// endpoint / secret has one global identifier (a real collision).
+func (r *Reader) FleetAttribution(sessionIDs []string) (AttributionResult, error) {
+	if len(sessionIDs) == 0 {
+		return emptyAttribution(), nil
 	}
-	var all []rawRow
-	for rows.Next() {
-		var rr rawRow
-		if err := rows.Scan(&rr.chainID, &rr.sequence, &rr.agentID, &rr.agentType,
-			&rr.actionType, &rr.riskLevel, &rr.timestamp, &rr.resource); err != nil {
-			return AttributionResult{}, err
-		}
-		all = append(all, rr)
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(sessionIDs)), ",")
+	args := make([]any, len(sessionIDs))
+	for i, sid := range sessionIDs {
+		args[i] = sid
 	}
-	if err := rows.Err(); err != nil {
+	all, err := r.scanAttrRows(`
+		SELECT `+attrColumns+`
+		FROM receipts
+		WHERE json_extract(receipt_json, '$.issuer.session_id') IN (`+placeholders+`)
+		ORDER BY timestamp ASC, chain_id ASC, sequence ASC
+	`, args...)
+	if err != nil {
 		return AttributionResult{}, err
 	}
+	return buildAttribution(all, func(rr attrRow) string {
+		return rr.sessionID + "::" + agentKeyOf(rr.agentID)
+	}), nil
+}
 
+// emptyAttribution returns the zero-value payload with non-nil slices/maps so
+// callers and JSON consumers never see null collections.
+func emptyAttribution() AttributionResult {
+	return AttributionResult{
+		Coverage:    AttributionCoverage{},
+		Nodes:       []NodeAttribution{},
+		StateDeps:   []StatDepEdge{},
+		BlastRadius: map[string][]string{},
+	}
+}
+
+// buildAttribution is the shared §4 computation. keyFunc maps each row to its
+// agent key — bare agent_id for a single session, session-namespaced for a
+// fleet — which is the only difference between the two entry points. Rows must
+// already be ordered by (timestamp, chain_id, sequence).
+func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionResult {
 	if len(all) == 0 {
-		return AttributionResult{
-			Coverage:    AttributionCoverage{},
-			Nodes:       []NodeAttribution{},
-			StateDeps:   []StatDepEdge{},
-			BlastRadius: map[string][]string{},
-		}, nil
+		return emptyAttribution()
 	}
 
-	agentKeyOf := func(id string) string {
-		if id == "" {
-			return "__root__"
-		}
-		return id
+	// Resolve each row's agent key once. For the fleet path keyFunc allocates a
+	// "<session>::<agent>" string, so caching avoids recomputing it in the
+	// O(nodes × rows) semantic-dep loop below.
+	keys := make([]string, len(all))
+	for i := range all {
+		keys[i] = keyFunc(all[i])
 	}
 
 	type nodeAcc struct {
+		sessionID     string
 		agentType     string
 		receiptCount  int
 		identityCount int
@@ -1030,11 +1112,11 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 	fileIndex := map[string][]touch{}
 
 	hasMoveOps := false
-	for _, rr := range all {
-		ak := agentKeyOf(rr.agentID)
+	for i, rr := range all {
+		ak := keys[i]
 		nd := nodeMap[ak]
 		if nd == nil {
-			nd = &nodeAcc{riskProfile: map[string]int{}}
+			nd = &nodeAcc{riskProfile: map[string]int{}, sessionID: rr.sessionID}
 			nodeMap[ak] = nd
 		}
 		if nd.agentType == "" && rr.agentType != "" {
@@ -1101,10 +1183,11 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 			to = ek.a
 		}
 		stateDeps = append(stateDeps, StatDepEdge{
-			FromAgent:  from,
-			ToAgent:    to,
-			Resources:  resources,
-			CrossAgent: true,
+			FromAgent:    from,
+			ToAgent:      to,
+			Resources:    resources,
+			CrossAgent:   true,
+			CrossSession: nodeMap[from].sessionID != nodeMap[to].sessionID,
 		})
 	}
 	sort.Slice(stateDeps, func(i, j int) bool {
@@ -1133,6 +1216,9 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 	// by other agents within X's active time window that are not already covered
 	// by a cross-agent state dep involving X. These represent potential co-turn
 	// couplings that are unproven and must never be drawn as edges (ADR-0029 §4).
+	// Co-turn coupling is a within-session notion, so the window match is scoped
+	// to X's own session — a no-op for single-session callers, and what keeps the
+	// fleet view from flooding every node with cross-session coincidences.
 	agentStatDepRes := map[string]map[string]bool{}
 	for _, sd := range stateDeps {
 		if agentStatDepRes[sd.FromAgent] == nil {
@@ -1153,9 +1239,11 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 		}
 		first, last := nd.timestamps[0], nd.timestamps[len(nd.timestamps)-1]
 		seen := map[string]bool{}
-		for _, rr := range all {
-			rk := agentKeyOf(rr.agentID)
-			if rk == ak || rr.resource == "" {
+		for j, rr := range all {
+			if rr.sessionID != nd.sessionID || rr.resource == "" {
+				continue
+			}
+			if keys[j] == ak {
 				continue
 			}
 			if rr.timestamp < first || rr.timestamp > last {
@@ -1181,6 +1269,7 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 		nd := nodeMap[ak]
 		resultNodes = append(resultNodes, NodeAttribution{
 			AgentKey:      ak,
+			SessionID:     nd.sessionID,
 			AgentType:     nd.agentType,
 			ReceiptCount:  nd.receiptCount,
 			IdentityCount: nd.identityCount,
@@ -1212,7 +1301,7 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 		Nodes:       resultNodes,
 		StateDeps:   stateDeps,
 		BlastRadius: blastRadius,
-	}, nil
+	}
 }
 
 // SessionSignature aggregates activity metadata for a single agent session.
