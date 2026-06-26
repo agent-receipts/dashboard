@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Fleet attribution data layer** — new `FleetAttribution([]sessionID)` and `GET /api/fleet/attribution?limit=N` endpoint compute one combined §4 attribution payload across the N most recently-active sessions (default 6, capped at 12). Agent keys are namespaced `<session_id>::<agent_key>` so each session's orchestrator stays distinct, and state-dependency edges spanning two sessions are flagged `cross_session` — the cross-session collision signal where two independent agents touch the same global resource. `StatDepEdge` gains a `cross_session` field and `NodeAttribution` gains `session_id`; single-session `SessionAttribution` output is unchanged except for the additive `session_id`. Groundwork for the upcoming fleet view (#156); no UI yet.
+
 ## [0.9.0] - 2026-06-23
 
 ### Changed
