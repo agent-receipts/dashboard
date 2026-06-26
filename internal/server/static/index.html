@@ -439,8 +439,22 @@
     .sg-edge { stroke: var(--border-strong); stroke-width: 1.5; fill: none; }
     .sg-edge-delegation { stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
     .sg-edge-state { stroke: var(--accent); stroke-width: 2; fill: none; opacity: 0.85; }
+    /* Cross-session collision edges: a distinct magenta dashed curve, set apart
+       from intra-session state deps (solid blue) and delegation (gray dashed). */
+    .sg-edge-state.sg-edge-cross-session { stroke: var(--collision, #db61a2); stroke-width: 2.25; stroke-dasharray: 7 3; opacity: 0.9; }
     .sg-label { font-family: var(--font-sans); pointer-events: none; }
     .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
+    .sg-lane-sep { stroke: var(--border); stroke-width: 1; }
+    .sg-lane-label { font-family: var(--font-mono); font-size: 10px; fill: var(--muted); }
+    .fleet-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px; border-radius: var(--radius);
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text); cursor: pointer; font-size: 0.8rem;
+      transition: color 0.12s ease, border-color 0.12s ease;
+    }
+    .fleet-btn:hover { border-color: var(--border-strong); color: var(--accent); }
+    .fleet-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     pre {
       background: var(--surface-sunken);
@@ -902,6 +916,13 @@
 
     <!-- Sessions view -->
     <div id="view-sessions" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;">
+        <span class="muted text-sm">Recent agent sessions</span>
+        <button type="button" class="fleet-btn" onclick="showFleetGraph()"
+          title="View recently-active sessions side by side with cross-session collision edges">
+          ⬡ Fleet view
+        </button>
+      </div>
       <div id="sessions-table"></div>
     </div>
 
@@ -956,6 +977,25 @@
           <div id="session-graph-svg-panel" style="padding:16px;border-bottom:1px solid var(--border);min-height:80px;"></div>
           <div id="session-graph-blast-panel" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--surface-sunken);"></div>
           <div id="session-graph-receipts-panel" style="max-height:420px;overflow-y:auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fleet graph modal: several recently-active sessions side by side, with
+         cross-session state-dependency (collision) edges drawn between lanes. -->
+    <div id="fleet-graph-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel" role="dialog" aria-labelledby="fleet-graph-title" aria-modal="true" style="max-width:1280px;max-height:92vh;">
+        <div class="modal-head">
+          <div>
+            <h2 class="modal-title" id="fleet-graph-title">Fleet View</h2>
+            <div id="fleet-graph-subtitle" style="font-size:0.72rem;color:var(--muted);margin-top:2px;"></div>
+          </div>
+          <div id="fleet-graph-coverage" style="flex:1;text-align:right;margin-right:12px;"></div>
+          <button class="icon-btn" type="button" onclick="closeFleetGraph()" aria-label="Close">×</button>
+        </div>
+        <div>
+          <div id="fleet-graph-blast-panel" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--surface-sunken);"></div>
+          <div id="fleet-graph-svg-panel" style="padding:16px;min-height:120px;max-height:calc(92vh - 120px);overflow:auto;"></div>
         </div>
       </div>
     </div>
@@ -3587,7 +3627,7 @@
     }
 
     function isModalOpen() {
-      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].some(id => !document.getElementById(id).hidden);
+      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal','fleet-graph-modal'].some(id => !document.getElementById(id).hidden);
     }
     function closeAnyOpenModal() {
       if (!document.getElementById('forensic-modal').hidden) closeForensic();
@@ -3595,6 +3635,7 @@
       if (!document.getElementById('chain-modal').hidden) closeChainModal();
       if (!document.getElementById('receipt-modal').hidden) closeModal();
       if (!document.getElementById('session-graph-modal').hidden) closeSessionGraph();
+      if (!document.getElementById('fleet-graph-modal').hidden) closeFleetGraph();
     }
 
     // ---------- Session inline graph ----------
@@ -3770,6 +3811,242 @@
 
     function closeSessionGraph() { closeModalById('session-graph-modal'); }
 
+    // ---------- Fleet graph modal ----------
+
+    // Number of recently-active sessions the fleet view renders. Kept in sync
+    // with the server's defaultFleetSessions by passing it as the limit, so the
+    // ordered session list and the attribution payload cover the same sessions.
+    const FLEET_SESSIONS = 6;
+
+    // fleetGraphState holds the last fleet attribution so node clicks can render
+    // the blast-radius panel without a round-trip.
+    const fleetGraphState = { attribution: null };
+
+    function closeFleetGraph() { closeModalById('fleet-graph-modal'); }
+
+    // showFleetGraph loads the N most recently-active sessions and renders them
+    // as lanes on one canvas, drawing cross-session collision edges between them.
+    async function showFleetGraph() {
+      const svgPanel   = document.getElementById('fleet-graph-svg-panel');
+      const subtitle   = document.getElementById('fleet-graph-subtitle');
+      const coverageEl = document.getElementById('fleet-graph-coverage');
+      const blastPanel = document.getElementById('fleet-graph-blast-panel');
+
+      subtitle.textContent = '';
+      svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
+      if (coverageEl) coverageEl.innerHTML = '';
+      if (blastPanel) blastPanel.style.display = 'none';
+      fleetGraphState.attribution = null;
+      openModal('fleet-graph-modal');
+
+      try {
+        // /api/sessions gives recency order (last_seen DESC); the attribution
+        // endpoint, asked for the same limit, covers the same top-N sessions.
+        const [sessionsResp, attribution] = await Promise.all([
+          fetchJSON('/api/sessions'),
+          fetchJSON('/api/fleet/attribution?limit=' + FLEET_SESSIONS),
+        ]);
+        fleetGraphState.attribution = attribution;
+
+        const present = new Set((attribution.nodes || []).map(n => n.session_id));
+        const sessionIds = (sessionsResp.sessions || [])
+          .slice(0, FLEET_SESSIONS)
+          .map(s => s.session_id)
+          .filter(sid => present.has(sid));
+
+        if (sessionIds.length === 0) {
+          svgPanel.innerHTML = '<div class="muted text-sm">No active sessions to show.</div>';
+          return;
+        }
+
+        const perSession = await Promise.all(sessionIds.map(sid =>
+          fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sid) + '&limit=2000')
+            .then(rows => ({ sid, rows: rows || [] }))
+            .catch(() => ({ sid, rows: [] }))
+        ));
+
+        const { lanes, nodes, edges } = buildFleetGraph(perSession, attribution);
+        renderFleetGraphSVG(lanes, nodes, edges, svgPanel);
+        renderSessionCoverage(attribution, coverageEl);
+        const crossCount = edges.filter(e => e.crossSession).length;
+        subtitle.textContent = sessionIds.length + ' recently-active sessions'
+          + (crossCount ? ' · ' + crossCount + ' cross-session collision' + (crossCount !== 1 ? 's' : '') : ' · no collisions');
+      } catch (err) {
+        svgPanel.innerHTML = '<div class="muted text-sm">Could not load fleet: ' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    // buildFleetGraph turns per-session receipts plus the combined fleet
+    // attribution into lanes (one per session), nodes (keyed
+    // "<session>::<agent>"), delegation edges (intra-session), and state-dep
+    // edges flagged crossSession when they span two lanes. Node metadata
+    // (model, delegation) comes from receipts; risk/identity from attribution.
+    function buildFleetGraph(perSession, attribution) {
+      const attrMap = new Map((attribution.nodes || []).map(n => [n.agent_key, n]));
+      const lanes = [];
+      const nodes = [];
+      const edges = [];
+
+      for (const { sid, rows } of perSession) {
+        const rootKey = sid + '::__root__';
+        const agentMap = new Map(); // namespaced key → metadata
+        for (const r of rows) {
+          const bareKey = r.agent_id || '__root__';
+          const key = sid + '::' + bareKey;
+          if (!agentMap.has(key)) {
+            agentMap.set(key, { bareKey, agentType: null, model: null, receiptCount: 0, delegation: null });
+          }
+          const a = agentMap.get(key);
+          a.receiptCount++;
+          if (!a.agentType && r.agent_type) a.agentType = r.agent_type;
+          if (!a.model) a.model = r.runtime_model || r.issuer_model || null;
+          if (!a.delegation && r.delegation) a.delegation = r.delegation;
+        }
+
+        // Root first, then sub-agents in stable key order, so lane layout is deterministic.
+        const orderedKeys = [...agentMap.keys()].sort((x, y) =>
+          x === rootKey ? -1 : y === rootKey ? 1 : x.localeCompare(y));
+
+        const laneNodeIds = [];
+        for (const key of orderedKeys) {
+          const info   = agentMap.get(key);
+          const isRoot = info.bareKey === '__root__';
+          const na     = attrMap.get(key);
+          nodes.push({
+            id:           key,
+            sessionId:    sid,
+            isRoot,
+            label:        isRoot ? 'Orchestrator' : (info.agentType || 'agent'),
+            sublabel:     isRoot ? null : info.bareKey.substring(0, 12),
+            model:        info.model || null,
+            receiptCount: info.receiptCount,
+            maxRisk:      na ? na.max_risk : undefined,
+            identityCount: na ? na.identity_count : undefined,
+            semanticDeps: na ? na.semantic_deps : undefined,
+          });
+          laneNodeIds.push(key);
+          if (!isRoot && info.delegation) {
+            edges.push({ from: rootKey, to: key, type: 'delegation', parentChainId: info.delegation.parent_chain_id });
+          }
+        }
+        lanes.push({ sessionId: sid, nodeIds: laneNodeIds });
+      }
+
+      // State-dependency edges (intra- and cross-session) come from the combined
+      // attribution; crossSession decides styling and routing between lanes.
+      for (const sd of (attribution.state_deps || [])) {
+        if (!sd.cross_agent) continue;
+        edges.push({
+          from:         sd.from_agent,
+          to:           sd.to_agent,
+          type:         'state_dep',
+          crossSession: !!sd.cross_session,
+          resources:    sd.resources,
+        });
+      }
+
+      return { lanes, nodes, edges };
+    }
+
+    // renderFleetGraphSVG lays out each session as a horizontal lane (orchestrator
+    // on the left, sub-agents to its right) stacked vertically, and draws
+    // cross-session collision edges between lanes in a distinct magenta dashed
+    // style. Node clicks reuse applyComponentHighlight, so clicking highlights the
+    // whole state-dep component — including collision partners in other lanes.
+    function renderFleetGraphSVG(lanes, nodes, edges, container) {
+      if (!lanes.length) {
+        container.innerHTML = '<div class="muted text-sm">No active sessions to show.</div>';
+        return;
+      }
+      const nodeById = new Map(nodes.map(n => [n.id, n]));
+      const maxCount = Math.max(1, ...nodes.map(n => n.receiptCount));
+      const nodeR    = n => 15 + Math.round((n.receiptCount / maxCount) * 11); // 15..26
+
+      const LABEL_W  = 124;          // left gutter for the session label
+      const ROOT_X   = LABEL_W + 46;
+      const SUB_DX   = 150;
+      const LANE_H   = 134;
+      const LANE_TOP = 16;
+
+      let maxSubs = 0;
+      for (const ln of lanes) {
+        const subs = ln.nodeIds.filter(id => !(nodeById.get(id) || {}).isRoot).length;
+        if (subs > maxSubs) maxSubs = subs;
+      }
+      const VB_W = Math.max(900, ROOT_X + Math.max(1, maxSubs) * SUB_DX + 60);
+      const VB_H = LANE_TOP * 2 + lanes.length * LANE_H;
+
+      const pos = new Map();
+      const laneChrome = [];
+      lanes.forEach((ln, i) => {
+        const topOfLane = LANE_TOP + i * LANE_H;
+        const cy = topOfLane + 56;
+        if (i > 0) laneChrome.push(`<line class="sg-lane-sep" x1="0" y1="${topOfLane}" x2="${VB_W}" y2="${topOfLane}"/>`);
+        laneChrome.push(`<text class="sg-lane-label" x="10" y="${topOfLane + 16}">${escapeHtml(truncate(ln.sessionId, 16))}</text>`);
+
+        const rootId = ln.nodeIds.find(id => (nodeById.get(id) || {}).isRoot);
+        const subs   = ln.nodeIds.filter(id => id !== rootId);
+        if (rootId) pos.set(rootId, { x: ROOT_X, y: cy });
+        const startX = rootId ? ROOT_X + SUB_DX : ROOT_X;
+        subs.forEach((id, j) => pos.set(id, { x: startX + j * SUB_DX, y: cy }));
+      });
+
+      const edgeSVG = edges.map(e => {
+        const f = pos.get(e.from), t = pos.get(e.to);
+        if (!f || !t) return '';
+        if (e.type === 'delegation') {
+          return `<line class="sg-edge-delegation" x1="${f.x}" y1="${f.y}" x2="${t.x}" y2="${t.y}"><title>delegation ← ${escapeHtml(e.parentChainId || '')}</title></line>`;
+        }
+        const dx = t.x - f.x, dy = t.y - f.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const off = e.crossSession ? 34 : 20; // larger arc on cross-lane edges so they clear nodes
+        const cx  = (f.x + t.x) / 2 + (-dy / len) * off;
+        const cy  = (f.y + t.y) / 2 + ( dx / len) * off;
+        const cls = e.crossSession ? 'sg-edge-state sg-edge-cross-session' : 'sg-edge-state';
+        const marker = e.crossSession ? 'sg-arr-cross' : 'sg-arr-fleet';
+        const rcount = e.resources ? e.resources.length : 0;
+        const label  = rcount === 1 ? escapeHtml(e.resources[0]) : rcount + ' shared resources';
+        const kind   = e.crossSession ? 'cross-session collision' : 'state dep';
+        return `<path class="${cls}" data-from="${escapeAttr(e.from)}" data-to="${escapeAttr(e.to)}" d="M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}" marker-end="url(#${marker})"><title>${kind}: ${label}</title></path>`;
+      }).join('');
+
+      const nodeSVG = nodes.map(n => {
+        const p = pos.get(n.id);
+        if (!p) return '';
+        return renderGraphNode(n, p.x, p.y, nodeR(n), 'selectFleetGraphNode');
+      }).join('');
+
+      container.innerHTML = `
+        <p class="sg-hint">Each lane is a session · solid blue = same-session state dep · <span style="color:var(--collision,#db61a2)">magenta dashed = cross-session collision</span> · click a node to highlight its collision group</p>
+        <svg viewBox="0 0 ${VB_W} ${VB_H}" width="${VB_W}" height="${VB_H}" style="display:block;max-width:none;" aria-label="Fleet agent graph across sessions">
+          <defs>
+            <marker id="sg-arr-fleet" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0.5, 7.5 3, 0 5.5" fill="var(--accent)" opacity="0.8"/>
+            </marker>
+            <marker id="sg-arr-cross" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0.5, 7.5 3, 0 5.5" fill="var(--collision, #db61a2)" opacity="0.9"/>
+            </marker>
+          </defs>
+          ${laneChrome.join('')}
+          ${edgeSVG}
+          ${nodeSVG}
+        </svg>
+      `;
+    }
+
+    // selectFleetGraphNode highlights the clicked node's state-dep component
+    // (spanning lanes via cross-session edges) and shows its blast-radius panel.
+    function selectFleetGraphNode(el) {
+      const nodeId = el.dataset.nodeId;
+      const selected = applyComponentHighlight(el);
+      const blastPanel = document.getElementById('fleet-graph-blast-panel');
+      if (!selected) {
+        if (blastPanel) blastPanel.style.display = 'none';
+        return;
+      }
+      if (blastPanel) renderBlastRadius(nodeId, blastPanel, fleetGraphState.attribution);
+    }
+
     // buildSessionGraph extracts nodes (one per unique agent) and edges (delegation
     // links + cross-agent state deps) from a flat receipt array. The root/orchestrator
     // agent has agentId null in the receipt data and is represented as '__root__'.
@@ -3837,6 +4114,35 @@
       return { nodes, edges };
     }
 
+    // Risk ring colours for graph nodes. medium is muted; high/critical prominent.
+    const GRAPH_RISK_RING = { medium: 'var(--risk-medium)', high: 'var(--risk-high)', critical: 'var(--risk-critical)' };
+
+    // renderGraphNode returns the <g> markup for one agent node centred at (x, y)
+    // with radius r. Shared by the single-session renderer and the fleet renderer
+    // so node appearance (risk ring, receipt count, labels, a11y) stays identical.
+    function renderGraphNode(n, x, y, r, clickFn) {
+      const fill      = n.isRoot ? 'var(--accent)' : '#238636';
+      const safeId    = escapeAttr(n.id);
+      const ringColor = n.maxRisk && GRAPH_RISK_RING[n.maxRisk];
+      // Risk ring rendered before the node circle so it sits behind it.
+      const riskRing = ringColor
+        ? `<circle cx="${x}" cy="${y}" r="${r + 5}" fill="none" stroke="${ringColor}" stroke-width="2.5" opacity="0.8"/>`
+        : '';
+      return `
+        <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
+           role="button" tabindex="0" aria-label="${escapeAttr(n.label)}${n.model ? ', ' + escapeAttr(n.model) : ''}, ${n.receiptCount} receipts"
+           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
+          ${riskRing}
+          <circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" opacity="0.9"/>
+          <text class="sg-label" x="${x}" y="${y + 1}" text-anchor="middle" dominant-baseline="central"
+                style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
+          <text class="sg-label" x="${x}" y="${y + r + 14}" text-anchor="middle"
+                style="fill:var(--text);font-size:11px;">${escapeHtml(n.label)}</text>
+          ${n.sublabel ? `<text class="sg-label" x="${x}" y="${y + r + 26}" text-anchor="middle" style="fill:var(--muted);font-size:10px;font-family:var(--font-mono);">${escapeHtml(n.sublabel)}…</text>` : ''}
+          ${n.model ? `<text class="sg-label" x="${x}" y="${y + r + 38}" text-anchor="middle" style="fill:var(--muted);font-size:10px;">${escapeHtml(n.model)}</text>` : ''}
+        </g>`;
+    }
+
     // renderSessionGraphSVG renders a two-level hierarchical node-link graph.
     // Root is centred at the top; sub-agents spread across the row below.
     // Node area is proportional to receipt count; high/critical-risk nodes carry
@@ -3896,33 +4202,10 @@
         return `<path class="sg-edge-state" data-from="${escapeAttr(e.from)}" data-to="${escapeAttr(e.to)}" d="M ${f.x} ${f.y} Q ${cx} ${cy} ${t.x} ${t.y}" marker-end="url(#sg-arr)"><title>state dep: ${label}</title></path>`;
       }).join('');
 
-      // Risk ring colours. medium is muted; high/critical are prominent.
-      const riskRingColor = { medium: 'var(--risk-medium)', high: 'var(--risk-high)', critical: 'var(--risk-critical)' };
-
       const nodeSVG = nodes.map(n => {
         const p = pos.get(n.id);
         if (!p) return '';
-        const r      = nodeR(n);
-        const fill   = n.isRoot ? 'var(--accent)' : '#238636';
-        const safeId = escapeAttr(n.id);
-        const ringColor = n.maxRisk && riskRingColor[n.maxRisk];
-        // Risk ring rendered before the node circle so it sits behind it.
-        const riskRing = ringColor
-          ? `<circle cx="${p.x}" cy="${p.y}" r="${r + 5}" fill="none" stroke="${ringColor}" stroke-width="2.5" opacity="0.8"/>`
-          : '';
-        return `
-          <g class="sg-node" data-node-id="${safeId}" onclick="${clickFn}(this)"
-             role="button" tabindex="0" aria-label="${escapeAttr(n.label)}${n.model ? ', ' + escapeAttr(n.model) : ''}, ${n.receiptCount} receipts"
-             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();${clickFn}(this)}">
-            ${riskRing}
-            <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${fill}" opacity="0.9"/>
-            <text class="sg-label" x="${p.x}" y="${p.y + 1}" text-anchor="middle" dominant-baseline="central"
-                  style="fill:${n.isRoot ? '#0d1117' : '#fff'};font-size:11px;font-weight:600;">${n.receiptCount}</text>
-            <text class="sg-label" x="${p.x}" y="${p.y + r + 14}" text-anchor="middle"
-                  style="fill:var(--text);font-size:11px;">${escapeHtml(n.label)}</text>
-            ${n.sublabel ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 26}" text-anchor="middle" style="fill:var(--muted);font-size:10px;font-family:var(--font-mono);">${escapeHtml(n.sublabel)}…</text>` : ''}
-            ${n.model ? `<text class="sg-label" x="${p.x}" y="${p.y + r + 38}" text-anchor="middle" style="fill:var(--muted);font-size:10px;">${escapeHtml(n.model)}</text>` : ''}
-          </g>`;
+        return renderGraphNode(n, p.x, p.y, nodeR(n), clickFn);
       }).join('');
 
       container.innerHTML = `
@@ -4739,7 +5022,7 @@
     document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
 
     // Close modals on backdrop click.
-    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].forEach(id => {
+    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal','fleet-graph-modal'].forEach(id => {
       document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModalById(id);
       });
