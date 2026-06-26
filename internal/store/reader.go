@@ -922,6 +922,12 @@ type StatDepEdge struct {
 	// CrossSession is true when the two agents belong to different sessions —
 	// the fleet-view collision signal. Always false within a single session.
 	CrossSession bool `json:"cross_session"`
+	// TemporalOverlap is true when the two agents' sessions were active in
+	// overlapping time windows. For a cross-session edge this distinguishes a
+	// concurrent collision (two sessions live at once, genuinely contending for
+	// the resource) from the same resource merely touched at different times.
+	// Always true within a single session.
+	TemporalOverlap bool `json:"temporal_overlap"`
 }
 
 // AttributionResult is the §4 attribution payload for a session: file-identity
@@ -951,6 +957,17 @@ func higherRisk(a, b string) string {
 		return b
 	}
 	return a
+}
+
+// timeWindow is the [first, last] ISO-8601 timestamp span of a session's
+// activity. ISO-8601 timestamps sort lexicographically, so string comparison
+// is the same as chronological comparison.
+type timeWindow struct{ first, last string }
+
+// overlaps reports whether two session activity windows intersect — i.e. the
+// two sessions were live at the same time. Touching endpoints count as overlap.
+func (w timeWindow) overlaps(o timeWindow) bool {
+	return w.first <= o.last && o.first <= w.last
 }
 
 // attrRow is one receipt row scanned for attribution computation.
@@ -1104,6 +1121,11 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 	}
 	nodeMap := map[string]*nodeAcc{}
 
+	// Per-session activity window [first, last]. Used to decide whether a
+	// cross-session edge is a concurrent collision (windows overlap) or the same
+	// resource touched at different times (windows disjoint).
+	sessionWindow := map[string]timeWindow{}
+
 	// file identity index: resource → ordered touches (agentKey + timestamp).
 	type touch struct {
 		agentKey  string
@@ -1118,6 +1140,17 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 		if nd == nil {
 			nd = &nodeAcc{riskProfile: map[string]int{}, sessionID: rr.sessionID}
 			nodeMap[ak] = nd
+		}
+		if w, ok := sessionWindow[rr.sessionID]; !ok {
+			sessionWindow[rr.sessionID] = timeWindow{rr.timestamp, rr.timestamp}
+		} else {
+			if rr.timestamp < w.first {
+				w.first = rr.timestamp
+			}
+			if rr.timestamp > w.last {
+				w.last = rr.timestamp
+			}
+			sessionWindow[rr.sessionID] = w
 		}
 		if nd.agentType == "" && rr.agentType != "" {
 			nd.agentType = rr.agentType
@@ -1182,12 +1215,14 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 		if from == ek.b {
 			to = ek.a
 		}
+		sa, sb := nodeMap[from].sessionID, nodeMap[to].sessionID
 		stateDeps = append(stateDeps, StatDepEdge{
-			FromAgent:    from,
-			ToAgent:      to,
-			Resources:    resources,
-			CrossAgent:   true,
-			CrossSession: nodeMap[from].sessionID != nodeMap[to].sessionID,
+			FromAgent:       from,
+			ToAgent:         to,
+			Resources:       resources,
+			CrossAgent:      true,
+			CrossSession:    sa != sb,
+			TemporalOverlap: sessionWindow[sa].overlaps(sessionWindow[sb]),
 		})
 	}
 	sort.Slice(stateDeps, func(i, j int) bool {
