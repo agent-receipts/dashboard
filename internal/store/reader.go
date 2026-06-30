@@ -1231,11 +1231,11 @@ type SessionSignature struct {
 }
 
 // activityCategory maps an action_type string to a heuristic activity category.
-// The order of checks matters: "mcp" and "bash" take priority over everything
-// else; "edit"/"write"/"file.modify" must be tested before "read" so that
-// "file.modify" is not miscaught by the broader "read" check. This is a
-// starting categorisation to refine as real-world action_type strings are
-// observed.
+// Checks are ordered by precedence so that when an action_type contains more
+// than one category keyword, the intended one wins: "mcp" first (e.g.
+// "mcp.github.pull_request_read" is an MCP call, not a read), then "bash", then
+// edit/write before read. This is a starting categorisation to refine as
+// real-world action_type strings are observed.
 func activityCategory(actionType string) string {
 	s := strings.ToLower(actionType)
 	switch {

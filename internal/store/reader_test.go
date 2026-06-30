@@ -2865,7 +2865,7 @@ func TestActivityCategory(t *testing.T) {
 		// Bash.
 		{"claude-code.Bash", "bash"},
 		{"system.bash.execute", "bash"},
-		// Edit checked before read — "file.modify" must not fall through to "read".
+		// "file.modify" maps to edit via the file.modify check, not read.
 		{"claude-code.Edit", "edit"},
 		{"claude-code.Write", "edit"},
 		{"filesystem.file.modify", "edit"},
@@ -3050,7 +3050,7 @@ func TestFleetSignatures_ActivityAndAgentTypes(t *testing.T) {
 		t.Errorf("session-B activity[read] = %d, want 1", sigB.Activity["read"])
 	}
 	if sigB.Activity["edit"] != 1 {
-		t.Errorf("session-B activity[edit] = %d, want 1 (file.modify must not fall through to read)", sigB.Activity["edit"])
+		t.Errorf("session-B activity[edit] = %d, want 1 (file.modify maps to edit, not read)", sigB.Activity["edit"])
 	}
 	if sigB.AgentTypes["general-purpose"] != 2 {
 		t.Errorf("session-B agent_types[general-purpose] = %d, want 2", sigB.AgentTypes["general-purpose"])

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`-experimental` flag** — new boolean CLI flag (default `false`) that gates experimental features. When set, the `GET /api/config` response includes `"experimental": true` so the frontend can conditionally enable experimental UI.
-- **`GET /api/fleet/signatures` endpoint** ([#156](https://github.com/agent-receipts/dashboard/issues/156)) — returns per-session activity signatures (receipt count, first/last seen, heuristic activity category breakdown, and agent-type distribution) for the most-recent sessions. Responds **404** unless `--experimental` is passed. Supports an optional `?limit=N` parameter (default 12, max 24, min 1). This is groundwork for the planned fleet activity-signature view.
+- **`GET /api/fleet/signatures` endpoint** ([#156](https://github.com/agent-receipts/dashboard/issues/156)) — returns per-session activity signatures (receipt count, first/last seen, heuristic activity category breakdown, and agent-type distribution) for the most-recent sessions. Responds **404** unless `-experimental` is passed. Supports an optional `?limit=N` parameter (default 12, max 24, min 1). This is groundwork for the planned fleet activity-signature view.
 
 ## [0.9.0] - 2026-06-23
 
