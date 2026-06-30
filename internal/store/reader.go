@@ -1215,6 +1215,154 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 	}, nil
 }
 
+// SessionSignature aggregates activity metadata for a single agent session.
+// It is the per-session element returned by FleetSignatures.
+type SessionSignature struct {
+	SessionID    string         `json:"session_id"`
+	ReceiptCount int            `json:"receipt_count"`
+	FirstSeen    string         `json:"first_seen"`
+	LastSeen     string         `json:"last_seen"`
+	// Activity maps a heuristic category name to the number of receipts in that
+	// category for this session. See activityCategory for the mapping rules.
+	Activity map[string]int `json:"activity"`
+	// AgentTypes maps issuer.runtime.agent_type to its receipt count, excluding
+	// receipts with an empty/missing agent_type (the orchestrator/root).
+	AgentTypes map[string]int `json:"agent_types"`
+}
+
+// activityCategory maps an action_type string to a heuristic activity category.
+// The order of checks matters: "mcp" and "bash" take priority over everything
+// else; "edit"/"write"/"file.modify" must be tested before "read" so that
+// "file.modify" is not miscaught by the broader "read" check. This is a
+// starting categorisation to refine as real-world action_type strings are
+// observed.
+func activityCategory(actionType string) string {
+	s := strings.ToLower(actionType)
+	switch {
+	case strings.Contains(s, "mcp"):
+		return "mcp"
+	case strings.Contains(s, "bash"):
+		return "bash"
+	case strings.Contains(s, "edit") || strings.Contains(s, "write") || strings.Contains(s, "file.modify"):
+		return "edit"
+	case strings.Contains(s, "read"):
+		return "read"
+	case strings.Contains(s, "toolsearch") || strings.Contains(s, "grep") || strings.Contains(s, "glob"):
+		return "search"
+	case strings.Contains(s, "webfetch") || strings.Contains(s, "websearch"):
+		return "web"
+	case strings.Contains(s, "agent"):
+		return "agent"
+	case strings.Contains(s, "task"):
+		return "task"
+	default:
+		return "other"
+	}
+}
+
+// FleetSignatures returns one SessionSignature per input session ID, in the
+// same order as sessionIDs. An empty sessionIDs slice returns an empty non-nil
+// slice. Sessions that exist in the input but have no receipts in the store
+// are included with zero counts and empty maps.
+func (r *Reader) FleetSignatures(sessionIDs []string) ([]SessionSignature, error) {
+	if len(sessionIDs) == 0 {
+		return []SessionSignature{}, nil
+	}
+
+	// Build WHERE ... IN (?,?,...) placeholder string.
+	placeholders := strings.Repeat(",?", len(sessionIDs))[1:] // trim leading comma
+	args := make([]any, len(sessionIDs))
+	for i, id := range sessionIDs {
+		args[i] = id
+	}
+
+	// session_id needs no COALESCE: NULL IN (...) is never true, so rows with a
+	// NULL session_id are already excluded by the WHERE before the SELECT runs.
+	// agent_type does need it — root receipts (empty agent_type) reach the SELECT.
+	query := fmt.Sprintf(`
+		SELECT
+			json_extract(receipt_json, '$.issuer.session_id') AS session_id,
+			action_type,
+			COALESCE(json_extract(receipt_json, '$.issuer.runtime.agent_type'), '') AS agent_type,
+			timestamp
+		FROM receipts
+		WHERE json_extract(receipt_json, '$.issuer.session_id') IN (%s)
+	`, placeholders)
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type accum struct {
+		receiptCount int
+		firstSeen    string
+		lastSeen     string
+		activity     map[string]int
+		agentTypes   map[string]int
+	}
+	sessionMap := map[string]*accum{}
+
+	for rows.Next() {
+		var sessionID, actionType, agentType, timestamp string
+		if err := rows.Scan(&sessionID, &actionType, &agentType, &timestamp); err != nil {
+			return nil, err
+		}
+
+		acc := sessionMap[sessionID]
+		if acc == nil {
+			acc = &accum{
+				activity:   map[string]int{},
+				agentTypes: map[string]int{},
+			}
+			sessionMap[sessionID] = acc
+		}
+
+		acc.receiptCount++
+		acc.activity[activityCategory(actionType)]++
+
+		// Exclude empty/missing agent_type (orchestrator/root).
+		if agentType != "" {
+			acc.agentTypes[agentType]++
+		}
+
+		// ISO-8601 timestamps sort lexicographically; plain string comparison works.
+		if acc.firstSeen == "" || timestamp < acc.firstSeen {
+			acc.firstSeen = timestamp
+		}
+		if acc.lastSeen == "" || timestamp > acc.lastSeen {
+			acc.lastSeen = timestamp
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Preserve the caller's ordering.
+	out := make([]SessionSignature, 0, len(sessionIDs))
+	for _, sid := range sessionIDs {
+		acc := sessionMap[sid]
+		if acc == nil {
+			out = append(out, SessionSignature{
+				SessionID:  sid,
+				Activity:   map[string]int{},
+				AgentTypes: map[string]int{},
+			})
+			continue
+		}
+		out = append(out, SessionSignature{
+			SessionID:    sid,
+			ReceiptCount: acc.receiptCount,
+			FirstSeen:    acc.firstSeen,
+			LastSeen:     acc.lastSeen,
+			Activity:     acc.activity,
+			AgentTypes:   acc.agentTypes,
+		})
+	}
+	return out, nil
+}
+
 // Close closes the database connection.
 func (r *Reader) Close() error {
 	return r.db.Close()

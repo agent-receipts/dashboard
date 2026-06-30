@@ -52,6 +52,9 @@ type Config struct {
 	// ForensicKeyDirs lists extra directories, in addition to the user's home
 	// directory, from which the forensic key path endpoint may load a key.
 	ForensicKeyDirs []string
+	// Experimental enables experimental features. When false, experimental
+	// API endpoints respond with 404.
+	Experimental bool
 }
 
 //go:embed static
@@ -146,6 +149,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/chains", s.handleChains)
 	mux.HandleFunc("GET /api/chains/{chainID}/verify", s.handleChainVerify)
 
+	// Experimental endpoints — gated by cfg.Experimental; return 404 when disabled.
+	mux.HandleFunc("GET /api/fleet/signatures", s.handleFleetSignatures)
+
 	// Forensic disclosure: load/clear the operator's X25519 private key (held
 	// in memory only) and decrypt a receipt's parameters_disclosure envelope
 	// inline. The decrypt route lives under its own prefix because the receipt
@@ -183,6 +189,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"db_path":          s.cfg.DBPath,
 		"db_name":          dbName,
 		"version":          s.cfg.Version,
+		"experimental":     s.cfg.Experimental,
 	})
 }
 
@@ -565,6 +572,53 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 
 	result := verify.VerifyChainLinks(receipts, publicKeyPEM)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleFleetSignatures(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.Experimental {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	const defaultLimit = 12
+	const maxLimit = 24
+
+	limit := defaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	sessions, err := s.reader.SessionStats(nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session stats query failed")
+		log.Printf("fleet signatures: session stats error: %v", err)
+		return
+	}
+	if len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
+
+	ids := make([]string, len(sessions))
+	for i, sess := range sessions {
+		ids[i] = sess.SessionID
+	}
+
+	sigs, err := s.reader.FleetSignatures(ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "fleet signatures query failed")
+		log.Printf("fleet signatures error: %v", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"signatures": sigs})
 }
 
 func validateEd25519PEM(pemStr string) error {

@@ -2852,6 +2852,287 @@ func TestReader_SessionStats_SinceFilter(t *testing.T) {
 	}
 }
 
+// ---------- activityCategory tests ----------
+
+func TestActivityCategory(t *testing.T) {
+	cases := []struct {
+		actionType string
+		want       string
+	}{
+		// MCP must beat all others.
+		{"mcp.github.pull_request_read", "mcp"},
+		{"MCP.tool.call", "mcp"},
+		// Bash.
+		{"claude-code.Bash", "bash"},
+		{"system.bash.execute", "bash"},
+		// Edit checked before read — "file.modify" must not fall through to "read".
+		{"claude-code.Edit", "edit"},
+		{"claude-code.Write", "edit"},
+		{"filesystem.file.modify", "edit"},
+		// Read.
+		{"claude-code.Read", "read"},
+		{"filesystem.file.read", "read"},
+		// Search.
+		{"claude-code.ToolSearch", "search"},
+		{"claude-code.Grep", "search"},
+		{"claude-code.Glob", "search"},
+		// Web.
+		{"claude-code.WebFetch", "web"},
+		{"claude-code.WebSearch", "web"},
+		// Agent.
+		{"claude-code.Agent", "agent"},
+		// Task.
+		{"claude-code.Task", "task"},
+		{"claude-code.TaskCreate", "task"},
+		// Other / fallback.
+		{"filesystem.file.delete", "other"},
+		{"communication.email.send", "other"},
+		{"", "other"},
+	}
+	for _, tc := range cases {
+		got := activityCategory(tc.actionType)
+		if got != tc.want {
+			t.Errorf("activityCategory(%q) = %q, want %q", tc.actionType, got, tc.want)
+		}
+	}
+}
+
+// ---------- FleetSignatures tests ----------
+
+// makeFleetReceipt builds a receipt with session_id and optional agent_type.
+func makeFleetReceipt(id, chainID string, seq int, actionType string,
+	ts, sessionID, agentType string) receipt.AgentReceipt {
+	ar := makeReceipt(id, chainID, seq, actionType, receipt.RiskLow, receipt.StatusSuccess, ts, nil)
+	ar.Issuer.SessionID = sessionID
+	if agentType != "" {
+		ar.Issuer.Runtime = &receipt.Runtime{AgentType: agentType}
+	}
+	return ar
+}
+
+func TestFleetSignatures_Empty(t *testing.T) {
+	dbPath := seedEmptyDB(t)
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	sigs, err := reader.FleetSignatures(nil)
+	if err != nil {
+		t.Fatalf("FleetSignatures(nil): %v", err)
+	}
+	if sigs == nil {
+		t.Error("FleetSignatures(nil) returned nil; want non-nil empty slice")
+	}
+	if len(sigs) != 0 {
+		t.Errorf("FleetSignatures(nil): got %d entries, want 0", len(sigs))
+	}
+
+	sigs, err = reader.FleetSignatures([]string{})
+	if err != nil {
+		t.Fatalf("FleetSignatures([]): %v", err)
+	}
+	if sigs == nil {
+		t.Error("FleetSignatures([]) returned nil; want non-nil empty slice")
+	}
+	if len(sigs) != 0 {
+		t.Errorf("FleetSignatures([]): got %d entries, want 0", len(sigs))
+	}
+}
+
+func TestFleetSignatures_ActivityAndAgentTypes(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-sig-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	// Session A: mix of action types + two distinct agent types.
+	//   claude-code.Bash      → bash  (root: no agent_type)
+	//   claude-code.Read      → read  (general-purpose)
+	//   claude-code.Edit      → edit  (general-purpose)
+	//   mcp.github.read       → mcp   (Explore)
+	//   claude-code.ToolSearch → search (Explore)
+	insertFleet := func(ar receipt.AgentReceipt) {
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	insertFleet(makeFleetReceipt("urn:receipt:fa1", "chain-fa", 1, "claude-code.Bash", "2026-05-01T10:00:00Z", "session-A", ""))
+	insertFleet(makeFleetReceipt("urn:receipt:fa2", "chain-fa", 2, "claude-code.Read", "2026-05-01T10:01:00Z", "session-A", "general-purpose"))
+	insertFleet(makeFleetReceipt("urn:receipt:fa3", "chain-fa", 3, "claude-code.Edit", "2026-05-01T10:02:00Z", "session-A", "general-purpose"))
+	insertFleet(makeFleetReceipt("urn:receipt:fa4", "chain-fa", 4, "mcp.github.read", "2026-05-01T10:03:00Z", "session-A", "Explore"))
+	insertFleet(makeFleetReceipt("urn:receipt:fa5", "chain-fa", 5, "claude-code.ToolSearch", "2026-05-01T10:04:00Z", "session-A", "Explore"))
+
+	// Session B: only a couple of receipts, earlier timestamps.
+	insertFleet(makeFleetReceipt("urn:receipt:fb1", "chain-fb", 1, "filesystem.file.read", "2026-05-01T09:00:00Z", "session-B", "general-purpose"))
+	insertFleet(makeFleetReceipt("urn:receipt:fb2", "chain-fb", 2, "filesystem.file.modify", "2026-05-01T09:01:00Z", "session-B", "general-purpose"))
+
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Call in A-first order to verify result ordering is preserved.
+	sigs, err := reader.FleetSignatures([]string{"session-A", "session-B"})
+	if err != nil {
+		t.Fatalf("FleetSignatures: %v", err)
+	}
+	if len(sigs) != 2 {
+		t.Fatalf("got %d signatures, want 2", len(sigs))
+	}
+
+	// --- session-A ---
+	sigA := sigs[0]
+	if sigA.SessionID != "session-A" {
+		t.Errorf("sigs[0].SessionID = %q, want session-A", sigA.SessionID)
+	}
+	if sigA.ReceiptCount != 5 {
+		t.Errorf("session-A ReceiptCount = %d, want 5", sigA.ReceiptCount)
+	}
+	if sigA.FirstSeen != "2026-05-01T10:00:00Z" {
+		t.Errorf("session-A FirstSeen = %q, want 2026-05-01T10:00:00Z", sigA.FirstSeen)
+	}
+	if sigA.LastSeen != "2026-05-01T10:04:00Z" {
+		t.Errorf("session-A LastSeen = %q, want 2026-05-01T10:04:00Z", sigA.LastSeen)
+	}
+
+	wantActivityA := map[string]int{
+		"bash":   1,
+		"read":   1,
+		"edit":   1,
+		"mcp":    1,
+		"search": 1,
+	}
+	for cat, want := range wantActivityA {
+		if got := sigA.Activity[cat]; got != want {
+			t.Errorf("session-A activity[%q] = %d, want %d", cat, got, want)
+		}
+	}
+	if total := 0; func() int {
+		for _, v := range sigA.Activity { total += v }; return total
+	}() != 5 {
+		t.Errorf("session-A total activity counts != 5: %v", sigA.Activity)
+	}
+
+	wantAgentTypesA := map[string]int{
+		"general-purpose": 2,
+		"Explore":         2,
+	}
+	for at, want := range wantAgentTypesA {
+		if got := sigA.AgentTypes[at]; got != want {
+			t.Errorf("session-A agent_types[%q] = %d, want %d", at, got, want)
+		}
+	}
+	// Root receipt (empty agent_type) must not appear in AgentTypes.
+	if len(sigA.AgentTypes) != 2 {
+		t.Errorf("session-A AgentTypes len = %d, want 2 (root excluded): %v", len(sigA.AgentTypes), sigA.AgentTypes)
+	}
+
+	// --- session-B ---
+	sigB := sigs[1]
+	if sigB.SessionID != "session-B" {
+		t.Errorf("sigs[1].SessionID = %q, want session-B", sigB.SessionID)
+	}
+	if sigB.ReceiptCount != 2 {
+		t.Errorf("session-B ReceiptCount = %d, want 2", sigB.ReceiptCount)
+	}
+	// "filesystem.file.read" → read; "filesystem.file.modify" → edit.
+	if sigB.Activity["read"] != 1 {
+		t.Errorf("session-B activity[read] = %d, want 1", sigB.Activity["read"])
+	}
+	if sigB.Activity["edit"] != 1 {
+		t.Errorf("session-B activity[edit] = %d, want 1 (file.modify must not fall through to read)", sigB.Activity["edit"])
+	}
+	if sigB.AgentTypes["general-purpose"] != 2 {
+		t.Errorf("session-B agent_types[general-purpose] = %d, want 2", sigB.AgentTypes["general-purpose"])
+	}
+}
+
+func TestFleetSignatures_OrderPreserved(t *testing.T) {
+	// Verify that FleetSignatures returns results in the same order as the
+	// input slice, not in the order rows come back from SQLite.
+	dbPath := t.TempDir() + "/fleet-order-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	insertFleet := func(ar receipt.AgentReceipt) {
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	insertFleet(makeFleetReceipt("urn:receipt:fo1", "chain-fo1", 1, "claude-code.Bash", "2026-05-01T09:00:00Z", "session-Z", ""))
+	insertFleet(makeFleetReceipt("urn:receipt:fo2", "chain-fo2", 1, "claude-code.Read", "2026-05-01T10:00:00Z", "session-A", ""))
+	insertFleet(makeFleetReceipt("urn:receipt:fo3", "chain-fo3", 1, "claude-code.Edit", "2026-05-01T11:00:00Z", "session-M", ""))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Request in Z, M, A order (reverse of any natural sort).
+	input := []string{"session-Z", "session-M", "session-A"}
+	sigs, err := reader.FleetSignatures(input)
+	if err != nil {
+		t.Fatalf("FleetSignatures: %v", err)
+	}
+	if len(sigs) != 3 {
+		t.Fatalf("got %d signatures, want 3", len(sigs))
+	}
+	for i, want := range input {
+		if sigs[i].SessionID != want {
+			t.Errorf("sigs[%d].SessionID = %q, want %q (order not preserved)", i, sigs[i].SessionID, want)
+		}
+	}
+}
+
+func TestFleetSignatures_UnknownSessionIDReturnsEmptyEntry(t *testing.T) {
+	// A session ID in the input that has no receipts must return an entry with
+	// zero counts and non-nil maps (not omitted from the slice).
+	dbPath := seedEmptyDB(t)
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	sigs, err := reader.FleetSignatures([]string{"no-such-session"})
+	if err != nil {
+		t.Fatalf("FleetSignatures: %v", err)
+	}
+	if len(sigs) != 1 {
+		t.Fatalf("got %d signatures, want 1", len(sigs))
+	}
+	if sigs[0].SessionID != "no-such-session" {
+		t.Errorf("SessionID = %q, want no-such-session", sigs[0].SessionID)
+	}
+	if sigs[0].ReceiptCount != 0 {
+		t.Errorf("ReceiptCount = %d, want 0", sigs[0].ReceiptCount)
+	}
+	if sigs[0].Activity == nil {
+		t.Error("Activity must be non-nil map for unknown session")
+	}
+	if sigs[0].AgentTypes == nil {
+		t.Error("AgentTypes must be non-nil map for unknown session")
+	}
+}
+
 // seedFileDB creates a temporary SQLite file with test data using the SDK store,
 // then closes the SDK store so the reader can open it read-only.
 func seedFileDB(t *testing.T) string {
