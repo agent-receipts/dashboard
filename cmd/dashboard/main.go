@@ -127,6 +127,7 @@ func main() {
 	port := flag.Int("port", 8080, "HTTP server port")
 	pollInterval := flag.Duration("poll-interval", server.DefaultPollInterval, "interval between live receipt polls (e.g. 5s)")
 	forensicKeyDirsFlag := flag.String("forensic-key-dirs", "", "comma-separated list of extra absolute directories from which the forensic key path endpoint may load a key (the user's home directory is always allowed)")
+	experimental := flag.Bool("experimental", false, "enable experimental features (e.g. /api/fleet/signatures)")
 	flag.Parse()
 
 	pollFlagSet := false
@@ -185,6 +186,7 @@ func main() {
 		Host:            *host,
 		ForensicKeyPath: defaultForensicKeyPath(),
 		ForensicKeyDirs: forensicKeyDirs,
+		Experimental:    *experimental,
 	})
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("dashboard listening on http://%s", addr)

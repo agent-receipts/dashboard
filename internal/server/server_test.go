@@ -1404,3 +1404,203 @@ func TestTaxonomyEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// ---------- /api/config experimental field ----------
+
+func TestConfigEndpoint_ExperimentalField(t *testing.T) {
+	dbPath := seedTestDB(t)
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+
+	for _, tc := range []struct {
+		name         string
+		experimental bool
+	}{
+		{"experimental false (default)", false},
+		{"experimental true", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(reader, Config{Experimental: tc.experimental})
+			req := httptest.NewRequest("GET", "/api/config", nil)
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("got status %d, want 200", w.Code)
+			}
+			var got struct {
+				Experimental bool `json:"experimental"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got.Experimental != tc.experimental {
+				t.Errorf("experimental = %v, want %v", got.Experimental, tc.experimental)
+			}
+		})
+	}
+}
+
+// ---------- /api/fleet/signatures endpoint ----------
+
+// seedFleetDB builds a DB with two sessions seeded with mixed action types and
+// agent types, suitable for testing the fleet signatures endpoint.
+func seedFleetDB(t *testing.T) *store.Reader {
+	t.Helper()
+	dbPath := t.TempDir() + "/fleet-srv-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+
+	insert := func(ar receipt.AgentReceipt) {
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	makeFleet := func(id, chainID string, seq int, actionType, ts, sessionID, agentType string) receipt.AgentReceipt {
+		ar := makeReceipt(id, chainID, seq, actionType, receipt.RiskLow, receipt.StatusSuccess, ts, nil)
+		ar.Issuer.SessionID = sessionID
+		if agentType != "" {
+			ar.Issuer.Runtime = &receipt.Runtime{AgentType: agentType}
+		}
+		return ar
+	}
+
+	// Session alpha — more recent (last_seen 10:04), comes first in SessionStats.
+	insert(makeFleet("urn:receipt:fl1", "chain-fl1", 1, "claude-code.Bash", "2026-06-01T10:00:00Z", "alpha", ""))
+	insert(makeFleet("urn:receipt:fl2", "chain-fl1", 2, "claude-code.Read", "2026-06-01T10:01:00Z", "alpha", "general-purpose"))
+	insert(makeFleet("urn:receipt:fl3", "chain-fl1", 3, "mcp.github.read", "2026-06-01T10:04:00Z", "alpha", "Explore"))
+
+	// Session beta — older (last_seen 09:01), comes second in SessionStats.
+	insert(makeFleet("urn:receipt:fl4", "chain-fl2", 1, "claude-code.Edit", "2026-06-01T09:00:00Z", "beta", "general-purpose"))
+	insert(makeFleet("urn:receipt:fl5", "chain-fl2", 2, "claude-code.ToolSearch", "2026-06-01T09:01:00Z", "beta", "general-purpose"))
+
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return reader
+}
+
+func TestFleetSignaturesEndpoint_DisabledWithout_Experimental(t *testing.T) {
+	reader := seedFleetDB(t)
+	srv := New(reader, Config{Experimental: false})
+
+	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got status %d, want 404 when experimental=false", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"] == "" {
+		t.Error("expected error message in response body")
+	}
+}
+
+func TestFleetSignaturesEndpoint_OK(t *testing.T) {
+	reader := seedFleetDB(t)
+	srv := New(reader, Config{Experimental: true})
+
+	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Signatures []store.SessionSignature `json:"signatures"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if body.Signatures == nil {
+		t.Error("signatures must be [] not null")
+	}
+	if len(body.Signatures) != 2 {
+		t.Fatalf("got %d signatures, want 2", len(body.Signatures))
+	}
+
+	// SessionStats orders by last_seen DESC: alpha (10:04) before beta (09:01).
+	if body.Signatures[0].SessionID != "alpha" {
+		t.Errorf("signatures[0].session_id = %q, want alpha", body.Signatures[0].SessionID)
+	}
+	if body.Signatures[0].ReceiptCount != 3 {
+		t.Errorf("alpha receipt_count = %d, want 3", body.Signatures[0].ReceiptCount)
+	}
+	if body.Signatures[0].Activity["bash"] != 1 {
+		t.Errorf("alpha activity[bash] = %d, want 1", body.Signatures[0].Activity["bash"])
+	}
+	if body.Signatures[0].Activity["mcp"] != 1 {
+		t.Errorf("alpha activity[mcp] = %d, want 1", body.Signatures[0].Activity["mcp"])
+	}
+	if body.Signatures[1].SessionID != "beta" {
+		t.Errorf("signatures[1].session_id = %q, want beta", body.Signatures[1].SessionID)
+	}
+	if body.Signatures[1].ReceiptCount != 2 {
+		t.Errorf("beta receipt_count = %d, want 2", body.Signatures[1].ReceiptCount)
+	}
+}
+
+func TestFleetSignaturesEndpoint_LimitParam(t *testing.T) {
+	reader := seedFleetDB(t)
+	srv := New(reader, Config{Experimental: true})
+
+	// limit=1 should return only the most-recent session (alpha).
+	req := httptest.NewRequest("GET", "/api/fleet/signatures?limit=1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("limit=1: got status %d, want 200", w.Code)
+	}
+	var body struct {
+		Signatures []store.SessionSignature `json:"signatures"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Signatures) != 1 {
+		t.Fatalf("limit=1: got %d signatures, want 1", len(body.Signatures))
+	}
+	if body.Signatures[0].SessionID != "alpha" {
+		t.Errorf("limit=1: signatures[0].session_id = %q, want alpha", body.Signatures[0].SessionID)
+	}
+
+	// limit=0 and limit=-1 must return 400.
+	for _, bad := range []string{"0", "-1", "abc"} {
+		req = httptest.NewRequest("GET", "/api/fleet/signatures?limit="+bad, nil)
+		w = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("limit=%s: got status %d, want 400", bad, w.Code)
+		}
+	}
+
+	// limit=99 must be silently capped at 24 (no error).
+	req = httptest.NewRequest("GET", "/api/fleet/signatures?limit=99", nil)
+	w = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("limit=99: got status %d, want 200 (cap not reject)", w.Code)
+	}
+}
