@@ -442,6 +442,12 @@
     .sg-label { font-family: var(--font-sans); pointer-events: none; }
     .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
 
+    /* Keyboard focus indicator for Fleet universe cards: highlight the cell boundary. */
+    .fleet-universe { outline: none; }
+    .fleet-universe:focus-visible .fleet-universe-cell {
+      stroke: var(--accent); stroke-width: 2; opacity: 1;
+    }
+
     pre {
       background: var(--surface-sunken);
       border: 1px solid var(--border);
@@ -4562,18 +4568,18 @@
     // (donut arc segment) from angle a0 to a1 (radians), centred at (cx,cy) with
     // inner radius ri and outer radius ro. Angles are measured from the positive
     // x-axis; start at -PI/2 to begin at the top.
-    // fp rounds SVG coordinates to 2 decimals to keep path strings compact.
-    function fp(n) { return Math.round(n * 100) / 100; }
+    // fleetFp rounds SVG coordinates to 2 decimals to keep path strings compact.
+    function fleetFp(n) { return Math.round(n * 100) / 100; }
 
     function fleetAnnularSectorPath(cx, cy, ri, ro, a0, a1) {
       const large = (a1 - a0) > Math.PI ? 1 : 0;
       const c0 = Math.cos(a0), s0 = Math.sin(a0);
       const c1 = Math.cos(a1), s1 = Math.sin(a1);
       return [
-        `M ${fp(cx + ro * c0)} ${fp(cy + ro * s0)}`,
-        `A ${fp(ro)} ${fp(ro)} 0 ${large} 1 ${fp(cx + ro * c1)} ${fp(cy + ro * s1)}`,
-        `L ${fp(cx + ri * c1)} ${fp(cy + ri * s1)}`,
-        `A ${fp(ri)} ${fp(ri)} 0 ${large} 0 ${fp(cx + ri * c0)} ${fp(cy + ri * s0)}`,
+        `M ${fleetFp(cx + ro * c0)} ${fleetFp(cy + ro * s0)}`,
+        `A ${fleetFp(ro)} ${fleetFp(ro)} 0 ${large} 1 ${fleetFp(cx + ro * c1)} ${fleetFp(cy + ro * s1)}`,
+        `L ${fleetFp(cx + ri * c1)} ${fleetFp(cy + ri * s1)}`,
+        `A ${fleetFp(ri)} ${fleetFp(ri)} 0 ${large} 0 ${fleetFp(cx + ri * c0)} ${fleetFp(cy + ri * s0)}`,
         'Z',
       ].join(' ');
     }
@@ -4713,7 +4719,7 @@
 
         // Wrap all universe elements in a clickable group.
         cells += `<g class="fleet-universe" data-session-id="${escapeAttr(sig.session_id || '')}" onclick="showSessionGraph(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showSessionGraph(this.dataset.sessionId)}" tabindex="0" style="cursor:pointer;" role="button" aria-label="${escapeAttr('View session graph for ' + (sig.session_id || ''))}">`;
-        cells += `<rect x="${col * CELL_W}" y="${row * CELL_H}" width="${CELL_W}" height="${CELL_H}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="0.4"/>`;
+        cells += `<rect class="fleet-universe-cell" x="${col * CELL_W}" y="${row * CELL_H}" width="${CELL_W}" height="${CELL_H}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="0.4"/>`;
         cells += elems;
         cells += '</g>';
       });
