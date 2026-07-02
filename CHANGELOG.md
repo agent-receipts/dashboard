@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-02
+
 ### Added
 
 - **Fleet activity-signature view** ([#156](https://github.com/agent-receipts/dashboard/issues/156)) — an experimental "Fleet" tab (visible only when `-experimental` is passed) renders a grid of universe-style SVG cards, one per recent session. Each card shows: a discretionary activity ring (mcp, read, edit, search, web, agent, task, other colour-coded arcs), a thin bash inner arc, an orchestrator circle sized by receipt count, agent-type satellites fanned around the top (sized by count, colour-coded by type), and three caption lines (heuristic character label, top-3 category breakdown + bash%, short session ID + receipt count). Clicking any universe calls the existing `showSessionGraph()` to drill into that session's delegation graph. A colour legend is shown below the grid.
