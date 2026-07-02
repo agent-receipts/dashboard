@@ -442,6 +442,12 @@
     .sg-label { font-family: var(--font-sans); pointer-events: none; }
     .sg-hint { font-size: 0.72rem; color: var(--muted); text-align: center; margin-bottom: 6px; }
 
+    /* Keyboard focus indicator for Fleet universe cards: highlight the cell boundary. */
+    .fleet-universe { outline: none; }
+    .fleet-universe:focus-visible .fleet-universe-cell {
+      stroke: var(--accent); stroke-width: 2; opacity: 1;
+    }
+
     pre {
       background: var(--surface-sunken);
       border: 1px solid var(--border);
@@ -731,6 +737,7 @@
       <button class="tab" onclick="showView('servers')" id="tab-servers">Servers</button>
       <button class="tab" onclick="showView('sessions')" id="tab-sessions">Sessions</button>
       <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
+      <button class="tab" onclick="showView('fleet')" id="tab-fleet" style="display:none;">Fleet</button>
     </nav>
   </header>
 
@@ -908,6 +915,11 @@
     <!-- Chains view -->
     <div id="view-chains" class="hidden">
       <div id="chains-list"></div>
+    </div>
+
+    <!-- Fleet view (experimental) -->
+    <div id="view-fleet" class="hidden">
+      <div id="fleet-container"></div>
     </div>
 
     <!-- Live polling toast -->
@@ -1159,6 +1171,7 @@
       if (view === 'servers')  loadServers();
       if (view === 'sessions') loadSessions();
       if (view === 'chains')   loadChains();
+      if (view === 'fleet')    loadFleet();
     }
 
     // ---------- Collapsible cards ----------
@@ -4519,6 +4532,262 @@
       }
     });
 
+
+    // ---------- Fleet (experimental) ----------
+    // Category colors for the discretionary activity ring.
+    const FLEET_CAT_COLORS = {
+      mcp:    '#bc8cff',
+      read:   '#58a6ff',
+      edit:   '#db61a2',
+      search: '#3fb950',
+      web:    '#39c5cf',
+      agent:  '#f0883e',
+      task:   '#8b949e',
+      other:  '#484f58',
+    };
+    // Fixed draw order for the ring (bash is excluded from the ring).
+    const FLEET_CAT_ORDER = ['mcp', 'read', 'edit', 'search', 'web', 'agent', 'task', 'other'];
+
+    // Satellite fill colors by agent type.
+    const FLEET_AGENT_COLORS = {
+      'general-purpose': '#238636',
+      'Explore':         '#39c5cf',
+      'Plan':            '#bc8cff',
+      'code-reviewer':   '#f0883e',
+    };
+
+    function fleetAgentColor(type) {
+      // hasOwnProperty guards against SQLite-sourced agent types that collide
+      // with inherited Object properties (e.g. "constructor", "__proto__").
+      return Object.prototype.hasOwnProperty.call(FLEET_AGENT_COLORS, type)
+        ? FLEET_AGENT_COLORS[type]
+        : '#8b949e';
+    }
+
+    // fleetAnnularSectorPath builds an SVG path string for a filled annular sector
+    // (donut arc segment) from angle a0 to a1 (radians), centred at (cx,cy) with
+    // inner radius ri and outer radius ro. Angles are measured from the positive
+    // x-axis; start at -PI/2 to begin at the top.
+    // fleetFp rounds SVG coordinates to 2 decimals to keep path strings compact.
+    function fleetFp(n) { return Math.round(n * 100) / 100; }
+
+    function fleetAnnularSectorPath(cx, cy, ri, ro, a0, a1) {
+      const large = (a1 - a0) > Math.PI ? 1 : 0;
+      const c0 = Math.cos(a0), s0 = Math.sin(a0);
+      const c1 = Math.cos(a1), s1 = Math.sin(a1);
+      return [
+        `M ${fleetFp(cx + ro * c0)} ${fleetFp(cy + ro * s0)}`,
+        `A ${fleetFp(ro)} ${fleetFp(ro)} 0 ${large} 1 ${fleetFp(cx + ro * c1)} ${fleetFp(cy + ro * s1)}`,
+        `L ${fleetFp(cx + ri * c1)} ${fleetFp(cy + ri * s1)}`,
+        `A ${fleetFp(ri)} ${fleetFp(ri)} 0 ${large} 0 ${fleetFp(cx + ri * c0)} ${fleetFp(cy + ri * s0)}`,
+        'Z',
+      ].join(' ');
+    }
+
+    // fleetCharLabel returns a bold heuristic character label for a session.
+    function fleetCharLabel(activity, agentsTotal, total) {
+      if (!total) return 'shell-heavy';
+      const mcpPct  = (activity.mcp  || 0) / total;
+      const readPct = (activity.read || 0) / total;
+      const editPct = (activity.edit || 0) / total;
+      if (agentsTotal > total * 0.3) return 'delegated refactor';
+      if (mcpPct  > 0.08)            return 'PR / integration';
+      if (readPct > 0.30)            return 'exploration';
+      if (editPct > 0.20)            return 'editing / build';
+      return 'shell-heavy';
+    }
+
+    // fleetTopCatsStr returns the top-3 discretionary categories as a readable
+    // string like "read 42%  edit 18%  mcp 12%".
+    function fleetTopCatsStr(activity, total) {
+      if (!total) return '';
+      return FLEET_CAT_ORDER
+        .map(c => ({ name: c, pct: Math.round(((activity[c] || 0) / total) * 100) }))
+        .filter(c => c.pct > 0)
+        .sort((a, b) => b.pct - a.pct)
+        .slice(0, 3)
+        .map(c => `${c.name} ${c.pct}%`)
+        .join('  ');
+    }
+
+    // renderFleetSVG renders the full grid of universe cards as an SVG string
+    // (plus a legend div below it).
+    function renderFleetSVG(signatures) {
+      const COLS           = 3;
+      const CELL_W         = 440;
+      const CELL_H         = 378;
+      const UNIV_CY_OFFSET = 165;  // universe center y within cell
+      const GAP            = 0.015; // radian gap between arc segments
+      const maxReceipts    = Math.max(1, ...signatures.map(s => Number(s.receipt_count) || 0));
+      const rows           = Math.ceil(signatures.length / COLS);
+      const svgW           = COLS * CELL_W;
+      const svgH           = rows * CELL_H;
+
+      let cells = '';
+
+      signatures.forEach((sig, idx) => {
+        const col = idx % COLS;
+        const row = Math.floor(idx / COLS);
+        const cx  = col * CELL_W + CELL_W / 2;
+        const cy  = row * CELL_H + UNIV_CY_OFFSET;
+
+        const orad = 18 + Math.sqrt(sig.receipt_count / maxReceipts) * 20;
+        const ri   = orad + 9;  // discretionary ring inner radius
+        const ro   = orad + 22; // discretionary ring outer radius (13px thick)
+        const bri  = orad + 3;  // bash ring inner radius
+        const bro  = orad + 7;  // bash ring outer radius (4px thick)
+        const discMid = (ri + ro) / 2;
+        const bashMid = (bri + bro) / 2;
+        const discThk = ro - ri;  // 13
+        const bashThk = bro - bri; // 4
+
+        const act       = sig.activity    || {};
+        const total     = sig.receipt_count || 1;
+        const bash      = act.bash         || 0;
+        const discTotal = FLEET_CAT_ORDER.reduce((s, c) => s + (act[c] || 0), 0);
+
+        let elems = '';
+
+        // 1. Faint full-circle track for discretionary ring.
+        elems += `<circle cx="${cx}" cy="${cy}" r="${discMid}" fill="none" stroke="#21262d" stroke-width="${discThk}"/>`;
+
+        // 2. Discretionary composition arcs (bash excluded).
+        const nzCats = FLEET_CAT_ORDER.filter(c => (act[c] || 0) > 0);
+        if (nzCats.length === 1) {
+          // A single category fills the whole ring — draw a full circle so there
+          // is no spurious inter-segment gap notch at the top.
+          elems += `<circle cx="${cx}" cy="${cy}" r="${discMid}" fill="none" stroke="${FLEET_CAT_COLORS[nzCats[0]]}" stroke-width="${discThk}" opacity="0.85"/>`;
+        } else if (discTotal > 0) {
+          let angle = -Math.PI / 2;
+          for (const cat of FLEET_CAT_ORDER) {
+            const count = act[cat] || 0;
+            if (!count) continue;
+            const span = (count / discTotal) * 2 * Math.PI;
+            const a0   = angle;
+            const a1   = angle + span - GAP;
+            if (a1 > a0) {
+              const d = fleetAnnularSectorPath(cx, cy, ri, ro, a0, a1);
+              elems += `<path d="${d}" fill="${FLEET_CAT_COLORS[cat]}" opacity="0.85"/>`;
+            }
+            angle += span;
+          }
+        }
+
+        // 3. Bash inner ring — faint track, then an amber gauge arc for the bash
+        // share (no inter-segment gap: it is a single arc, not a segmented ring).
+        elems += `<circle cx="${cx}" cy="${cy}" r="${bashMid}" fill="none" stroke="#21262d" stroke-width="${bashThk}"/>`;
+        if (bash > 0) {
+          const frac = bash / total;
+          if (frac >= 0.999) {
+            elems += `<circle cx="${cx}" cy="${cy}" r="${bashMid}" fill="none" stroke="#e3b341" stroke-width="${bashThk}" opacity="0.9"/>`;
+          } else {
+            const d = fleetAnnularSectorPath(cx, cy, bri, bro, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
+            elems += `<path d="${d}" fill="#e3b341" opacity="0.9"/>`;
+          }
+        }
+
+        // 4. Orchestrator circle + receipt-count label.
+        elems += `<circle cx="${cx}" cy="${cy}" r="${orad}" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"/>`;
+        elems += `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="11" font-family="var(--font-sans)">${escapeHtml(String(sig.receipt_count))}</text>`;
+
+        // 5. Agent-type satellites (sorted by count desc, fanned around top).
+        const agentEntries = Object.entries(sig.agent_types || {}).sort((a, b) => b[1] - a[1]);
+        const agentsTotal  = agentEntries.reduce((s, [, c]) => s + c, 0);
+        const n            = agentEntries.length;
+        agentEntries.forEach(([type, count], i) => {
+          const sAngle = -Math.PI / 2 + (i - (n - 1) / 2) * 0.5;
+          const orbitR = Math.min(ro + 26 + Math.sqrt(count) * 2.2, ro + 74);
+          const sRad   = 6 + Math.min(Math.sqrt(count) * 1.6, 20);
+          const sx     = Math.round((cx + orbitR * Math.cos(sAngle)) * 100) / 100;
+          const sy     = Math.round((cy + orbitR * Math.sin(sAngle)) * 100) / 100;
+          const color  = fleetAgentColor(type);
+          // Thin connector line from universe centre to satellite.
+          elems += `<line x1="${cx}" y1="${cy}" x2="${sx}" y2="${sy}" stroke="var(--border)" stroke-width="0.8" opacity="0.5"/>`;
+          elems += `<circle cx="${sx}" cy="${sy}" r="${Math.round(sRad * 100) / 100}" fill="${color}" opacity="0.8"/>`;
+          elems += `<text x="${sx}" y="${Math.round((sy - sRad - 4) * 100) / 100}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="var(--font-sans)">${escapeHtml(type + '\xd7' + count)}</text>`;
+        });
+
+        // 6. Captions (bold label, category breakdown, mono session ID).
+        const charLabel = fleetCharLabel(act, agentsTotal, total);
+        const topCatStr = fleetTopCatsStr(act, total);
+        const bashPct   = Math.round((bash / total) * 100);
+        const shortId   = (sig.session_id || '?').slice(0, 8);
+        const capY      = Math.round((cy + ro + 22) * 100) / 100;
+        elems += `<text x="${cx}" y="${capY}" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600" font-family="var(--font-sans)">${escapeHtml(charLabel)}</text>`;
+        elems += `<text x="${cx}" y="${capY + 17}" text-anchor="middle" fill="var(--muted)" font-size="9.5" font-family="var(--font-sans)">${escapeHtml(topCatStr + '  \xb7 bash ' + bashPct + '%')}</text>`;
+        elems += `<text x="${cx}" y="${capY + 32}" text-anchor="middle" fill="var(--subtle)" font-size="9" font-family="var(--font-mono)">${escapeHtml(shortId)} \xb7 ${escapeHtml(String(sig.receipt_count))} receipts</text>`;
+
+        // Wrap all universe elements in a clickable group.
+        cells += `<g class="fleet-universe" data-session-id="${escapeAttr(sig.session_id || '')}" onclick="showSessionGraph(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showSessionGraph(this.dataset.sessionId)}" tabindex="0" style="cursor:pointer;" role="button" aria-label="${escapeAttr('View session graph for ' + (sig.session_id || ''))}">`;
+        cells += `<rect class="fleet-universe-cell" x="${col * CELL_W}" y="${row * CELL_H}" width="${CELL_W}" height="${CELL_H}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="0.4"/>`;
+        cells += elems;
+        cells += '</g>';
+      });
+
+      // Category legend (ring segments).
+      const catLegend = FLEET_CAT_ORDER.map(c =>
+        `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:0.75rem;color:var(--text);">` +
+        `<span style="width:10px;height:10px;background:${FLEET_CAT_COLORS[c]};border-radius:2px;display:inline-block;flex-shrink:0;"></span>` +
+        `${escapeHtml(c)}</span>`
+      ).join('');
+
+      // Agent-type legend (satellite circles).
+      const agentLegend = [...Object.entries(FLEET_AGENT_COLORS), ['other', '#8b949e']].map(([type, color]) =>
+        `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:0.75rem;color:var(--text);">` +
+        `<span style="width:10px;height:10px;background:${color};border-radius:50%;display:inline-block;flex-shrink:0;"></span>` +
+        `${escapeHtml(type)}</span>`
+      ).join('');
+
+      const legend = `
+      <div style="margin-top:20px;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);">
+        <div style="color:var(--muted);font-size:0.7rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">Legend</div>
+        <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;">
+          <span style="color:var(--muted);font-size:0.72rem;margin-right:8px;flex-shrink:0;">Activity ring (non-bash):</span>${catLegend}
+        </div>
+        <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center;">
+          <span style="color:var(--muted);font-size:0.72rem;margin-right:8px;flex-shrink:0;">Agent types (satellites):</span>${agentLegend}
+        </div>
+        <div style="display:flex;align-items:center;">
+          <span style="color:var(--muted);font-size:0.72rem;margin-right:8px;flex-shrink:0;">Bash activity (inner arc):</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:0.75rem;color:var(--text);">
+            <span style="width:16px;height:4px;background:#e3b341;border-radius:2px;display:inline-block;"></span>bash
+          </span>
+        </div>
+      </div>`;
+
+      return `
+      <div style="overflow-x:auto;">
+        <svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg" style="display:block;background:var(--bg);">
+          ${cells}
+        </svg>
+      </div>
+      ${legend}`;
+    }
+
+    // loadFleet fetches /api/fleet/signatures and renders the universe grid.
+    async function loadFleet() {
+      const container = document.getElementById('fleet-container');
+      container.innerHTML = '<div class="muted text-sm" style="padding:48px;text-align:center;">Loading fleet signatures…</div>';
+      let data;
+      try {
+        data = await fetchJSON('/api/fleet/signatures');
+      } catch (err) {
+        if (err.status === 404) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-title">Fleet view unavailable</div><div class="empty-hint">Start the dashboard with <code>-experimental</code> to enable this view.</div></div>';
+        } else {
+          showError('Failed to load fleet signatures: ' + err.message);
+          container.innerHTML = '<div class="empty-state"><div class="empty-title">Failed to load fleet signatures</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
+        }
+        return;
+      }
+      const sigs = (data && data.signatures) || [];
+      if (!sigs.length) {
+        container.innerHTML = '<div class="empty-state"><div class="empty-title">No sessions yet</div><div class="empty-hint">Sessions will appear here once agent receipts with a <code>session_id</code> are recorded.</div></div>';
+        return;
+      }
+      container.innerHTML = renderFleetSVG(sigs);
+    }
+
     async function loadPollConfig() {
       try {
         const cfg = await fetchJSON('/api/config');
@@ -4530,6 +4799,9 @@
           poller.serverTime = cfg.server_time;
         }
         renderHeaderContext(cfg, null);
+        if (cfg.experimental) {
+          document.getElementById('tab-fleet').style.display = '';
+        }
       } catch (err) {
         console.warn('config:', err);
       }
@@ -4551,7 +4823,9 @@
       if (!res.ok) {
         let msg = `HTTP ${res.status}`;
         try { const body = await res.json(); if (body.error) msg = body.error; } catch (_) {}
-        throw new Error(msg);
+        const err = new Error(msg);
+        err.status = res.status;
+        throw err;
       }
       return res.json();
     }
