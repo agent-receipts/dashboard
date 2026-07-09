@@ -3263,6 +3263,71 @@ func TestFleetAttribution_NonConcurrentCollision(t *testing.T) {
 	}
 }
 
+// TestFleetAttribution_WallClockOverlapButTouchesFarApart is the issue #157
+// temporal-proximity test: two sessions whose activity windows overlap in
+// wall-clock time, but whose touches of the shared resource are hours apart,
+// must NOT be reported as a temporal overlap. TemporalOverlap is decided from
+// the two edge-forming touch timestamps, not from whether the sessions were
+// alive simultaneously — the old window-intersection gate would (wrongly)
+// report true here.
+func TestFleetAttribution_WallClockOverlapButTouchesFarApart(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-farapart-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const sidB = "session-b"
+	const shared = "db://orders/42"
+
+	// Session B starts first and works locally at 09:00.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fp1", "chain-b", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T09:00:00Z", sidB, "", "", "/wt/b/local.go"))
+	// Session A touches the shared resource at 10:00.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fp2", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", shared))
+	// Session B touches the same shared resource 3.5 hours later, at 13:30.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fp3", "chain-b", 2, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T13:30:00Z", sidB, "", "", shared))
+	// Session A keeps working locally until 14:00, so the two session windows
+	// (A: 10:00–14:00, B: 09:00–13:30) genuinely overlap in wall-clock time.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fp4", "chain-a", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T14:00:00Z", sidA, "", "", "/wt/a/notes.md"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if !sd.CrossSession {
+		t.Error("CrossSession = false, want true")
+	}
+	if sd.TemporalOverlap {
+		t.Error("TemporalOverlap = true, want false (touches were 3.5h apart despite overlapping windows)")
+	}
+
+	// A widened proximity threshold that spans the 3.5h gap flips it back on,
+	// confirming the value is configurable and drives the decision.
+	reader.SetTemporalProximity(4 * time.Hour)
+	res, err = reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution (widened): %v", err)
+	}
+	if len(res.StateDeps) != 1 || !res.StateDeps[0].TemporalOverlap {
+		t.Errorf("with 4h proximity, TemporalOverlap should be true: %+v", res.StateDeps)
+	}
+}
+
 // TestFleetAttribution_DistinctPathsNoCollision verifies that two sessions
 // working in separate worktrees (distinct absolute paths) produce no
 // cross-session edge — the attribution-over-undo property the issue relies on.
@@ -3293,6 +3358,72 @@ func TestFleetAttribution_DistinctPathsNoCollision(t *testing.T) {
 	if len(res.StateDeps) != 0 {
 		t.Errorf("StateDeps len = %d, want 0 (distinct worktree paths must not collide): %+v",
 			len(res.StateDeps), res.StateDeps)
+	}
+}
+
+// TestFleetAttribution_PathReuseSpuriousCrossSessionEdge documents a known
+// limitation (issue #157): the collision algorithm keys on the resource path
+// STRING as a proxy for logical file identity, so it cannot tell "same path,
+// same file" from "same path, reused for a different file over time." Session A
+// renames a file INTO a conventional path, then session B — in its own worktree,
+// working on an entirely different logical file — writes that same path string.
+// The two touches share no file, only a path, yet the algorithm reports a
+// cross-session state-dependency edge.
+//
+// This is a CHARACTERIZATION test: it asserts the spurious edge that today's
+// path-as-identity model produces, not the behaviour we would want. Removing it
+// would require a content-identity mechanism (content digest or inode tracking)
+// that the receipt schema does not currently carry — deliberately out of scope
+// here. If this test ever starts failing because the edge disappeared, a
+// content-identity fix landed and this documentation test should be replaced by
+// one asserting the absence of the edge.
+func TestFleetAttribution_PathReuseSpuriousCrossSessionEdge(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-pathreuse-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const sidB = "session-b"
+	const reusedPath = "/srv/data/current.db"
+
+	// Session A rotates a snapshot into the canonical path via a rename. The
+	// rename's target is reusedPath — A's logical file now lives there.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:pr1", "chain-a", 1, "filesystem.file.rename",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", reusedPath))
+	// Session B, working independently, later writes the SAME path string — but
+	// this is a different logical file (A's was rotated out; B provisioned a fresh
+	// one). Nothing is genuinely shared; only the path string collides.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:pr2", "chain-b", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:05:00Z", sidB, "", "", reusedPath))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+
+	// The path-as-identity model reports a spurious cross-session edge. Asserting
+	// it here pins the known limitation so any future change to this behaviour is
+	// a deliberate, reviewed decision — not a silent regression.
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1 (spurious path-reuse edge): %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if !sd.CrossSession {
+		t.Error("CrossSession = false, want true (spurious edge spans the two sessions)")
+	}
+	if len(sd.Resources) != 1 || sd.Resources[0] != reusedPath {
+		t.Errorf("Resources = %v, want [%s]", sd.Resources, reusedPath)
+	}
+	if !res.HasMoveOps {
+		t.Error("HasMoveOps = false, want true (session A performed a rename)")
 	}
 }
 
@@ -3335,7 +3466,7 @@ func TestFleetAttribution_IntraSessionEdgeNotCrossSession(t *testing.T) {
 		t.Errorf("CrossSession = true, want false for intra-session edge %q→%q", sd.FromAgent, sd.ToAgent)
 	}
 	if !sd.TemporalOverlap {
-		t.Error("TemporalOverlap = false, want true (a session always overlaps itself)")
+		t.Error("TemporalOverlap = false, want true (the two touches were 1 minute apart)")
 	}
 	if sd.FromAgent != sidA+"::__root__" || sd.ToAgent != sidA+"::"+subAgent {
 		t.Errorf("edge = %q→%q, want intra-session root→subagent", sd.FromAgent, sd.ToAgent)

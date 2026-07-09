@@ -19,7 +19,20 @@ import (
 // Reader provides read-only access to an existing receipt SQLite database.
 type Reader struct {
 	db *sql.DB
+	// temporalProximity is the maximum gap between the two edge-forming touches
+	// of a shared resource for which a state-dependency edge is reported as a
+	// concurrent collision (TemporalOverlap=true). Defaults to
+	// defaultTemporalProximity; override with SetTemporalProximity.
+	temporalProximity time.Duration
 }
+
+// defaultTemporalProximity is the default temporalProximity threshold. It is
+// deliberately generous: genuine contention for a resource plays out within
+// minutes, but a wide default avoids under-reporting overlap when session
+// clocks drift or a touch is logged late. "Temporal overlap" means the two
+// contending touches were close in time — not merely that both sessions were
+// alive at some overlapping point in their lifetimes.
+const defaultTemporalProximity = time.Hour
 
 // ReceiptRow holds the indexed columns from a receipt row for list views.
 type ReceiptRow struct {
@@ -220,7 +233,18 @@ func OpenReadOnly(dbPath string) (*Reader, error) {
 		return nil, fmt.Errorf("verify schema: %w", err)
 	}
 
-	return &Reader{db: db}, nil
+	return &Reader{db: db, temporalProximity: defaultTemporalProximity}, nil
+}
+
+// SetTemporalProximity overrides the maximum gap between the two edge-forming
+// touches of a shared resource for which a state-dependency edge is reported as
+// a concurrent collision (TemporalOverlap=true). A non-positive value resets to
+// defaultTemporalProximity.
+func (r *Reader) SetTemporalProximity(d time.Duration) {
+	if d <= 0 {
+		d = defaultTemporalProximity
+	}
+	r.temporalProximity = d
 }
 
 // GetByID retrieves a full receipt by its ID. Returns nil if not found.
@@ -922,11 +946,14 @@ type StatDepEdge struct {
 	// CrossSession is true when the two agents belong to different sessions —
 	// the fleet-view collision signal. Always false within a single session.
 	CrossSession bool `json:"cross_session"`
-	// TemporalOverlap is true when the two agents' sessions were active in
-	// overlapping time windows. For a cross-session edge this distinguishes a
-	// concurrent collision (two sessions live at once, genuinely contending for
-	// the resource) from the same resource merely touched at different times.
-	// Always true within a single session.
+	// TemporalOverlap is true when the two edge-forming touches of the shared
+	// resource happened close in time — within the reader's temporalProximity
+	// threshold. For a cross-session edge this distinguishes a concurrent
+	// collision (both agents contending for the resource at nearly the same
+	// moment) from the same resource merely touched at different times. It is
+	// measured from the contending action timestamps, NOT from whether the two
+	// sessions' lifetimes happened to overlap: two long-lived sessions can be
+	// alive simultaneously yet touch the resource hours apart.
 	TemporalOverlap bool `json:"temporal_overlap"`
 }
 
@@ -959,15 +986,23 @@ func higherRisk(a, b string) string {
 	return a
 }
 
-// timeWindow is the [first, last] ISO-8601 timestamp span of a session's
-// activity. ISO-8601 timestamps sort lexicographically, so string comparison
-// is the same as chronological comparison.
-type timeWindow struct{ first, last string }
-
-// overlaps reports whether two session activity windows intersect — i.e. the
-// two sessions were live at the same time. Touching endpoints count as overlap.
-func (w timeWindow) overlaps(o timeWindow) bool {
-	return w.first <= o.last && o.first <= w.last
+// touchGap returns the absolute time between two ISO-8601 touch timestamps. If
+// either fails to parse it returns a duration far larger than any sane
+// proximity threshold, so an unparseable timestamp never counts as overlap.
+func touchGap(a, b string) time.Duration {
+	ta, err := time.Parse(time.RFC3339, a)
+	if err != nil {
+		return time.Duration(1<<62 - 1)
+	}
+	tb, err := time.Parse(time.RFC3339, b)
+	if err != nil {
+		return time.Duration(1<<62 - 1)
+	}
+	d := ta.Sub(tb)
+	if d < 0 {
+		d = -d
+	}
+	return d
 }
 
 // attrRow is one receipt row scanned for attribution computation.
@@ -1044,7 +1079,7 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 		return AttributionResult{}, err
 	}
 	// Within one session, agent keys are the bare agent_id (or "__root__").
-	return buildAttribution(all, func(rr attrRow) string { return agentKeyOf(rr.agentID) }), nil
+	return buildAttribution(all, r.temporalProximity, func(rr attrRow) string { return agentKeyOf(rr.agentID) }), nil
 }
 
 // FleetAttribution computes one combined §4 attribution payload across several
@@ -1055,9 +1090,19 @@ func (r *Reader) SessionAttribution(sessionID string) (AttributionResult, error)
 // two different agent keys touching the same action.target.resource produce an
 // edge, regardless of session boundary.
 //
-// Resource identity resolves correctly without extra work: distinct worktree
-// paths are distinct strings (no false collision), while a shared DB row / API
-// endpoint / secret has one global identifier (a real collision).
+// Resource identity resolves correctly for the common case without extra work:
+// distinct worktree paths are distinct strings (no false collision), while a
+// shared DB row / API endpoint / secret has one global identifier (a real
+// collision).
+//
+// CAVEAT (issue #157) — path ≠ file identity: because the collision key is a
+// path STRING, the converse failure is possible. A single path reused over time
+// for different logical files (one session renames a file into a conventional
+// path, another later writes a different file at that same path) reports a
+// spurious cross-session edge. The receipt schema carries no content digest or
+// inode to disambiguate, so this is a documented limitation, not something the
+// dashboard defends against. HasMoveOps flags payloads where rename/move
+// operations make path reuse — and thus this false positive — more likely.
 func (r *Reader) FleetAttribution(sessionIDs []string) (AttributionResult, error) {
 	if len(sessionIDs) == 0 {
 		return emptyAttribution(), nil
@@ -1076,7 +1121,7 @@ func (r *Reader) FleetAttribution(sessionIDs []string) (AttributionResult, error
 	if err != nil {
 		return AttributionResult{}, err
 	}
-	return buildAttribution(all, func(rr attrRow) string {
+	return buildAttribution(all, r.temporalProximity, func(rr attrRow) string {
 		return rr.sessionID + "::" + agentKeyOf(rr.agentID)
 	}), nil
 }
@@ -1094,9 +1139,10 @@ func emptyAttribution() AttributionResult {
 
 // buildAttribution is the shared §4 computation. keyFunc maps each row to its
 // agent key — bare agent_id for a single session, session-namespaced for a
-// fleet — which is the only difference between the two entry points. Rows must
+// fleet — which is the only difference between the two entry points. proximity
+// is the TemporalOverlap threshold (see StatDepEdge.TemporalOverlap). Rows must
 // already be ordered by (timestamp, chain_id, sequence).
-func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionResult {
+func buildAttribution(all []attrRow, proximity time.Duration, keyFunc func(attrRow) string) AttributionResult {
 	if len(all) == 0 {
 		return emptyAttribution()
 	}
@@ -1121,11 +1167,6 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 	}
 	nodeMap := map[string]*nodeAcc{}
 
-	// Per-session activity window [first, last]. Used to decide whether a
-	// cross-session edge is a concurrent collision (windows overlap) or the same
-	// resource touched at different times (windows disjoint).
-	sessionWindow := map[string]timeWindow{}
-
 	// file identity index: resource → ordered touches (agentKey + timestamp).
 	type touch struct {
 		agentKey  string
@@ -1140,17 +1181,6 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 		if nd == nil {
 			nd = &nodeAcc{riskProfile: map[string]int{}, sessionID: rr.sessionID}
 			nodeMap[ak] = nd
-		}
-		if w, ok := sessionWindow[rr.sessionID]; !ok {
-			sessionWindow[rr.sessionID] = timeWindow{rr.timestamp, rr.timestamp}
-		} else {
-			if rr.timestamp < w.first {
-				w.first = rr.timestamp
-			}
-			if rr.timestamp > w.last {
-				w.last = rr.timestamp
-			}
-			sessionWindow[rr.sessionID] = w
 		}
 		if nd.agentType == "" && rr.agentType != "" {
 			nd.agentType = rr.agentType
@@ -1177,9 +1207,26 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 	// Edge keys are canonicalised (smaller < larger ID) so A→B and B→A on the
 	// same resource collapse to a single edge. The temporal direction (from_agent
 	// = whoever touched first) is recorded separately on first encounter.
+	//
+	// KNOWN LIMITATION (issue #157) — path ≠ file identity: the resource key is a
+	// path STRING, used as a proxy for logical file identity. A path reused over
+	// time for different logical files (agent A renames a file INTO a path, then
+	// agent B later writes a DIFFERENT file at that same path string) produces a
+	// spurious cross-session edge: the two touches share a path but not a file.
+	// Disambiguating would require a content-identity signal (content digest or
+	// inode), which the receipt schema does not currently carry. This is
+	// documented, not defended against — see the FleetAttribution doc comment and
+	// the TestFleetAttribution_PathReuseSpuriousCrossSessionEdge characterization
+	// test. HasMoveOps is surfaced so callers can warn when rename/move operations
+	// make this more likely.
 	type edgeKey struct{ a, b string } // a <= b always
 	edgeResources := map[edgeKey]map[string]bool{}
 	edgeFrom := map[edgeKey]string{} // temporally-first agent for each edge
+	// edgeMinGap is the smallest time gap between any two consecutive
+	// edge-forming touches for a pair. TemporalOverlap is decided from this: the
+	// closest the two agents came to contending for the resource, not whether
+	// their session lifetimes overlapped (see StatDepEdge.TemporalOverlap).
+	edgeMinGap := map[edgeKey]time.Duration{}
 	for resource, touches := range fileIndex {
 		for i := 1; i < len(touches); i++ {
 			prev, next := touches[i-1].agentKey, touches[i].agentKey
@@ -1198,6 +1245,10 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 			// ISO-8601 timestamps sort lexicographically, matching ORDER BY timestamp ASC.
 			if cur, ok := edgeFrom[ek]; !ok || prev < cur {
 				edgeFrom[ek] = prev
+			}
+			gap := touchGap(touches[i-1].timestamp, touches[i].timestamp)
+			if cur, ok := edgeMinGap[ek]; !ok || gap < cur {
+				edgeMinGap[ek] = gap
 			}
 			edgeResources[ek][resource] = true
 		}
@@ -1222,7 +1273,7 @@ func buildAttribution(all []attrRow, keyFunc func(attrRow) string) AttributionRe
 			Resources:       resources,
 			CrossAgent:      true,
 			CrossSession:    sa != sb,
-			TemporalOverlap: sessionWindow[sa].overlaps(sessionWindow[sb]),
+			TemporalOverlap: edgeMinGap[ek] <= proximity,
 		})
 	}
 	sort.Slice(stateDeps, func(i, j int) bool {
