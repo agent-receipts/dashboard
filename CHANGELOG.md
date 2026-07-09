@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Session dependency-graph wording is now evidential, not proof-claiming** — the README session-attribution section and the graph's coverage indicator no longer describe path-derived state-dependency edges as "provable"/making causal order "provable". These edges are derived from shared `action.target.resource` path strings (path identity ≠ file identity), so they are framed as evidence of a dependency. The coverage label reads `N / M receipts resource-linked` (was `identity-indexed`) and carries a tooltip explaining that Bash/MCP/spawn receipts are signed but carry no resource path. No behaviour change.
 
+### Documentation
+
+- **Forensic key endpoint security model** — `SECURITY.md` now documents the security model of `POST /api/forensic-key` and `POST /api/forensic-key/path`: the guards in place (loopback-only bind, Host-header/DNS-rebinding validation, and cross-origin rejection on both endpoints, plus an `application/json` Content-Type CSRF guard and a `..`/NUL path allowlist on `POST /api/forensic-key/path`), the default home-directory allowlist root, the residual risk of that broad default, and the recommendation to scope `-forensic-key-dirs` to the minimum needed.
+
 ## [0.10.0] - 2026-07-02
 
 ### Added
