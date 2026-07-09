@@ -1331,9 +1331,9 @@ func TestSessionAttributionEndpoint_MissingSession(t *testing.T) {
 	}
 }
 
-// seedFleetDB seeds two sessions whose orchestrators collide on one shared
-// global resource, plus one session-local resource that must not collide.
-func seedFleetDB(t *testing.T) *Server {
+// seedFleetAttributionDB seeds two sessions whose orchestrators collide on one
+// shared global resource, plus one session-local resource that must not collide.
+func seedFleetAttributionDB(t *testing.T) *Server {
 	t.Helper()
 	dbPath := t.TempDir() + "/fleet-server-test.db"
 	s, err := sdkstore.Open(dbPath)
@@ -1368,7 +1368,7 @@ func seedFleetDB(t *testing.T) *Server {
 }
 
 func TestFleetAttributionEndpoint_CrossSessionEdge(t *testing.T) {
-	srv := seedFleetDB(t)
+	srv := seedFleetAttributionDB(t)
 	req := httptest.NewRequest("GET", "/api/fleet/attribution", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -1392,7 +1392,7 @@ func TestFleetAttributionEndpoint_CrossSessionEdge(t *testing.T) {
 }
 
 func TestFleetAttributionEndpoint_BadLimit(t *testing.T) {
-	srv := seedFleetDB(t)
+	srv := seedFleetAttributionDB(t)
 	req := httptest.NewRequest("GET", "/api/fleet/attribution?limit=0", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -1403,7 +1403,7 @@ func TestFleetAttributionEndpoint_BadLimit(t *testing.T) {
 }
 
 func TestFleetAttributionEndpoint_LimitCaps(t *testing.T) {
-	srv := seedFleetDB(t)
+	srv := seedFleetAttributionDB(t)
 	// limit=1 restricts the fleet to the single most-recently-active session, so
 	// the cross-session collision is no longer in scope and no edge is produced.
 	req := httptest.NewRequest("GET", "/api/fleet/attribution?limit=1", nil)
