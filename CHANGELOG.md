@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Fleet attribution data layer** — new `FleetAttribution([]sessionID)` and `GET /api/fleet/attribution?limit=N` endpoint compute one combined §4 attribution payload across the N most recently-active sessions (default 6, capped at 12). Agent keys are namespaced `<session_id>::<agent_key>` so each session's orchestrator stays distinct, and state-dependency edges spanning two sessions are flagged `cross_session` — the cross-session collision signal where two independent agents touch the same global resource. Each edge also carries `temporal_overlap`: whether the two sessions were active in overlapping time windows, distinguishing a concurrent collision (genuine contention) from the same resource merely touched at different times. `StatDepEdge` gains `cross_session` and `temporal_overlap`; `NodeAttribution` gains `session_id`; single-session `SessionAttribution` output is unchanged except for the additive `session_id`. Groundwork for the upcoming fleet view (#156); no UI yet.
+
 ### Changed
 
 - **Session dependency-graph wording is now evidential, not proof-claiming** — the README session-attribution section and the graph's coverage indicator no longer describe path-derived state-dependency edges as "provable"/making causal order "provable". These edges are derived from shared `action.target.resource` path strings (path identity ≠ file identity), so they are framed as evidence of a dependency. The coverage label reads `N / M receipts resource-linked` (was `identity-indexed`) and carries a tooltip explaining that Bash/MCP/spawn receipts are signed but carry no resource path. No behaviour change.

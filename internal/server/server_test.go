@@ -1331,6 +1331,97 @@ func TestSessionAttributionEndpoint_MissingSession(t *testing.T) {
 	}
 }
 
+// seedFleetAttributionDB seeds two sessions whose orchestrators collide on one
+// shared global resource, plus one session-local resource that must not collide.
+func seedFleetAttributionDB(t *testing.T) *Server {
+	t.Helper()
+	dbPath := t.TempDir() + "/fleet-server-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	insert := func(id, chainID string, seq int, actionType string, risk receipt.RiskLevel, ts, sid, resource string) {
+		ar := makeReceipt(id, chainID, seq, actionType, risk, receipt.StatusSuccess, ts, nil)
+		ar.Issuer.SessionID = sid
+		if resource != "" {
+			ar.CredentialSubject.Action.Target = &receipt.ActionTarget{Resource: resource}
+		}
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	insert("urn:receipt:f1", "chain-a", 1, "filesystem.file.write", receipt.RiskMedium, "2026-04-01T10:00:00Z", "session-a", "db://orders/42")
+	insert("urn:receipt:f2", "chain-b", 1, "filesystem.file.write", receipt.RiskMedium, "2026-04-01T10:01:00Z", "session-b", "db://orders/42")
+	insert("urn:receipt:f3", "chain-b", 2, "filesystem.file.read", receipt.RiskLow, "2026-04-01T10:02:00Z", "session-b", "/wt/b/local.go")
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+	return New(reader, Config{})
+}
+
+func TestFleetAttributionEndpoint_CrossSessionEdge(t *testing.T) {
+	srv := seedFleetAttributionDB(t)
+	req := httptest.NewRequest("GET", "/api/fleet/attribution", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var result store.AttributionResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Nodes) != 2 {
+		t.Errorf("Nodes len = %d, want 2 (one root per session)", len(result.Nodes))
+	}
+	if len(result.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(result.StateDeps), result.StateDeps)
+	}
+	if !result.StateDeps[0].CrossSession {
+		t.Error("StateDeps[0].CrossSession = false, want true")
+	}
+}
+
+func TestFleetAttributionEndpoint_BadLimit(t *testing.T) {
+	srv := seedFleetAttributionDB(t)
+	req := httptest.NewRequest("GET", "/api/fleet/attribution?limit=0", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got status %d, want 400 for limit=0", w.Code)
+	}
+}
+
+func TestFleetAttributionEndpoint_LimitCaps(t *testing.T) {
+	srv := seedFleetAttributionDB(t)
+	// limit=1 restricts the fleet to the single most-recently-active session, so
+	// the cross-session collision is no longer in scope and no edge is produced.
+	req := httptest.NewRequest("GET", "/api/fleet/attribution?limit=1", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var result store.AttributionResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.StateDeps) != 0 {
+		t.Errorf("StateDeps len = %d, want 0 with limit=1: %+v", len(result.StateDeps), result.StateDeps)
+	}
+}
+
 func TestTaxonomyEndpoint(t *testing.T) {
 	srv := setupServer(t)
 	req := httptest.NewRequest("GET", "/api/taxonomy", nil)

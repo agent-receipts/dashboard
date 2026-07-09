@@ -3018,7 +3018,10 @@ func TestFleetSignatures_ActivityAndAgentTypes(t *testing.T) {
 		}
 	}
 	if total := 0; func() int {
-		for _, v := range sigA.Activity { total += v }; return total
+		for _, v := range sigA.Activity {
+			total += v
+		}
+		return total
 	}() != 5 {
 		t.Errorf("session-A total activity counts != 5: %v", sigA.Activity)
 	}
@@ -3133,6 +3136,234 @@ func TestFleetSignatures_UnknownSessionIDReturnsEmptyEntry(t *testing.T) {
 	}
 }
 
+// ---------- FleetAttribution tests ----------
+
+// TestFleetAttribution_CrossSessionCollision is the issue #156 de-risking test:
+// two independent sessions touching the same global resource must produce a
+// single cross-session state-dep edge, while a resource touched by only one
+// session produces no edge. Agent keys are namespaced "<session>::<agentKey>".
+func TestFleetAttribution_CrossSessionCollision(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-collision-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const sidB = "session-b"
+	// Sessions A and B run concurrently (their activity windows interleave).
+	// Session A's orchestrator touches a shared global resource (a DB row).
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa1", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", "db://orders/42"))
+	// Session B's orchestrator later touches the same resource → cross-session dep.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa2", "chain-b", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sidB, "", "", "db://orders/42"))
+	// Session B also touches a worktree-local path nobody else does → no edge.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa3", "chain-b", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", sidB, "", "", "/wt/b/local.go"))
+	// A keeps working after B starts, so the two session windows overlap.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa4", "chain-a", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:03:00Z", sidA, "", "", "/wt/a/notes.md"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+
+	// Two namespaced root nodes, one per session.
+	if len(res.Nodes) != 2 {
+		t.Fatalf("Nodes len = %d, want 2: %+v", len(res.Nodes), res.Nodes)
+	}
+	wantKeys := map[string]string{
+		sidA + "::__root__": sidA,
+		sidB + "::__root__": sidB,
+	}
+	for _, n := range res.Nodes {
+		wantSession, ok := wantKeys[n.AgentKey]
+		if !ok {
+			t.Errorf("unexpected node key %q", n.AgentKey)
+			continue
+		}
+		if n.SessionID != wantSession {
+			t.Errorf("node %q SessionID = %q, want %q", n.AgentKey, n.SessionID, wantSession)
+		}
+	}
+
+	// Exactly one edge: session A → session B via the shared global resource.
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if sd.FromAgent != sidA+"::__root__" {
+		t.Errorf("FromAgent = %q, want %q", sd.FromAgent, sidA+"::__root__")
+	}
+	if sd.ToAgent != sidB+"::__root__" {
+		t.Errorf("ToAgent = %q, want %q", sd.ToAgent, sidB+"::__root__")
+	}
+	if !sd.CrossSession {
+		t.Error("CrossSession = false, want true")
+	}
+	if !sd.CrossAgent {
+		t.Error("CrossAgent = false, want true")
+	}
+	if !sd.TemporalOverlap {
+		t.Error("TemporalOverlap = false, want true (sessions ran concurrently)")
+	}
+	if len(sd.Resources) != 1 || sd.Resources[0] != "db://orders/42" {
+		t.Errorf("Resources = %v, want [db://orders/42]", sd.Resources)
+	}
+}
+
+// TestFleetAttribution_NonConcurrentCollision verifies the temporal gate: two
+// sessions that touched the same resource a day apart still produce a
+// cross-session edge, but with TemporalOverlap=false — incidental same-file
+// reuse, not concurrent contention. This is the case the fleet view filters out.
+func TestFleetAttribution_NonConcurrentCollision(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-nonconcurrent-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const sidB = "session-b"
+	// Session A edits a file on day 1, session B edits the same file on day 2.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:nc1", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", "/repo/main.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:nc2", "chain-a", 2, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:30:00Z", sidA, "", "", "/repo/util.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:nc3", "chain-b", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-02T10:00:00Z", sidB, "", "", "/repo/main.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if !sd.CrossSession {
+		t.Error("CrossSession = false, want true")
+	}
+	if sd.TemporalOverlap {
+		t.Error("TemporalOverlap = true, want false (sessions ran a day apart)")
+	}
+}
+
+// TestFleetAttribution_DistinctPathsNoCollision verifies that two sessions
+// working in separate worktrees (distinct absolute paths) produce no
+// cross-session edge — the attribution-over-undo property the issue relies on.
+func TestFleetAttribution_DistinctPathsNoCollision(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-distinct-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const sidB = "session-b"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fd1", "chain-a", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", "/wt/a/main.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fd2", "chain-b", 1, "filesystem.file.write",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sidB, "", "", "/wt/b/main.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, sidB})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+	if len(res.StateDeps) != 0 {
+		t.Errorf("StateDeps len = %d, want 0 (distinct worktree paths must not collide): %+v",
+			len(res.StateDeps), res.StateDeps)
+	}
+}
+
+// TestFleetAttribution_IntraSessionEdgeNotCrossSession verifies that a
+// within-session collision in a fleet payload keeps CrossSession=false, so the
+// frontend styles it as an intra-session dependency, not a fleet collision.
+func TestFleetAttribution_IntraSessionEdgeNotCrossSession(t *testing.T) {
+	dbPath := t.TempDir() + "/fleet-intra-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sidA = "session-a"
+	const subAgent = "subagent-xyz"
+	// Within session A: root then a subagent touch the same file.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fi1", "chain-root", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sidA, "", "", "shared.go"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fi2", "chain-sub", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T10:01:00Z", sidA, subAgent, "general-purpose", "shared.go"))
+	// A second session with an unrelated resource — present but not colliding.
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fi3", "chain-b", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:02:00Z", "session-b", "", "", "other.go"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution([]string{sidA, "session-b"})
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	sd := res.StateDeps[0]
+	if sd.CrossSession {
+		t.Errorf("CrossSession = true, want false for intra-session edge %q→%q", sd.FromAgent, sd.ToAgent)
+	}
+	if !sd.TemporalOverlap {
+		t.Error("TemporalOverlap = false, want true (a session always overlaps itself)")
+	}
+	if sd.FromAgent != sidA+"::__root__" || sd.ToAgent != sidA+"::"+subAgent {
+		t.Errorf("edge = %q→%q, want intra-session root→subagent", sd.FromAgent, sd.ToAgent)
+	}
+}
+
+// TestFleetAttribution_Empty verifies that no session IDs yields an empty,
+// non-nil payload rather than a query error.
+func TestFleetAttribution_Empty(t *testing.T) {
+	dbPath := seedEmptyDB(t)
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.FleetAttribution(nil)
+	if err != nil {
+		t.Fatalf("FleetAttribution: %v", err)
+	}
+	if len(res.Nodes) != 0 || len(res.StateDeps) != 0 {
+		t.Errorf("want empty result, got %+v", res)
+	}
+	if res.BlastRadius == nil {
+		t.Error("BlastRadius should be non-nil map")
+	}
+}
+
 // seedFileDB creates a temporary SQLite file with test data using the SDK store,
 // then closes the SDK store so the reader can open it read-only.
 func seedFileDB(t *testing.T) string {
@@ -3163,4 +3394,3 @@ func seedFileDB(t *testing.T) string {
 	s.Close()
 	return dbPath
 }
-
