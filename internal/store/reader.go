@@ -22,17 +22,32 @@ type Reader struct {
 	// temporalProximity is the maximum gap between the two edge-forming touches
 	// of a shared resource for which a state-dependency edge is reported as a
 	// concurrent collision (TemporalOverlap=true). Defaults to
-	// defaultTemporalProximity; override with SetTemporalProximity.
+	// DefaultTemporalProximity; override at construction with WithTemporalProximity.
 	temporalProximity time.Duration
 }
 
-// defaultTemporalProximity is the default temporalProximity threshold. It is
+// DefaultTemporalProximity is the default temporalProximity threshold. It is
 // deliberately generous: genuine contention for a resource plays out within
 // minutes, but a wide default avoids under-reporting overlap when session
 // clocks drift or a touch is logged late. "Temporal overlap" means the two
 // contending touches were close in time — not merely that both sessions were
 // alive at some overlapping point in their lifetimes.
-const defaultTemporalProximity = time.Hour
+const DefaultTemporalProximity = time.Hour
+
+// Option configures a Reader at construction time.
+type Option func(*Reader)
+
+// WithTemporalProximity sets the maximum gap between the two edge-forming
+// touches of a shared resource for which a state-dependency edge is reported as
+// a concurrent collision (TemporalOverlap=true). A non-positive value is ignored
+// so the caller keeps DefaultTemporalProximity.
+func WithTemporalProximity(d time.Duration) Option {
+	return func(r *Reader) {
+		if d > 0 {
+			r.temporalProximity = d
+		}
+	}
+}
 
 // ReceiptRow holds the indexed columns from a receipt row for list views.
 type ReceiptRow struct {
@@ -204,8 +219,9 @@ type Filter struct {
 }
 
 // OpenReadOnly opens an existing receipt SQLite database in read-only mode.
-// Returns an error if the file does not exist.
-func OpenReadOnly(dbPath string) (*Reader, error) {
+// Returns an error if the file does not exist. Options (e.g. WithTemporalProximity)
+// tune attribution behaviour and are applied once at construction.
+func OpenReadOnly(dbPath string, opts ...Option) (*Reader, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("database not found: %w", err)
 	}
@@ -233,18 +249,11 @@ func OpenReadOnly(dbPath string) (*Reader, error) {
 		return nil, fmt.Errorf("verify schema: %w", err)
 	}
 
-	return &Reader{db: db, temporalProximity: defaultTemporalProximity}, nil
-}
-
-// SetTemporalProximity overrides the maximum gap between the two edge-forming
-// touches of a shared resource for which a state-dependency edge is reported as
-// a concurrent collision (TemporalOverlap=true). A non-positive value resets to
-// defaultTemporalProximity.
-func (r *Reader) SetTemporalProximity(d time.Duration) {
-	if d <= 0 {
-		d = defaultTemporalProximity
+	r := &Reader{db: db, temporalProximity: DefaultTemporalProximity}
+	for _, opt := range opts {
+		opt(r)
 	}
-	r.temporalProximity = d
+	return r, nil
 }
 
 // GetByID retrieves a full receipt by its ID. Returns nil if not found.
@@ -986,19 +995,19 @@ func higherRisk(a, b string) string {
 	return a
 }
 
-// touchGap returns the absolute time between two ISO-8601 touch timestamps. If
-// either fails to parse it returns a duration far larger than any sane
-// proximity threshold, so an unparseable timestamp never counts as overlap.
-func touchGap(a, b string) time.Duration {
-	ta, err := time.Parse(time.RFC3339, a)
-	if err != nil {
-		return time.Duration(1<<62 - 1)
+// maxGap exceeds any realistic proximity threshold. touchGap returns it when a
+// touch timestamp was missing or unparseable (a zero time.Time), so such an edge
+// never counts as a temporal overlap.
+const maxGap = time.Duration(1<<63 - 1)
+
+// touchGap returns the absolute time between two edge-forming touch timestamps.
+// A zero time — an unparseable timestamp recorded in buildAttribution — yields
+// maxGap so the edge is never treated as a temporal overlap.
+func touchGap(a, b time.Time) time.Duration {
+	if a.IsZero() || b.IsZero() {
+		return maxGap
 	}
-	tb, err := time.Parse(time.RFC3339, b)
-	if err != nil {
-		return time.Duration(1<<62 - 1)
-	}
-	d := ta.Sub(tb)
+	d := a.Sub(b)
 	if d < 0 {
 		d = -d
 	}
@@ -1167,10 +1176,12 @@ func buildAttribution(all []attrRow, proximity time.Duration, keyFunc func(attrR
 	}
 	nodeMap := map[string]*nodeAcc{}
 
-	// file identity index: resource → ordered touches (agentKey + timestamp).
+	// file identity index: resource → ordered touches (agentKey + parsed
+	// timestamp). The timestamp is parsed once here so the edge loop below does no
+	// repeated parsing; a zero time.Time marks an unparseable value (see touchGap).
 	type touch struct {
-		agentKey  string
-		timestamp string
+		agentKey string
+		ts       time.Time
 	}
 	fileIndex := map[string][]touch{}
 
@@ -1197,7 +1208,8 @@ func buildAttribution(all []attrRow, proximity time.Duration, keyFunc func(attrR
 			hasMoveOps = true
 		}
 		if rr.resource != "" {
-			fileIndex[rr.resource] = append(fileIndex[rr.resource], touch{ak, rr.timestamp})
+			ts, _ := time.Parse(time.RFC3339, rr.timestamp) // zero time on parse failure
+			fileIndex[rr.resource] = append(fileIndex[rr.resource], touch{ak, ts})
 			nd.identityCount++
 		}
 	}
@@ -1246,7 +1258,7 @@ func buildAttribution(all []attrRow, proximity time.Duration, keyFunc func(attrR
 			if cur, ok := edgeFrom[ek]; !ok || prev < cur {
 				edgeFrom[ek] = prev
 			}
-			gap := touchGap(touches[i-1].timestamp, touches[i].timestamp)
+			gap := touchGap(touches[i-1].ts, touches[i].ts)
 			if cur, ok := edgeMinGap[ek]; !ok || gap < cur {
 				edgeMinGap[ek] = gap
 			}

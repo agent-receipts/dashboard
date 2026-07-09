@@ -1517,6 +1517,46 @@ func TestSessionAttribution_CrossAgentStateDep(t *testing.T) {
 	}
 }
 
+// TestSessionAttribution_IntraSessionFarApartNoTemporalOverlap pins the
+// event-proximity semantics for the single-session path: temporal_overlap is
+// decided from the gap between the two edge-forming touches, uniformly for
+// intra-session edges too. A session whose root and subagent touch the same file
+// far apart (here 90 minutes, past the 1-hour default) reports
+// temporal_overlap=false — the edge still exists, but the touches were not close
+// in time. This is a deliberate change from the earlier "always true within a
+// single session" behaviour and is asserted here so it cannot regress silently.
+func TestSessionAttribution_IntraSessionFarApartNoTemporalOverlap(t *testing.T) {
+	dbPath := t.TempDir() + "/attr-farapart-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const sid = "session-farapart"
+	const subAgent = "subagent-xyz"
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa1", "chain-root", 1, "filesystem.file.read",
+		receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", sid, "", "", "config.json"))
+	insertAttr(t, s, makeAttrReceipt("urn:receipt:fa2", "chain-sub", 1, "filesystem.file.write",
+		receipt.RiskMedium, receipt.StatusSuccess, "2026-04-01T11:30:00Z", sid, subAgent, "general-purpose", "config.json"))
+	s.Close()
+
+	reader, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer reader.Close()
+
+	res, err := reader.SessionAttribution(sid)
+	if err != nil {
+		t.Fatalf("SessionAttribution: %v", err)
+	}
+	if len(res.StateDeps) != 1 {
+		t.Fatalf("StateDeps len = %d, want 1: %+v", len(res.StateDeps), res.StateDeps)
+	}
+	if res.StateDeps[0].TemporalOverlap {
+		t.Error("TemporalOverlap = true, want false (intra-session touches were 90 min apart, > 1h default)")
+	}
+}
+
 // TestSessionAttribution_MoveOp checks that has_move_ops is set when the session
 // contains a move or rename action type.
 func TestSessionAttribution_MoveOp(t *testing.T) {
@@ -3316,10 +3356,15 @@ func TestFleetAttribution_WallClockOverlapButTouchesFarApart(t *testing.T) {
 		t.Error("TemporalOverlap = true, want false (touches were 3.5h apart despite overlapping windows)")
 	}
 
-	// A widened proximity threshold that spans the 3.5h gap flips it back on,
-	// confirming the value is configurable and drives the decision.
-	reader.SetTemporalProximity(4 * time.Hour)
-	res, err = reader.FleetAttribution([]string{sidA, sidB})
+	// A reader opened with a widened proximity threshold that spans the 3.5h gap
+	// flips it back on, confirming the value is configurable and drives the
+	// decision.
+	widened, err := OpenReadOnly(dbPath, WithTemporalProximity(4*time.Hour))
+	if err != nil {
+		t.Fatalf("open (widened): %v", err)
+	}
+	defer widened.Close()
+	res, err = widened.FleetAttribution([]string{sidA, sidB})
 	if err != nil {
 		t.Fatalf("FleetAttribution (widened): %v", err)
 	}
