@@ -38,7 +38,7 @@ Because a loaded key can decrypt every matching disclosure, these endpoints are 
 
 | Guard | Mechanism | Applies to |
 |-------|-----------|------------|
-| Loopback-only bind | Key operations are refused unless the dashboard is bound to a loopback address (`localhost`/`127.0.0.1`/`::1`). An all-interfaces bind (`""`/`0.0.0.0`/`::`) disables them entirely, keeping the socket off the network. | both endpoints |
+| Loopback-only bind | Key operations are refused unless the dashboard is bound to a loopback address (`localhost`/`127.0.0.1`/`::1`), which keeps the socket off the network. An all-interfaces bind (`""`/`0.0.0.0`/`::`) is network-reachable but disables forensic key operations entirely. | both endpoints |
 | Host-header validation (DNS-rebinding defence) | Every request's `Host` header must name a loopback address, so a remote page cannot resolve its own domain to `127.0.0.1` and drive the loopback-bound server as if it were same-origin. | both endpoints |
 | Cross-origin rejection | A request carrying an `Origin` header whose host:port does not exactly match the request `Host` is refused (an opaque `null` origin is refused too). Absent `Origin` — as sent by curl and SDK clients — is allowed. | both endpoints |
 | CSRF: required `application/json` Content-Type | The path endpoint requires `Content-Type: application/json`, which forces a cross-origin browser POST into a CORS preflight instead of a "simple" request, closing the same-browser CSRF gap that could otherwise drive arbitrary local file reads. | `POST /api/forensic-key/path` only |
@@ -48,7 +48,7 @@ The raw-upload endpoint (`POST /api/forensic-key`) carries no path, so the path 
 
 ### Default allowlist root
 
-By default the path endpoint's allowlist contains **the operator's home directory**, which is always allowed. As a result, any file under `$HOME` can be supplied as a candidate key path. Additional roots may be added — but the home directory default cannot be removed — via the `-forensic-key-dirs` flag (a comma-separated list of extra absolute directories).
+By default the path endpoint's allowlist contains **the operator's home directory**, which is allowed automatically whenever it can be resolved (in the rare case that the home directory cannot be resolved to an absolute path, it is silently omitted). As a result, any file under `$HOME` can normally be supplied as a candidate key path. Additional roots may be added — and the home directory default is never removed by adding them — via the `-forensic-key-dirs` flag (a comma-separated list of extra absolute directories).
 
 ### Residual risk
 
