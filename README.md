@@ -126,18 +126,18 @@ The **Overview**, **Actions**, and **Servers** views turn a store into operation
 
 ## Session attribution
 
-When a session involves multiple agents, the dashboard builds a provable dependency graph from `action.target.resource` paths in the receipts (requires obsigna hook v0.19.0+).
+When a session involves multiple agents, the dashboard builds an observed dependency graph from `action.target.resource` paths in the receipts (requires obsigna hook v0.19.0+).
 
 ![Receipts tab with a session filter active — agent graph showing an orchestrator and sub-agents with delegation edges, filtered receipt list below](docs/session-attribution.png)
 
 **What you see:**
 
 - **Delegation edges** (dashed gray) — which agent spawned which
-- **State-dependency edges** (solid blue arrows) — two agents touched the same file; the arrow points from the agent that acted first to the one that acted after, making the causal order provable
+- **State-dependency edges** (solid blue arrows) — two agents touched the same resource path; the arrow points from the agent that acted first to the one that acted after. These edges are derived from shared `action.target.resource` strings, so they are evidence of a dependency, not proof of causal order
 - **Risk rings** — orange (medium) or red (critical) outer rings on nodes with elevated-risk receipts
 - **Blast-radius panel** — click any node to see which files it touched, which other agents share a state dependency on those files, and a heuristic co-turn coupling count when agents operated on the same resource in overlapping time windows
 
-**Coverage fraction** — a `N / M receipts identity-indexed` indicator shows how complete the picture is. Receipts without a `target.resource` (Bash, MCP, spawn) are counted but cannot contribute to file-identity edges. A `⚠ mv ops` warning appears when move or rename operations are detected, because path strings may not reliably identify file versions across renames.
+**Coverage fraction** — a `N / M receipts resource-linked` indicator shows how complete the picture is. Receipts without a `target.resource` (Bash, MCP, spawn) are counted but cannot contribute to file-dependency edges. A `⚠ mv ops` warning appears when move or rename operations are detected, because path strings may not reliably identify file versions across renames.
 
 The attribution data is served by `GET /api/sessions/{sessionID}/attribution`.
 

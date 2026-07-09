@@ -4042,7 +4042,7 @@
       const mvWarn = attribution.has_move_ops
         ? ' <span style="color:var(--risk-medium)" title="Move/rename operations detected — path strings may not reliably identify file versions across renames">⚠ mv ops</span>'
         : '';
-      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)">${escapeHtml(String(cv.identity_receipts))} / ${escapeHtml(String(cv.total_receipts))} receipts identity-indexed (${pct}%)${mvWarn}</span>`;
+      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)" title="receipts carrying a target.resource, which can contribute file-dependency edges. Bash/MCP/spawn receipts are signed but carry no resource path.">${escapeHtml(String(cv.identity_receipts))} / ${escapeHtml(String(cv.total_receipts))} receipts resource-linked (${pct}%)${mvWarn}</span>`;
     }
 
     // renderSessionGraphReceipts renders a compact flat receipt table into the
