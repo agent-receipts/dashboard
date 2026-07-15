@@ -126,9 +126,14 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "address to bind to (use 0.0.0.0 for all interfaces)")
 	port := flag.Int("port", 8080, "HTTP server port")
 	pollInterval := flag.Duration("poll-interval", server.DefaultPollInterval, "interval between live receipt polls (e.g. 5s)")
+	temporalProximity := flag.Duration("temporal-proximity", store.DefaultTemporalProximity, "max gap between two contending touches of a shared resource for a cross-session collision to count as concurrent (temporal_overlap)")
 	forensicKeyDirsFlag := flag.String("forensic-key-dirs", "", "comma-separated list of extra absolute directories from which the forensic key path endpoint may load a key (the user's home directory is always allowed)")
 	experimental := flag.Bool("experimental", false, "enable experimental features (e.g. /api/fleet/signatures)")
 	flag.Parse()
+
+	if *temporalProximity <= 0 {
+		log.Fatalf("temporal-proximity must be positive, got %s", *temporalProximity)
+	}
 
 	pollFlagSet := false
 	dbExplicit := false
@@ -155,7 +160,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	reader, err := store.OpenReadOnly(*dbPath)
+	reader, err := store.OpenReadOnly(*dbPath, store.WithTemporalProximity(*temporalProximity))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) && !dbExplicit {
 			log.Fatalf("no receipts database at default path %s\n\nPass -db <path/to/receipts.db>, or run mcp-proxy / an Obsigna SDK to create one.", defaultDB)
