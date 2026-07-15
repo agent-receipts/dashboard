@@ -42,13 +42,15 @@ type usageTotals struct {
 	cacheWrite1h int64
 }
 
-// estimateCostUSD returns a pointer to the estimated session cost in USD, or nil
-// when the model is not in the local table. A nil result is deliberate: an
-// unknown model must not be priced at zero or guessed.
-func estimateCostUSD(model string, t usageTotals) *float64 {
+// costUSD returns the estimated cost of the given token totals at the model's
+// rates and whether the model was found. ok=false means the caller must treat
+// the cost as unknown (nil) — an unmodelled turn must not be priced at zero or
+// guessed. Cost is accumulated per turn so a session that mixes models (e.g. an
+// Opus main thread with a Haiku subagent) prices each turn at its own rate.
+func costUSD(model string, t usageTotals) (float64, bool) {
 	info, ok := models[model]
 	if !ok {
-		return nil
+		return 0, false
 	}
 	const perMTok = 1_000_000.0
 	inRate := info.inputPerMTok / perMTok
@@ -59,7 +61,7 @@ func estimateCostUSD(model string, t usageTotals) *float64 {
 		float64(t.cacheRead)*inRate*cacheReadRateMult +
 		float64(t.cacheWrite5m)*inRate*cacheWrite5mRateMult +
 		float64(t.cacheWrite1h)*inRate*cacheWrite1hRateMult
-	return &cost
+	return cost, true
 }
 
 // applyContextWindow fills ContextWindow and ContextPct from the local table

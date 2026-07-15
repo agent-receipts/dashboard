@@ -108,11 +108,16 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 	defer f.Close()
 
 	enr := &Enrichment{Unverified: true, Source: sourceClaudeCode}
-	var totals, subTotals usageTotals
 	var mainModel, anyModel string
 	var lastMainContext, lastAnyContext int64
 	var sawUsage, sawMainUsage bool
 	var subTurns int
+	var subTokens int64
+	// Cost is accumulated per turn at each turn's own model. priceable stays
+	// true only while every counted turn had a known model; a single unmodelled
+	// turn makes the corresponding cost unknown (nil), never a partial guess.
+	var totalCost, subCost float64
+	totalPriceable, subPriceable := true, true
 
 	r := bufio.NewReader(f)
 	for {
@@ -123,28 +128,52 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
 			if rec := decodeRecord(trimmed); rec != nil && rec.Type == "assistant" && rec.Message != nil {
 				msg := rec.Message
-				side := rec.IsSidechain
-				if msg.Model != "" {
-					anyModel = msg.Model
-					if !side {
-						mainModel = msg.Model
-					}
-				}
+				// turnTokens gates on real usage: a zero-usage assistant line is
+				// a bookkeeping placeholder (Claude Code writes an all-zero
+				// "<synthetic>" line) — it carries no tokens, no real model, and
+				// no context, so skipping it stops one from blanking out the
+				// cost or hijacking the reported model/context.
+				var turnTokens int64
 				if u := msg.Usage; u != nil {
+					turnTokens = u.InputTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+				}
+				if turnTokens > 0 {
+					u := msg.Usage
+					side := rec.IsSidechain
 					sawUsage = true
+					if msg.Model != "" {
+						anyModel = msg.Model
+						if !side {
+							mainModel = msg.Model
+						}
+					}
 
 					// Displayed totals span every turn, subagents included.
 					enr.InputTokens += u.InputTokens
 					enr.OutputTokens += u.OutputTokens
 					enr.CacheReadTokens += u.CacheReadInputTokens
 					enr.CacheCreationTokens += u.CacheCreationInputTokens
-					addUsage(&totals, u)
+
+					// Price this turn at its own model.
+					var tt usageTotals
+					addUsage(&tt, u)
+					c, ok := costUSD(msg.Model, tt)
+					if ok {
+						totalCost += c
+					} else {
+						totalPriceable = false
+					}
 
 					turnContext := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 					lastAnyContext = turnContext
 					if side {
 						subTurns++
-						addUsage(&subTotals, u)
+						subTokens += turnTokens
+						if ok {
+							subCost += c
+						} else {
+							subPriceable = false
+						}
 					} else {
 						// Context fill tracks the main thread only — a subagent
 						// turn's context is its own transient window, not the
@@ -167,8 +196,9 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 		return nil, nil
 	}
 
-	// Price by the main thread's model; fall back to any model seen only if the
-	// session had no main-thread turn carrying a model.
+	// The reported Model is the main thread's, falling back to any model seen
+	// only if the session had no main-thread turn carrying a model. It drives
+	// the context-window lookup; per-turn pricing above is independent of it.
 	model := mainModel
 	if model == "" {
 		model = anyModel
@@ -183,12 +213,16 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 	}
 	applyContextWindow(enr, model)
 
-	enr.EstimatedCostUSD = estimateCostUSD(model, totals)
+	if totalPriceable {
+		enr.EstimatedCostUSD = &totalCost
+	}
 
 	if subTurns > 0 {
 		enr.SubagentTurns = subTurns
-		enr.SubagentTokens = subTotals.input + subTotals.output + subTotals.cacheRead + subTotals.cacheWrite5m + subTotals.cacheWrite1h
-		enr.SubagentCostUSD = estimateCostUSD(model, subTotals)
+		enr.SubagentTokens = subTokens
+		if subPriceable {
+			enr.SubagentCostUSD = &subCost
+		}
 	}
 	return enr, nil
 }

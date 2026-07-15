@@ -143,18 +143,48 @@ func TestEnrich_SubagentBreakout(t *testing.T) {
 	if got.SubagentCostUSD == nil {
 		t.Fatal("SubagentCostUSD = nil, want a value")
 	}
-	wantSub := 50*5e-6 + 30*25e-6 + 200*5e-6*0.10
+	// The subagent ran claude-haiku-4-5, so its cost is priced at Haiku rates
+	// ($1/$5 per MTok, cache-read 0.1x) — NOT the main thread's Opus rates.
+	wantSub := 50*1e-6 + 30*5e-6 + 200*1e-6*0.10
 	if math.Abs(*got.SubagentCostUSD-wantSub) > 1e-12 {
-		t.Errorf("SubagentCostUSD = %v, want %v", *got.SubagentCostUSD, wantSub)
+		t.Errorf("SubagentCostUSD = %v, want %v (subagent priced at its own Haiku model)", *got.SubagentCostUSD, wantSub)
 	}
 
-	// Total cost prices every turn at the main model.
-	wantCost := 1052*5e-6 + 170*25e-6 + 3200*5e-6*0.10
+	// Total cost prices each turn at its own model: two Opus main turns plus the
+	// Haiku subagent turn.
+	mainCost := (1000*5e-6 + 100*25e-6) + (2*5e-6 + 40*25e-6 + 3000*5e-6*0.10)
+	wantCost := mainCost + wantSub
 	if got.EstimatedCostUSD == nil {
 		t.Fatal("EstimatedCostUSD = nil")
 	}
 	if math.Abs(*got.EstimatedCostUSD-wantCost) > 1e-12 {
-		t.Errorf("EstimatedCostUSD = %v, want %v", *got.EstimatedCostUSD, wantCost)
+		t.Errorf("EstimatedCostUSD = %v, want %v (per-model pricing)", *got.EstimatedCostUSD, wantCost)
+	}
+}
+
+// A known main model plus a subagent on an unmodelled model: tokens still sum,
+// but neither the total nor the subagent cost can be priced (nil, not a guess).
+func TestEnrich_MixedKnownUnknownModelNilCost(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-mixed",
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","isSidechain":true,"message":{"model":"future-model-x","usage":{"input_tokens":20,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-mixed")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if got.TotalTokens != 135 {
+		t.Errorf("TotalTokens = %d, want 135 (tokens still sum across an unpriced model)", got.TotalTokens)
+	}
+	if got.SubagentTokens != 25 {
+		t.Errorf("SubagentTokens = %d, want 25", got.SubagentTokens)
+	}
+	if got.EstimatedCostUSD != nil {
+		t.Errorf("EstimatedCostUSD = %v, want nil when any turn's model is unpriced", *got.EstimatedCostUSD)
+	}
+	if got.SubagentCostUSD != nil {
+		t.Errorf("SubagentCostUSD = %v, want nil for an unpriced subagent model", *got.SubagentCostUSD)
 	}
 }
 
@@ -170,6 +200,38 @@ func TestEnrich_NoSubagentOmitsBreakout(t *testing.T) {
 	if got.SubagentTurns != 0 || got.SubagentTokens != 0 || got.SubagentCostUSD != nil {
 		t.Errorf("subagent fields = {%d turns, %d tokens, cost %v}, want all zero/nil for a subagent-free session",
 			got.SubagentTurns, got.SubagentTokens, got.SubagentCostUSD)
+	}
+}
+
+// Claude Code writes an all-zero-usage "<synthetic>" assistant line for
+// injected/placeholder messages. It must not null the cost, nor become the
+// reported model or drive the context figure — even when it is the last line.
+func TestEnrich_SyntheticZeroUsageLineIgnored(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-synth",
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":9000,"cache_creation_input_tokens":0}}}
+{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-synth")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if got.Model != "claude-opus-4-8" {
+		t.Errorf("Model = %q, want claude-opus-4-8 (synthetic line must not become the model)", got.Model)
+	}
+	// Context comes from the real Opus turn (100+9000), not the trailing
+	// zero-usage synthetic line (which would give 0).
+	if got.ContextTokens != 9100 {
+		t.Errorf("ContextTokens = %d, want 9100 (real turn, not the synthetic zero line)", got.ContextTokens)
+	}
+	// Cost is priced from the real turn; the unmodelled synthetic line does not
+	// blank it out.
+	if got.EstimatedCostUSD == nil {
+		t.Fatal("EstimatedCostUSD = nil; the zero-usage synthetic line must not null the cost")
+	}
+	wantCost := 100*5e-6 + 50*25e-6 + 9000*5e-6*0.10
+	if math.Abs(*got.EstimatedCostUSD-wantCost) > 1e-12 {
+		t.Errorf("EstimatedCostUSD = %v, want %v", *got.EstimatedCostUSD, wantCost)
 	}
 }
 

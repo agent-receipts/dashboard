@@ -48,8 +48,9 @@ type Enrichment struct {
 	// when zero.
 	SubagentTurns int `json:"subagent_turns,omitempty"`
 	// SubagentCostUSD is the estimated cost of the subagent turns alone — a
-	// subset of EstimatedCostUSD — or nil when the model is not in the local
-	// table. Omitted when the session spawned no subagents.
+	// subset of EstimatedCostUSD — priced per subagent turn's own model. Nil
+	// when any subagent turn's model is absent from the local table. Omitted
+	// when the session spawned no subagents.
 	SubagentCostUSD *float64 `json:"subagent_cost_usd,omitempty"`
 
 	// ContextTokens is the input context size (input + cache-read +
@@ -66,8 +67,8 @@ type Enrichment struct {
 	ContextPct *float64 `json:"context_pct,omitempty"`
 
 	// EstimatedCostUSD is a local estimate from a pricing table keyed by model
-	// name. It is nil — never zero, never a guess — when the model is absent
-	// from the table.
+	// name, summed per turn at each turn's own model. It is nil — never zero,
+	// never a guess — when any turn's model is absent from the table.
 	EstimatedCostUSD *float64 `json:"estimated_cost_usd"`
 }
 
@@ -92,23 +93,25 @@ type enricherSource struct {
 	parse func(path string, info os.FileInfo) (*Enrichment, error)
 }
 
-// cacheKey identifies a parsed session file by path and the file's mtime and
-// size, not by session id alone. An edited or rotated file changes the key and
-// is re-parsed rather than served stale.
-type cacheKey struct {
-	path  string
+// cacheEntry is a parsed result together with the file identity it was parsed
+// from. The cache is keyed by path (one entry per session file), and the mtime
+// and size validate that entry: an edited or rotated file overwrites its entry
+// rather than accumulating a new one, so the cache stays bounded by the number
+// of distinct session files seen — not by how often they change.
+type cacheEntry struct {
 	mtime int64
 	size  int64
+	enr   *Enrichment
 }
 
 // Enricher is the default SessionEnricher. It tries each registered source in
 // order and returns the first non-nil enrichment. Parsed results (including
-// "no data") are cached on (path, mtime, size).
+// "no data") are cached per file path and validated by mtime and size.
 type Enricher struct {
 	sources []enricherSource
 
 	mu    sync.Mutex
-	cache map[cacheKey]*Enrichment
+	cache map[string]cacheEntry
 }
 
 // New returns an Enricher with the Claude Code source registered.
@@ -119,7 +122,7 @@ func New() *Enricher {
 // newEnricher builds an Enricher over an explicit source list. Used by tests to
 // inject sources rooted at a temporary directory.
 func newEnricher(sources ...enricherSource) *Enricher {
-	return &Enricher{sources: sources, cache: map[cacheKey]*Enrichment{}}
+	return &Enricher{sources: sources, cache: map[string]cacheEntry{}}
 }
 
 // Enrich resolves enrichment for sessionID, or nil when no local session data
@@ -163,12 +166,12 @@ func (e *Enricher) enrichFrom(s enricherSource, sessionID string) *Enrichment {
 		return nil
 	}
 
-	key := cacheKey{path: bestPath, mtime: bestInfo.ModTime().UnixNano(), size: bestInfo.Size()}
+	mtime, size := bestInfo.ModTime().UnixNano(), bestInfo.Size()
 
 	e.mu.Lock()
-	if cached, ok := e.cache[key]; ok {
+	if ent, ok := e.cache[bestPath]; ok && ent.mtime == mtime && ent.size == size {
 		e.mu.Unlock()
-		return cached
+		return ent.enr
 	}
 	e.mu.Unlock()
 
@@ -180,10 +183,10 @@ func (e *Enricher) enrichFrom(s enricherSource, sessionID string) *Enrichment {
 		return nil
 	}
 
-	// Cache the outcome, including a nil ("no usable data") result, so an
-	// unchanged file is not re-parsed on every request.
+	// Cache the outcome (including a nil "no usable data" result) so an
+	// unchanged file is not re-parsed; a later mtime/size overwrites this entry.
 	e.mu.Lock()
-	e.cache[key] = enr
+	e.cache[bestPath] = cacheEntry{mtime: mtime, size: size, enr: enr}
 	e.mu.Unlock()
 	return enr
 }
