@@ -66,8 +66,13 @@ func validSessionID(s string) bool {
 // unknown fields are ignored, and any line that does not match this shape is
 // skipped rather than treated as an error.
 type ccRecord struct {
-	Type    string     `json:"type"`
-	Message *ccMessage `json:"message"`
+	Type string `json:"type"`
+	// IsSidechain marks a subagent (Task-tool) turn. Claude Code logs subagent
+	// turns into the same session file; the flag lets the parser fold their
+	// tokens into the total while keeping the context-window figure to the main
+	// thread.
+	IsSidechain bool       `json:"isSidechain"`
+	Message     *ccMessage `json:"message"`
 }
 
 type ccMessage struct {
@@ -103,10 +108,11 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 	defer f.Close()
 
 	enr := &Enrichment{Unverified: true, Source: sourceClaudeCode}
-	var totals usageTotals
-	var model string
-	var lastContextTokens int64
-	var sawUsage bool
+	var totals, subTotals usageTotals
+	var mainModel, anyModel string
+	var lastMainContext, lastAnyContext int64
+	var sawUsage, sawMainUsage bool
+	var subTurns int
 
 	r := bufio.NewReader(f)
 	for {
@@ -117,29 +123,35 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
 			if rec := decodeRecord(trimmed); rec != nil && rec.Type == "assistant" && rec.Message != nil {
 				msg := rec.Message
+				side := rec.IsSidechain
 				if msg.Model != "" {
-					model = msg.Model
+					anyModel = msg.Model
+					if !side {
+						mainModel = msg.Model
+					}
 				}
 				if u := msg.Usage; u != nil {
 					sawUsage = true
+
+					// Displayed totals span every turn, subagents included.
 					enr.InputTokens += u.InputTokens
 					enr.OutputTokens += u.OutputTokens
 					enr.CacheReadTokens += u.CacheReadInputTokens
 					enr.CacheCreationTokens += u.CacheCreationInputTokens
+					addUsage(&totals, u)
 
-					totals.input += u.InputTokens
-					totals.output += u.OutputTokens
-					totals.cacheRead += u.CacheReadInputTokens
-					if cc := u.CacheCreation; cc != nil {
-						totals.cacheWrite5m += cc.Ephemeral5m
-						totals.cacheWrite1h += cc.Ephemeral1h
+					turnContext := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+					lastAnyContext = turnContext
+					if side {
+						subTurns++
+						addUsage(&subTotals, u)
 					} else {
-						// No TTL split reported: price it as a 5-minute write.
-						totals.cacheWrite5m += u.CacheCreationInputTokens
+						// Context fill tracks the main thread only — a subagent
+						// turn's context is its own transient window, not the
+						// session's.
+						sawMainUsage = true
+						lastMainContext = turnContext
 					}
-
-					// Context fill is the latest turn's input context size.
-					lastContextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 				}
 			}
 		}
@@ -155,12 +167,45 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 		return nil, nil
 	}
 
+	// Price by the main thread's model; fall back to any model seen only if the
+	// session had no main-thread turn carrying a model.
+	model := mainModel
+	if model == "" {
+		model = anyModel
+	}
 	enr.Model = model
 	enr.TotalTokens = enr.InputTokens + enr.OutputTokens + enr.CacheReadTokens + enr.CacheCreationTokens
-	enr.ContextTokens = lastContextTokens
+
+	if sawMainUsage {
+		enr.ContextTokens = lastMainContext
+	} else {
+		enr.ContextTokens = lastAnyContext
+	}
 	applyContextWindow(enr, model)
+
 	enr.EstimatedCostUSD = estimateCostUSD(model, totals)
+
+	if subTurns > 0 {
+		enr.SubagentTurns = subTurns
+		enr.SubagentTokens = subTotals.input + subTotals.output + subTotals.cacheRead + subTotals.cacheWrite5m + subTotals.cacheWrite1h
+		enr.SubagentCostUSD = estimateCostUSD(model, subTotals)
+	}
 	return enr, nil
+}
+
+// addUsage folds one turn's usage into running cost totals, splitting cache
+// writes by TTL. A line without the cache_creation split is priced as a
+// 5-minute write.
+func addUsage(t *usageTotals, u *ccUsage) {
+	t.input += u.InputTokens
+	t.output += u.OutputTokens
+	t.cacheRead += u.CacheReadInputTokens
+	if cc := u.CacheCreation; cc != nil {
+		t.cacheWrite5m += cc.Ephemeral5m
+		t.cacheWrite1h += cc.Ephemeral1h
+	} else {
+		t.cacheWrite5m += u.CacheCreationInputTokens
+	}
 }
 
 // decodeRecord unmarshals one JSONL line, returning nil on any decode error so

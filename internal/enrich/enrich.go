@@ -29,16 +29,34 @@ type Enrichment struct {
 	// "claude-opus-4-8"). Empty when the session recorded no model.
 	Model string `json:"model,omitempty"`
 
-	// Token counts summed across the session's assistant turns.
+	// Token counts summed across every assistant turn in the session,
+	// including subagent (Task-tool) turns, which the agent logs into the same
+	// session file. See SubagentTokens for the subagent portion.
 	InputTokens         int64 `json:"input_tokens"`
 	OutputTokens        int64 `json:"output_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
 
-	// ContextTokens is the input context size of the session's most recent
-	// turn (input + cache-read + cache-creation) — i.e. how full the context
-	// window was on the last turn.
+	// SubagentTokens is the portion of TotalTokens attributable to subagent
+	// (sidechain) turns. Subagents run in their own context windows spun up and
+	// torn down within the session; their tokens still cost money, so they are
+	// counted in the totals and broken out here. Omitted when the session
+	// spawned no subagents.
+	SubagentTokens int64 `json:"subagent_tokens,omitempty"`
+	// SubagentTurns is the number of subagent assistant turns counted. Omitted
+	// when zero.
+	SubagentTurns int `json:"subagent_turns,omitempty"`
+	// SubagentCostUSD is the estimated cost of the subagent turns alone — a
+	// subset of EstimatedCostUSD — or nil when the model is not in the local
+	// table. Omitted when the session spawned no subagents.
+	SubagentCostUSD *float64 `json:"subagent_cost_usd,omitempty"`
+
+	// ContextTokens is the input context size (input + cache-read +
+	// cache-creation) of the session's most recent MAIN-THREAD turn — how full
+	// the primary conversation's context window was on its last turn. Subagent
+	// turns are deliberately excluded: they have their own transient context
+	// windows and would misreport the session's fill.
 	ContextTokens int64 `json:"context_tokens"`
 	// ContextWindow is the model's context window in tokens, when the model is
 	// known to the local table. Zero (omitted) otherwise.

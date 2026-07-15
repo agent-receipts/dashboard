@@ -96,6 +96,83 @@ func TestEnrich_ClaudeCodeHappyPath(t *testing.T) {
 	}
 }
 
+// A session that ends on a subagent (sidechain) turn: totals must include the
+// subagent, context must come from the last MAIN turn (not the trailing
+// subagent), pricing must use the main-thread model, and the subagent split
+// must be broken out.
+const subagentSession = `{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":2,"output_tokens":40,"cache_read_input_tokens":3000,"cache_creation_input_tokens":0}}}
+{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-4-5","usage":{"input_tokens":50,"output_tokens":30,"cache_read_input_tokens":200,"cache_creation_input_tokens":0}}}
+`
+
+func TestEnrich_SubagentBreakout(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-subagent", subagentSession)
+
+	got := claudeEnricher(dir).Enrich("sess-subagent")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+
+	// Model is the main thread's, not the subagent's haiku.
+	if got.Model != "claude-opus-4-8" {
+		t.Errorf("Model = %q, want claude-opus-4-8 (main-thread model, not the subagent's)", got.Model)
+	}
+
+	// Totals include the subagent turn.
+	if got.InputTokens != 1052 {
+		t.Errorf("InputTokens = %d, want 1052 (1000+2+50, subagent included)", got.InputTokens)
+	}
+	if got.TotalTokens != 4422 {
+		t.Errorf("TotalTokens = %d, want 4422", got.TotalTokens)
+	}
+
+	// Context comes from the last MAIN turn (2+3000), not the trailing
+	// subagent turn (50+200).
+	if got.ContextTokens != 3002 {
+		t.Errorf("ContextTokens = %d, want 3002 (last main turn); a subagent turn must not drive it", got.ContextTokens)
+	}
+
+	// Subagent breakout.
+	if got.SubagentTurns != 1 {
+		t.Errorf("SubagentTurns = %d, want 1", got.SubagentTurns)
+	}
+	if got.SubagentTokens != 280 {
+		t.Errorf("SubagentTokens = %d, want 280 (50+30+200)", got.SubagentTokens)
+	}
+	if got.SubagentCostUSD == nil {
+		t.Fatal("SubagentCostUSD = nil, want a value")
+	}
+	wantSub := 50*5e-6 + 30*25e-6 + 200*5e-6*0.10
+	if math.Abs(*got.SubagentCostUSD-wantSub) > 1e-12 {
+		t.Errorf("SubagentCostUSD = %v, want %v", *got.SubagentCostUSD, wantSub)
+	}
+
+	// Total cost prices every turn at the main model.
+	wantCost := 1052*5e-6 + 170*25e-6 + 3200*5e-6*0.10
+	if got.EstimatedCostUSD == nil {
+		t.Fatal("EstimatedCostUSD = nil")
+	}
+	if math.Abs(*got.EstimatedCostUSD-wantCost) > 1e-12 {
+		t.Errorf("EstimatedCostUSD = %v, want %v", *got.EstimatedCostUSD, wantCost)
+	}
+}
+
+func TestEnrich_NoSubagentOmitsBreakout(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-nosub",
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-nosub")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if got.SubagentTurns != 0 || got.SubagentTokens != 0 || got.SubagentCostUSD != nil {
+		t.Errorf("subagent fields = {%d turns, %d tokens, cost %v}, want all zero/nil for a subagent-free session",
+			got.SubagentTurns, got.SubagentTokens, got.SubagentCostUSD)
+	}
+}
+
 func TestEnrich_MissingSessionFileIsEmptyNotError(t *testing.T) {
 	dir := t.TempDir()
 	e := claudeEnricher(dir)

@@ -3280,6 +3280,14 @@
         rows.push(enrichmentRow('Tokens', escapeHtml(tokenParts.join(' / ')) + total));
       }
 
+      if (e.subagent_turns) {
+        const subCost = e.subagent_cost_usd != null
+          ? ` · $${Number(e.subagent_cost_usd).toFixed(Number(e.subagent_cost_usd) < 1 ? 4 : 2)}`
+          : '';
+        const turns = e.subagent_turns === 1 ? 'turn' : 'turns';
+        rows.push(enrichmentRow('Subagents', `${fmtInt(e.subagent_turns)} ${turns} · ${fmtInt(e.subagent_tokens)} tokens${subCost} <span class="enrich-muted">(incl. above)</span>`));
+      }
+
       if (e.context_pct != null && e.context_window) {
         rows.push(enrichmentRow('Context', `${e.context_pct.toFixed(1)}% <span class="enrich-muted">of ${fmtInt(e.context_window)} (${fmtInt(e.context_tokens)} tokens)</span>`));
       } else if (e.context_tokens != null) {
