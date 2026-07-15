@@ -235,6 +235,22 @@ func TestEnrich_SyntheticZeroUsageLineIgnored(t *testing.T) {
 	}
 }
 
+// An implausibly large session file is skipped (returns nil) rather than read,
+// bounding worst-case time and memory. Uses a sparse truncate so the test is
+// cheap — no real bytes are written.
+func TestEnrich_OversizeFileSkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSession(t, dir, "proj", "sess-huge",
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	if err := os.Truncate(path, maxSessionFileBytes+1); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if got := claudeEnricher(dir).Enrich("sess-huge"); got != nil {
+		t.Errorf("Enrich = %+v, want nil for an oversize file", got)
+	}
+}
+
 func TestEnrich_MissingSessionFileIsEmptyNotError(t *testing.T) {
 	dir := t.TempDir()
 	e := claudeEnricher(dir)

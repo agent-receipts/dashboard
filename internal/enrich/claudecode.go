@@ -96,11 +96,24 @@ type ccCacheDetail struct {
 	Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
 }
 
+// maxSessionFileBytes bounds how much of a session file the parser reads. Real
+// Claude Code transcripts are a few MiB at most, so a larger file is treated as
+// absent (returns nil) rather than parsed. io.LimitReader also caps reads, so a
+// symlink to a huge or endless file — whose stat size may be 0 (e.g. a device
+// file) or may grow after the stat — cannot force an unbounded allocation.
+const maxSessionFileBytes = 128 << 20 // 128 MiB
+
 // parseClaudeCodeSession reads a Claude Code session transcript and summarises
 // its token usage, model, context fill, and estimated cost. It returns nil (no
 // error) when the file contains no assistant usage. It fails soft on malformed
 // lines: an unparseable line is skipped, never fatal.
-func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
+func parseClaudeCodeSession(path string, info os.FileInfo) (*Enrichment, error) {
+	if info != nil && info.Size() > maxSessionFileBytes {
+		// Implausibly large for a real transcript — skip rather than spend
+		// unbounded time and memory on it.
+		return nil, nil
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -119,7 +132,9 @@ func parseClaudeCodeSession(path string, _ os.FileInfo) (*Enrichment, error) {
 	var totalCost, subCost float64
 	totalPriceable, subPriceable := true, true
 
-	r := bufio.NewReader(f)
+	// LimitReader is the hard bound (the size check above is a fast path that a
+	// symlink to a 0-stat-size device file would slip past).
+	r := bufio.NewReader(io.LimitReader(f, maxSessionFileBytes))
 	for {
 		// ReadBytes accumulates across the buffer boundary, so an individual
 		// large line (e.g. a big tool result) does not break parsing the way a
