@@ -48,6 +48,19 @@
     .accent { color: var(--accent); }
     .divider { border-color: var(--border); }
 
+    /* Local session enrichment: display-only, UNVERIFIED data joined by session
+       id. Deliberately styled apart from signed receipt fields — dashed border,
+       muted palette, an unverified badge — so it can never be mistaken for
+       signed data. See docs/adr/0002-local-session-enrichment.md. */
+    .enrichment-box { border: 1px dashed var(--border); border-radius: var(--radius); background: var(--surface-sunken); padding: 8px 10px; }
+    .enrichment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .enrichment-badge { text-transform: none; letter-spacing: normal; font-size: 0.7rem; color: var(--subtle); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; cursor: help; white-space: nowrap; }
+    .enrichment-body { display: flex; flex-direction: column; gap: 3px; }
+    .enrichment-row { display: flex; gap: 10px; font-size: 0.8rem; color: var(--muted); }
+    .enrichment-label { width: 84px; min-width: 84px; color: var(--subtle); }
+    .enrichment-value { font-family: var(--font-mono); color: var(--muted); }
+    .enrich-muted { color: var(--subtle); }
+
     /* ---------- Surfaces ---------- */
     .card {
       background: var(--surface);
@@ -3088,7 +3101,9 @@
       if (!currentChainReceipts || !currentChainId) return;
       try {
         const full = await Promise.all(
-          currentChainReceipts.map(r => fetchJSON('/api/receipts/' + encodeURIComponent(r.id)))
+          // Unwrap the { receipt, enrichment } envelope: a chain export is the
+          // signed receipts only, never the unverified enrichment sidecar.
+          currentChainReceipts.map(r => fetchJSON('/api/receipts/' + encodeURIComponent(r.id)).then(resp => resp.receipt))
         );
         const suffix = safeFilename(currentChainId.includes(':') ? currentChainId.split(':').pop() : currentChainId);
         downloadJSON(full, `chain-${suffix}.json`);
@@ -3100,10 +3115,14 @@
     // ---------- Receipt detail ----------
     async function showReceipt(id) {
       try {
-        const receipt = await fetchJSON('/api/receipts/' + encodeURIComponent(id));
+        // The detail endpoint returns { receipt, enrichment }: the signed
+        // receipt and, as a sibling, optional unverified local session data.
+        const resp = await fetchJSON('/api/receipts/' + encodeURIComponent(id));
+        const receipt = resp.receipt;
+        const enrichment = resp.enrichment;
         currentReceipt = receipt;
         document.getElementById('modal-title').textContent = receipt.id;
-        document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt);
+        document.getElementById('modal-content').innerHTML = renderReceiptDetail(receipt, enrichment);
         openModal('receipt-modal');
         hydrateDisclosure(receipt);
       } catch (err) {
@@ -3128,7 +3147,7 @@
       }
     }
 
-    function renderReceiptDetail(r) {
+    function renderReceiptDetail(r, enrichment) {
       const subj = r.credentialSubject;
       const mismatch = outputStatusMismatchFromReceipt(r);
       return `
@@ -3199,6 +3218,8 @@
           </div>
           ` : ''}
 
+          ${enrichmentSectionHTML(enrichment)}
+
           <details class="mt-4">
             <summary class="muted text-sm" style="cursor:pointer;">Raw JSON</summary>
             <pre class="mt-2">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
@@ -3232,6 +3253,60 @@
         <div class="muted text-xs mb-1">Token usage</div>
         <div class="text-sm font-mono">${escapeHtml(parts.join(' / '))}</div>
       </div>`;
+    }
+
+    // enrichmentSectionHTML renders display-only, UNVERIFIED local session data
+    // (token usage, context fill, estimated cost) joined to the receipt by
+    // session id. It is styled deliberately apart from the signed receipt
+    // fields — muted palette, dashed border, and a "local, unverified" badge
+    // with an explanatory tooltip — so it can never be mistaken for signed
+    // data. See docs/adr/0002-local-session-enrichment.md.
+    function enrichmentSectionHTML(e) {
+      if (!e) return '';
+      const tip = "Local, unverified — read from this host's agent session files, not from the signed receipt.";
+      const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString());
+      const rows = [];
+
+      if (e.source) rows.push(enrichmentRow('Source', escapeHtml(e.source)));
+      if (e.model) rows.push(enrichmentRow('Model', escapeHtml(e.model)));
+
+      const tokenParts = [];
+      if (e.input_tokens != null) tokenParts.push('in ' + fmtInt(e.input_tokens));
+      if (e.output_tokens != null) tokenParts.push('out ' + fmtInt(e.output_tokens));
+      if (e.cache_read_tokens != null) tokenParts.push('cache-read ' + fmtInt(e.cache_read_tokens));
+      if (e.cache_creation_tokens != null) tokenParts.push('cache-write ' + fmtInt(e.cache_creation_tokens));
+      if (tokenParts.length) {
+        const total = e.total_tokens != null ? ` <span class="enrich-muted">(total ${fmtInt(e.total_tokens)})</span>` : '';
+        rows.push(enrichmentRow('Tokens', escapeHtml(tokenParts.join(' / ')) + total));
+      }
+
+      if (e.context_pct != null && e.context_window) {
+        rows.push(enrichmentRow('Context', `${e.context_pct.toFixed(1)}% <span class="enrich-muted">of ${fmtInt(e.context_window)} (${fmtInt(e.context_tokens)} tokens)</span>`));
+      } else if (e.context_tokens != null) {
+        rows.push(enrichmentRow('Context', `${fmtInt(e.context_tokens)} tokens`));
+      }
+
+      if (e.estimated_cost_usd != null) {
+        const c = Number(e.estimated_cost_usd);
+        rows.push(enrichmentRow('Est. cost', '$' + c.toFixed(c < 1 ? 4 : 2)));
+      } else {
+        rows.push(enrichmentRow('Est. cost', `<span class="enrich-muted" title="Model not in the local pricing table">unavailable</span>`));
+      }
+
+      if (!rows.length) return '';
+
+      return `
+        <div class="enrichment-box">
+          <div class="enrichment-head">
+            <span>Local session data</span>
+            <span class="enrichment-badge" tabindex="0" title="${escapeAttr(tip)}">local, unverified</span>
+          </div>
+          <div class="enrichment-body">${rows.join('')}</div>
+        </div>`;
+    }
+
+    function enrichmentRow(label, value) {
+      return `<div class="enrichment-row"><span class="enrichment-label">${escapeHtml(label)}</span><span class="enrichment-value">${value}</span></div>`;
     }
 
     // ---------- Intent section (modal body) ----------
