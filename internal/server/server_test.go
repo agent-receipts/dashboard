@@ -11,6 +11,7 @@ import (
 	"obsigna.dev/sdk/go/receipt"
 	sdkstore "obsigna.dev/sdk/go/store"
 	"obsigna.dev/sdk/go/taxonomy"
+	"github.com/agent-receipts/dashboard/internal/enrich"
 	"github.com/agent-receipts/dashboard/internal/store"
 )
 
@@ -289,12 +290,118 @@ func TestReceiptDetailEndpoint(t *testing.T) {
 		t.Errorf("got status %d, want 200", w.Code)
 	}
 
-	var r receipt.AgentReceipt
-	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+	// The detail endpoint returns the signed receipt and an unverified
+	// enrichment sibling: {"receipt": {...}, "enrichment": null|{...}}.
+	var resp struct {
+		Receipt    receipt.AgentReceipt `json:"receipt"`
+		Enrichment *enrich.Enrichment   `json:"enrichment"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if r.ID != "urn:receipt:001" {
-		t.Errorf("got ID %q, want urn:receipt:001", r.ID)
+	if resp.Receipt.ID != "urn:receipt:001" {
+		t.Errorf("got ID %q, want urn:receipt:001", resp.Receipt.ID)
+	}
+	// The seeded fixture has no local session file, so enrichment is absent —
+	// never surfaced as an error, just null.
+	if resp.Enrichment != nil {
+		t.Errorf("enrichment = %+v, want nil for a receipt with no local session data", resp.Enrichment)
+	}
+}
+
+// fakeEnricher records the session id it was asked about and returns a fixed
+// enrichment, letting the handler test exercise the populated path without a
+// real local session file.
+type fakeEnricher struct {
+	gotSession string
+	ret        *enrich.Enrichment
+}
+
+func (f *fakeEnricher) Enrich(sessionID string) *enrich.Enrichment {
+	f.gotSession = sessionID
+	return f.ret
+}
+
+func TestReceiptDetailEndpoint_EnrichmentSibling(t *testing.T) {
+	dbPath := t.TempDir() + "/enrich-server-test.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	ar := makeReceipt("urn:receipt:sess", "chain-1", 1, "filesystem.file.read", receipt.RiskLow, receipt.StatusSuccess, "2026-04-01T10:00:00Z", nil)
+	ar.Issuer.SessionID = "sess-123"
+	h, err := receipt.HashReceipt(ar)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := s.Insert(ar, h); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+
+	srv := New(reader, Config{})
+	cost := 1.25
+	fake := &fakeEnricher{ret: &enrich.Enrichment{
+		Unverified:       true,
+		Source:           "claude-code",
+		Model:            "claude-opus-4-8",
+		InputTokens:      10,
+		EstimatedCostUSD: &cost,
+	}}
+	srv.enricher = fake
+
+	req := httptest.NewRequest("GET", "/api/receipts/urn:receipt:sess", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if fake.gotSession != "sess-123" {
+		t.Errorf("enricher asked about %q, want sess-123 (issuer.session_id)", fake.gotSession)
+	}
+
+	var resp struct {
+		Receipt    receipt.AgentReceipt `json:"receipt"`
+		Enrichment *enrich.Enrichment   `json:"enrichment"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Receipt.ID != "urn:receipt:sess" {
+		t.Errorf("receipt.id = %q, want urn:receipt:sess", resp.Receipt.ID)
+	}
+	if resp.Enrichment == nil {
+		t.Fatal("enrichment = nil, want the fake enrichment")
+	}
+	if !resp.Enrichment.Unverified || resp.Enrichment.Source != "claude-code" {
+		t.Errorf("enrichment = %+v, want unverified claude-code payload", resp.Enrichment)
+	}
+
+	// Enrichment must be a top-level sibling of receipt, never nested inside the
+	// signed structure. Decode generically and assert the shape.
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &generic); err != nil {
+		t.Fatalf("decode generic: %v", err)
+	}
+	if _, ok := generic["enrichment"]; !ok {
+		t.Error("response has no top-level enrichment sibling")
+	}
+	var receiptObj map[string]json.RawMessage
+	if err := json.Unmarshal(generic["receipt"], &receiptObj); err != nil {
+		t.Fatalf("decode receipt object: %v", err)
+	}
+	if _, ok := receiptObj["enrichment"]; ok {
+		t.Error("enrichment leaked inside the receipt object; it must be a sibling only")
+	}
+	if _, ok := receiptObj["credentialSubject"]; !ok {
+		t.Error("receipt object missing credentialSubject — wrong nesting")
 	}
 }
 

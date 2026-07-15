@@ -18,7 +18,9 @@ import (
 	"strings"
 	"time"
 
+	"obsigna.dev/sdk/go/receipt"
 	"obsigna.dev/sdk/go/taxonomy"
+	"github.com/agent-receipts/dashboard/internal/enrich"
 	"github.com/agent-receipts/dashboard/internal/store"
 	"github.com/agent-receipts/dashboard/internal/verify"
 )
@@ -66,6 +68,10 @@ type Server struct {
 	cfg             Config
 	forensic        *forensicKeyStore
 	forensicKeyDirs []string // cleaned, absolute allowed roots for the key path endpoint
+	// enricher resolves display-only, unverified local session data joined to a
+	// receipt by session id. It never touches the receipt or the store; see
+	// docs/adr/0002-local-session-enrichment.md.
+	enricher enrich.SessionEnricher
 }
 
 // New creates a new Server backed by the given reader. A zero PollInterval
@@ -94,7 +100,13 @@ func New(reader *store.Reader, cfg Config) *Server {
 		}
 	}
 
-	s := &Server{reader: reader, cfg: cfg, forensic: &forensicKeyStore{}, forensicKeyDirs: dirs}
+	s := &Server{
+		reader:          reader,
+		cfg:             cfg,
+		forensic:        &forensicKeyStore{},
+		forensicKeyDirs: dirs,
+		enricher:        enrich.New(),
+	}
 	s.tryLoadDefaultForensicKey()
 	return s
 }
@@ -583,7 +595,23 @@ func (s *Server) handleReceiptDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "receipt not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, ar)
+
+	// Enrichment is a display-only, unverified sibling of the signed receipt —
+	// never merged into it. It is nil when the receipt carries no session id or
+	// no local session data is available. See ADR-0002.
+	var enrichment *enrich.Enrichment
+	if s.enricher != nil && ar.Issuer.SessionID != "" {
+		enrichment = s.enricher.Enrich(ar.Issuer.SessionID)
+	}
+	writeJSON(w, http.StatusOK, receiptDetailResponse{Receipt: ar, Enrichment: enrichment})
+}
+
+// receiptDetailResponse is the receipt-detail payload: the signed receipt and,
+// alongside it, optional unverified local enrichment. The two are siblings —
+// enrichment is never nested inside the receipt or its credentialSubject.
+type receiptDetailResponse struct {
+	Receipt    *receipt.AgentReceipt `json:"receipt"`
+	Enrichment *enrich.Enrichment    `json:"enrichment"`
 }
 
 func (s *Server) handleChains(w http.ResponseWriter, r *http.Request) {

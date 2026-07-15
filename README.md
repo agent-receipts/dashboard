@@ -156,7 +156,7 @@ Everything the UI shows is served by a small JSON API on the same loopback port.
 | `GET /api/sessions` | All agent sessions (optional `?range=`) |
 | `GET /api/sessions/{sessionID}/attribution` | Full attribution / blast-radius payload |
 | `GET /api/receipts` | Receipts, filterable (`?q=`, `?session_id=`, `?limit=N`, …) |
-| `GET /api/receipts/{id}` | One receipt's raw JSON |
+| `GET /api/receipts/{id}` | `{ "receipt": …, "enrichment": … }` — the signed receipt plus optional display-only, unverified local session data (`null` when unavailable) |
 | `GET /api/chains` | Chains in the store |
 | `GET /api/chains/{chainID}/verify` | Verify a chain; `?public_key=<PEM>` adds signature checks |
 
