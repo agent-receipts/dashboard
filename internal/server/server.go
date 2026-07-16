@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"obsigna.dev/sdk/go/receipt"
@@ -466,6 +467,17 @@ func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, result)
 }
 
+// enrichSession returns the display-only, unverified local session enrichment
+// for a session id, or nil when no enricher is configured. Every call site
+// that needs enrichment funnels through here so the nil-enricher guard lives
+// in exactly one place. See ADR-0002.
+func (s *Server) enrichSession(sessionID string) *enrich.Enrichment {
+	if s.enricher == nil {
+		return nil
+	}
+	return s.enricher.Enrich(sessionID)
+}
+
 // handleSessionEnrichment returns the display-only, unverified local session
 // enrichment for a session id, or null when the enricher is unset or no local
 // session data is available. See ADR-0002 and the analogous nil-safety used by
@@ -477,11 +489,7 @@ func (s *Server) handleSessionEnrichment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var enrichment *enrich.Enrichment
-	if s.enricher != nil {
-		enrichment = s.enricher.Enrich(sessionID)
-	}
-	writeJSON(w, http.StatusOK, enrichment)
+	writeJSON(w, http.StatusOK, s.enrichSession(sessionID))
 }
 
 // defaultFleetSessions is how many recently-active sessions the fleet view
@@ -619,8 +627,8 @@ func (s *Server) handleReceiptDetail(w http.ResponseWriter, r *http.Request) {
 	// never merged into it. It is nil when the receipt carries no session id or
 	// no local session data is available. See ADR-0002.
 	var enrichment *enrich.Enrichment
-	if s.enricher != nil && ar.Issuer.SessionID != "" {
-		enrichment = s.enricher.Enrich(ar.Issuer.SessionID)
+	if ar.Issuer.SessionID != "" {
+		enrichment = s.enrichSession(ar.Issuer.SessionID)
 	}
 	writeJSON(w, http.StatusOK, receiptDetailResponse{Receipt: ar, Enrichment: enrichment})
 }
@@ -719,13 +727,23 @@ func (s *Server) handleFleetSignatures(w http.ResponseWriter, r *http.Request) {
 	// per-session enrichment is composed here, at the one layer that already
 	// imports both. A session with no local transcript file simply gets a nil
 	// Enrichment, which the "omitempty" tag drops from the response entirely.
+	//
+	// Enrichment lookups run concurrently: each is a filesystem read/parse of a
+	// local session transcript (internal/enrich), so serializing up to maxLimit
+	// of them would make one Fleet page load pay for N sequential file scans.
+	// Each goroutine only ever writes its own results[i], so no locking is
+	// needed beyond the WaitGroup.
 	results := make([]fleetSignatureWithEnrichment, len(sigs))
+	var wg sync.WaitGroup
+	wg.Add(len(sigs))
 	for i, sig := range sigs {
 		results[i] = fleetSignatureWithEnrichment{SessionSignature: sig}
-		if s.enricher != nil {
-			results[i].Enrichment = s.enricher.Enrich(sig.SessionID)
-		}
+		go func(i int, sessionID string) {
+			defer wg.Done()
+			results[i].Enrichment = s.enrichSession(sessionID)
+		}(i, sig.SessionID)
 	}
+	wg.Wait()
 
 	writeJSON(w, http.StatusOK, map[string]any{"signatures": results})
 }
