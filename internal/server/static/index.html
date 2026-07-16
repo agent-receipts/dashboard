@@ -974,7 +974,10 @@
             <h2 class="modal-title" id="session-graph-title">Session Graph</h2>
             <div id="session-graph-session-id" class="font-mono" style="font-size:0.72rem;color:var(--muted);margin-top:2px;"></div>
           </div>
-          <div id="session-graph-coverage" style="flex:1;text-align:right;margin-right:12px;"></div>
+          <div style="flex:1;text-align:right;margin-right:12px;">
+            <div id="session-graph-coverage"></div>
+            <div id="session-graph-enrichment" style="margin-top:3px;"></div>
+          </div>
           <button class="icon-btn" type="button" onclick="closeSessionGraph()" aria-label="Close">×</button>
         </div>
         <div>
@@ -3831,31 +3834,35 @@
     const inlineGraphState = { attribution: null };
 
     async function showSessionGraph(sessionId) {
-      const svgPanel    = document.getElementById('session-graph-svg-panel');
-      const rcptPanel   = document.getElementById('session-graph-receipts-panel');
-      const blastPanel  = document.getElementById('session-graph-blast-panel');
-      const subtitle    = document.getElementById('session-graph-session-id');
-      const coverageEl  = document.getElementById('session-graph-coverage');
+      const svgPanel      = document.getElementById('session-graph-svg-panel');
+      const rcptPanel     = document.getElementById('session-graph-receipts-panel');
+      const blastPanel    = document.getElementById('session-graph-blast-panel');
+      const subtitle      = document.getElementById('session-graph-session-id');
+      const coverageEl    = document.getElementById('session-graph-coverage');
+      const enrichmentEl  = document.getElementById('session-graph-enrichment');
 
       subtitle.textContent = sessionId;
       svgPanel.innerHTML   = '<div class="muted text-sm" style="padding:8px 0;">Loading…</div>';
       rcptPanel.innerHTML  = '';
-      if (blastPanel)  blastPanel.style.display = 'none';
-      if (coverageEl)  coverageEl.innerHTML = '';
+      if (blastPanel)     blastPanel.style.display = 'none';
+      if (coverageEl)     coverageEl.innerHTML = '';
+      if (enrichmentEl)   enrichmentEl.innerHTML = '';
       sessionGraphState.receipts   = [];
       sessionGraphState.attribution = null;
       openModal('session-graph-modal');
 
       try {
-        const [rows, attribution] = await Promise.all([
+        const [rows, attribution, enrichment] = await Promise.all([
           fetchJSON('/api/receipts?session_id=' + encodeURIComponent(sessionId) + '&limit=2000'),
           fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null),
+          fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/enrichment').catch(() => null),
         ]);
         sessionGraphState.receipts    = rows || [];
         sessionGraphState.attribution = attribution;
         const { nodes, edges } = buildSessionGraph(sessionGraphState.receipts, attribution);
         renderSessionGraphSVG(nodes, edges, svgPanel);
         renderSessionCoverage(attribution, coverageEl);
+        renderSessionGraphEnrichment(enrichment, enrichmentEl);
         renderSessionGraphReceipts(sessionGraphState.receipts, rcptPanel);
       } catch (err) {
         svgPanel.innerHTML = '<div class="muted text-sm">Could not load session: ' + escapeHtml(err.message) + '</div>';
@@ -4124,6 +4131,30 @@
         ? ' <span style="color:var(--risk-medium)" title="Move/rename operations detected — path strings may not reliably identify file versions across renames">⚠ mv ops</span>'
         : '';
       el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)" title="receipts carrying a target.resource, which can contribute file-dependency edges. Bash/MCP/spawn receipts are signed but carry no resource path.">${escapeHtml(String(cv.identity_receipts))} / ${escapeHtml(String(cv.total_receipts))} receipts resource-linked (${pct}%)${mvWarn}</span>`;
+    }
+
+    // renderSessionGraphEnrichment renders a condensed one-line summary of the
+    // session-wide, display-only, UNVERIFIED local enrichment (total tokens,
+    // estimated cost) into the session graph modal header, below the coverage
+    // line. It carries the same "local, unverified" badge + tooltip convention
+    // as enrichmentSectionHTML so it can never be mistaken for signed receipt
+    // data — just condensed to fit a single header line. Omitted entirely when
+    // no local session data is available (no local transcript file). See
+    // docs/adr/0002-local-session-enrichment.md.
+    function renderSessionGraphEnrichment(e, el) {
+      if (!el) return;
+      if (!e) { el.innerHTML = ''; return; }
+
+      const tip = "Local, unverified — read from this host's agent session files, not from the signed receipt.";
+      const parts = [];
+      if (e.total_tokens != null) parts.push(Number(e.total_tokens).toLocaleString() + ' tokens');
+      if (e.estimated_cost_usd != null) {
+        const c = Number(e.estimated_cost_usd);
+        parts.push('$' + c.toFixed(c < 1 ? 4 : 2));
+      }
+      if (!parts.length) { el.innerHTML = ''; return; }
+
+      el.innerHTML = `<span style="font-size:0.72rem;color:var(--muted)">${escapeHtml(parts.join(' · '))}</span> <span class="enrichment-badge" tabindex="0" title="${escapeAttr(tip)}" style="margin-left:6px;">local, unverified</span>`;
     }
 
     // renderSessionGraphReceipts renders a compact flat receipt table into the
@@ -4691,6 +4722,16 @@
         .join('  ');
     }
 
+    // fleetFormatTokens renders a token count in the compact form used by the
+    // fleet caption line, e.g. 128400 -> "128.4k tokens", 2_100_000 -> "2.1M
+    // tokens". Below 1000 it renders the exact count.
+    function fleetFormatTokens(n) {
+      const v = Number(n);
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M tokens';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k tokens';
+      return Math.round(v).toLocaleString() + ' tokens';
+    }
+
     // renderFleetSVG renders the full grid of universe cards as an SVG string
     // (plus a legend div below it).
     function renderFleetSVG(signatures) {
@@ -4797,6 +4838,24 @@
         elems += `<text x="${cx}" y="${capY}" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="600" font-family="var(--font-sans)">${escapeHtml(charLabel)}</text>`;
         elems += `<text x="${cx}" y="${capY + 17}" text-anchor="middle" fill="var(--muted)" font-size="9.5" font-family="var(--font-sans)">${escapeHtml(topCatStr + '  \xb7 bash ' + bashPct + '%')}</text>`;
         elems += `<text x="${cx}" y="${capY + 32}" text-anchor="middle" fill="var(--subtle)" font-size="9" font-family="var(--font-mono)">${escapeHtml(shortId)} \xb7 ${escapeHtml(String(sig.receipt_count))} receipts</text>`;
+
+        // 7. Optional 4th caption: cost + total tokens from the display-only,
+        // UNVERIFIED local session enrichment inlined onto this signature by
+        // the server (see handleFleetSignatures). Sessions with no local
+        // transcript file simply carry no `enrichment` field — render nothing
+        // rather than a placeholder. No badge/tooltip here: this compact,
+        // dense cell context is already clearly not receipt data.
+        if (sig.enrichment) {
+          const en       = sig.enrichment;
+          const costStr  = en.estimated_cost_usd != null
+            ? '$' + Number(en.estimated_cost_usd).toFixed(Number(en.estimated_cost_usd) < 1 ? 4 : 2)
+            : null;
+          const tokenStr = en.total_tokens != null ? fleetFormatTokens(en.total_tokens) : null;
+          const costLine = [costStr, tokenStr].filter(Boolean).join('  \xb7  ');
+          if (costLine) {
+            elems += `<text x="${cx}" y="${capY + 47}" text-anchor="middle" fill="var(--subtle)" font-size="9" font-family="var(--font-sans)">${escapeHtml(costLine)}</text>`;
+          }
+        }
 
         // Wrap all universe elements in a clickable group.
         cells += `<g class="fleet-universe" data-session-id="${escapeAttr(sig.session_id || '')}" onclick="showSessionGraph(this.dataset.sessionId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showSessionGraph(this.dataset.sessionId)}" tabindex="0" style="cursor:pointer;" role="button" aria-label="${escapeAttr('View session graph for ' + (sig.session_id || ''))}">`;

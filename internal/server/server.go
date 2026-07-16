@@ -156,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/taxonomy", s.handleTaxonomy)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/sessions/{sessionID}/attribution", s.handleSessionAttribution)
+	mux.HandleFunc("GET /api/sessions/{sessionID}/enrichment", s.handleSessionEnrichment)
 	mux.HandleFunc("GET /api/fleet/attribution", s.handleFleetAttribution)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
@@ -465,6 +466,24 @@ func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleSessionEnrichment returns the display-only, unverified local session
+// enrichment for a session id, or null when the enricher is unset or no local
+// session data is available. See ADR-0002 and the analogous nil-safety used by
+// handleReceiptDetail: enrichment never surfaces as an error, only as absence.
+func (s *Server) handleSessionEnrichment(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "sessionID is required")
+		return
+	}
+
+	var enrichment *enrich.Enrichment
+	if s.enricher != nil {
+		enrichment = s.enricher.Enrich(sessionID)
+	}
+	writeJSON(w, http.StatusOK, enrichment)
+}
+
 // defaultFleetSessions is how many recently-active sessions the fleet view
 // renders when no limit is given; maxFleetSessions caps it so the combined
 // graph stays legible and the IN(...) query bounded.
@@ -696,7 +715,28 @@ func (s *Server) handleFleetSignatures(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"signatures": sigs})
+	// internal/store must not depend on internal/enrich (see ADR-0002), so the
+	// per-session enrichment is composed here, at the one layer that already
+	// imports both. A session with no local transcript file simply gets a nil
+	// Enrichment, which the "omitempty" tag drops from the response entirely.
+	results := make([]fleetSignatureWithEnrichment, len(sigs))
+	for i, sig := range sigs {
+		results[i] = fleetSignatureWithEnrichment{SessionSignature: sig}
+		if s.enricher != nil {
+			results[i].Enrichment = s.enricher.Enrich(sig.SessionID)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"signatures": results})
+}
+
+// fleetSignatureWithEnrichment pairs a store.SessionSignature with its
+// optional display-only, unverified local session enrichment. It exists so
+// the fleet view can render a per-session cost/token caption without
+// internal/store taking a dependency on internal/enrich.
+type fleetSignatureWithEnrichment struct {
+	store.SessionSignature
+	Enrichment *enrich.Enrichment `json:"enrichment,omitempty"`
 }
 
 func validateEd25519PEM(pemStr string) error {
