@@ -727,23 +727,29 @@ func (s *Server) handleFleetSignatures(w http.ResponseWriter, r *http.Request) {
 	// per-session enrichment is composed here, at the one layer that already
 	// imports both. A session with no local transcript file simply gets a nil
 	// Enrichment, which the "omitempty" tag drops from the response entirely.
-	//
+	results := make([]fleetSignatureWithEnrichment, len(sigs))
+	for i, sig := range sigs {
+		results[i] = fleetSignatureWithEnrichment{SessionSignature: sig}
+	}
+
 	// Enrichment lookups run concurrently: each is a filesystem read/parse of a
 	// local session transcript (internal/enrich), so serializing up to maxLimit
 	// of them would make one Fleet page load pay for N sequential file scans.
 	// Each goroutine only ever writes its own results[i], so no locking is
-	// needed beyond the WaitGroup.
-	results := make([]fleetSignatureWithEnrichment, len(sigs))
-	var wg sync.WaitGroup
-	wg.Add(len(sigs))
-	for i, sig := range sigs {
-		results[i] = fleetSignatureWithEnrichment{SessionSignature: sig}
-		go func(i int, sessionID string) {
-			defer wg.Done()
-			results[i].Enrichment = s.enrichSession(sessionID)
-		}(i, sig.SessionID)
+	// needed beyond the WaitGroup. Skipped entirely when no enricher is
+	// configured — the common "no local data" deployment — rather than paying
+	// goroutine setup for N calls that would each just return nil.
+	if s.enricher != nil {
+		var wg sync.WaitGroup
+		wg.Add(len(sigs))
+		for i, sig := range sigs {
+			go func(i int, sessionID string) {
+				defer wg.Done()
+				results[i].Enrichment = s.enrichSession(sessionID)
+			}(i, sig.SessionID)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 
 	writeJSON(w, http.StatusOK, map[string]any{"signatures": results})
 }

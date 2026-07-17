@@ -3258,12 +3258,13 @@
       </div>`;
     }
 
-    // ENRICHMENT_TIP and enrichmentBadgeHTML are shared by every renderer of
-    // local session enrichment (the receipt detail box, the session graph
-    // header, and — for cost/tokens only — the Fleet caption): this exact
-    // wording/markup is the trust-boundary signal that keeps unverified local
-    // data from being confused with signed receipt data, so it must not drift
-    // between call sites. See docs/adr/0002-local-session-enrichment.md.
+    // ENRICHMENT_TIP is shared by every renderer of local session enrichment —
+    // the receipt detail box and session graph header render it via
+    // enrichmentBadgeHTML's visible HTML badge, while the Fleet caption (SVG
+    // text, which can't host an HTML badge) renders it as a <title> hover —
+    // so the trust-boundary wording can't drift between call sites, per
+    // ADR-0002's requirement that every enrichment rendering carry a "local,
+    // unverified" tooltip. See docs/adr/0002-local-session-enrichment.md.
     const ENRICHMENT_TIP = "Local, unverified — read from this host's agent session files, not from the signed receipt.";
     function enrichmentBadgeHTML(extraStyle) {
       const style = extraStyle ? ` style="${escapeAttr(extraStyle)}"` : '';
@@ -4855,15 +4856,17 @@
         // UNVERIFIED local session enrichment inlined onto this signature by
         // the server (see handleFleetSignatures). Sessions with no local
         // transcript file simply carry no `enrichment` field — render nothing
-        // rather than a placeholder. No badge/tooltip here: this compact,
-        // dense cell context is already clearly not receipt data.
+        // rather than a placeholder. This cell is too dense for the full HTML
+        // badge, but ADR-0002 requires every enrichment rendering to carry a
+        // "local, unverified" tooltip, so an SVG <title> gives the same
+        // hover-to-disclose trust-boundary signal without taking extra space.
         if (sig.enrichment) {
           const en       = sig.enrichment;
           const costStr  = en.estimated_cost_usd != null ? formatCostUSD(en.estimated_cost_usd) : null;
           const tokenStr = en.total_tokens != null ? fleetFormatTokens(en.total_tokens) : null;
           const costLine = [costStr, tokenStr].filter(Boolean).join('  \xb7  ');
           if (costLine) {
-            elems += `<text x="${cx}" y="${capY + 47}" text-anchor="middle" fill="var(--subtle)" font-size="9" font-family="var(--font-sans)">${escapeHtml(costLine)}</text>`;
+            elems += `<text x="${cx}" y="${capY + 47}" text-anchor="middle" fill="var(--subtle)" font-size="9" font-family="var(--font-sans)"><title>${escapeHtml(ENRICHMENT_TIP)}</title>${escapeHtml(costLine)}</text>`;
           }
         }
 
