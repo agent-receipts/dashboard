@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -320,6 +321,17 @@ type fakeEnricher struct {
 func (f *fakeEnricher) Enrich(sessionID string) *enrich.Enrichment {
 	f.gotSession = sessionID
 	return f.ret
+}
+
+// mapEnricher returns a fixed enrichment per session id, letting tests that
+// exercise more than one session (e.g. fleet signatures) assert per-session
+// enrichment without every session sharing the same fake payload.
+type mapEnricher struct {
+	data map[string]*enrich.Enrichment
+}
+
+func (m *mapEnricher) Enrich(sessionID string) *enrich.Enrichment {
+	return m.data[sessionID]
 }
 
 func TestReceiptDetailEndpoint_EnrichmentSibling(t *testing.T) {
@@ -1438,6 +1450,79 @@ func TestSessionAttributionEndpoint_MissingSession(t *testing.T) {
 	}
 }
 
+// TestSessionEnrichmentEndpoint_OK covers the populated path: an enricher
+// with data for the requested session returns that Enrichment as the raw
+// response body (not wrapped in an envelope).
+func TestSessionEnrichmentEndpoint_OK(t *testing.T) {
+	srv := setupServer(t)
+	cost := 4.2
+	fake := &fakeEnricher{ret: &enrich.Enrichment{
+		Unverified:       true,
+		Source:           "claude-code",
+		Model:            "claude-opus-4-8",
+		TotalTokens:      128000,
+		EstimatedCostUSD: &cost,
+	}}
+	srv.enricher = fake
+
+	req := httptest.NewRequest("GET", "/api/sessions/sess-abc/enrichment", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if fake.gotSession != "sess-abc" {
+		t.Errorf("enricher asked about %q, want sess-abc", fake.gotSession)
+	}
+
+	var got enrich.Enrichment
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Unverified || got.Source != "claude-code" || got.TotalTokens != 128000 {
+		t.Errorf("got %+v, want the fake enrichment", got)
+	}
+}
+
+// TestSessionEnrichmentEndpoint_NilEnricher covers a server with no enricher
+// configured at all: the handler must not panic and must respond with a null
+// body, never an error.
+func TestSessionEnrichmentEndpoint_NilEnricher(t *testing.T) {
+	srv := setupServer(t)
+	srv.enricher = nil
+
+	req := httptest.NewRequest("GET", "/api/sessions/sess-abc/enrichment", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "null" {
+		t.Errorf("body = %q, want \"null\"", got)
+	}
+}
+
+// TestSessionEnrichmentEndpoint_NoLocalData covers a real enricher with no
+// local transcript file for the requested session — the common case for any
+// dashboard not running on the same host as the agent. Absence must not be an
+// error.
+func TestSessionEnrichmentEndpoint_NoLocalData(t *testing.T) {
+	srv := setupServer(t) // real enrich.New() enricher, no matching local file
+
+	req := httptest.NewRequest("GET", "/api/sessions/no-such-local-session/enrichment", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "null" {
+		t.Errorf("body = %q, want \"null\"", got)
+	}
+}
+
 // seedFleetAttributionDB seeds two sessions whose orchestrators collide on one
 // shared global resource, plus one session-local resource that must not collide.
 func seedFleetAttributionDB(t *testing.T) *Server {
@@ -1800,5 +1885,108 @@ func TestFleetSignaturesEndpoint_LimitParam(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("limit=99: got status %d, want 200 (cap not reject)", w.Code)
+	}
+}
+
+// TestFleetSignaturesEndpoint_Enrichment covers the composed per-session
+// enrichment: each session gets its own distinct Enrichment (never a shared
+// or mixed-up one), and a session with no local transcript file (no entry in
+// the map) gets no "enrichment" key at all in the raw JSON, not an explicit
+// null — the omitempty tag keeps the common no-local-data case lean.
+func TestFleetSignaturesEndpoint_Enrichment(t *testing.T) {
+	reader := seedFleetDB(t)
+	srv := New(reader, Config{Experimental: true})
+
+	costAlpha := 1.5
+	me := &mapEnricher{data: map[string]*enrich.Enrichment{
+		"alpha": {
+			Unverified:       true,
+			Source:           "claude-code",
+			TotalTokens:      128000,
+			EstimatedCostUSD: &costAlpha,
+		},
+		// beta intentionally has no entry, simulating no local transcript file.
+	}}
+	srv.enricher = me
+
+	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Signatures []fleetSignatureWithEnrichment `json:"signatures"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Signatures) != 2 {
+		t.Fatalf("got %d signatures, want 2", len(body.Signatures))
+	}
+
+	// SessionStats orders by last_seen DESC: alpha (10:04) before beta (09:01).
+	if body.Signatures[0].SessionID != "alpha" {
+		t.Fatalf("signatures[0].session_id = %q, want alpha", body.Signatures[0].SessionID)
+	}
+	if body.Signatures[0].Enrichment == nil {
+		t.Fatal("alpha enrichment = nil, want the mapped enrichment")
+	}
+	if body.Signatures[0].Enrichment.TotalTokens != 128000 {
+		t.Errorf("alpha total_tokens = %d, want 128000", body.Signatures[0].Enrichment.TotalTokens)
+	}
+
+	if body.Signatures[1].SessionID != "beta" {
+		t.Fatalf("signatures[1].session_id = %q, want beta", body.Signatures[1].SessionID)
+	}
+	if body.Signatures[1].Enrichment != nil {
+		t.Errorf("beta enrichment = %+v, want nil (no local transcript file)", body.Signatures[1].Enrichment)
+	}
+
+	var raw struct {
+		Signatures []map[string]json.RawMessage `json:"signatures"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if _, ok := raw.Signatures[0]["enrichment"]; !ok {
+		t.Error("alpha: expected an \"enrichment\" key in the raw JSON")
+	}
+	if _, ok := raw.Signatures[1]["enrichment"]; ok {
+		t.Error("beta: \"enrichment\" key present in raw JSON, want omitted (omitempty)")
+	}
+}
+
+// TestFleetSignaturesEndpoint_NilEnricher covers a server with no enricher
+// configured at all: every signature must omit the "enrichment" key rather
+// than error or emit an explicit null.
+func TestFleetSignaturesEndpoint_NilEnricher(t *testing.T) {
+	reader := seedFleetDB(t)
+	srv := New(reader, Config{Experimental: true})
+	srv.enricher = nil
+
+	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var raw struct {
+		Signatures []map[string]json.RawMessage `json:"signatures"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if len(raw.Signatures) != 2 {
+		t.Fatalf("got %d signatures, want 2", len(raw.Signatures))
+	}
+	for i, sig := range raw.Signatures {
+		if _, ok := sig["enrichment"]; ok {
+			t.Errorf("signatures[%d]: \"enrichment\" key present with nil enricher, want omitted", i)
+		}
 	}
 }
