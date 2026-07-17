@@ -432,6 +432,15 @@ func (s *Server) handleServerStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"servers": stats})
 }
 
+// maxConcurrentSessionEnrichment bounds how many enrichment lookups run at
+// once when composing /api/sessions. Unlike /api/fleet/signatures (capped at
+// maxLimit sessions), /api/sessions has no limit param and can return every
+// session ever seen — an unbounded fan-out over a large history would spike
+// file descriptor and memory usage across the whole server for one request,
+// since each lookup is a filesystem read/parse of a local session transcript
+// (up to 128 MiB).
+const maxConcurrentSessionEnrichment = 8
+
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	var since *string
 	if rangeStr := r.URL.Query().Get("range"); rangeStr != "" {
@@ -449,7 +458,45 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		log.Printf("session stats error: %v", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+
+	// Same composition pattern as handleFleetSignatures: internal/store must
+	// not depend on internal/enrich (see ADR-0002), so enrichment is attached
+	// here, one goroutine per session, skipped entirely when no enricher is
+	// configured. /api/sessions is unbounded (no limit param, unlike Fleet's
+	// maxLimit=24), so unlike the Receipts table's per-row client fetches,
+	// this list can be long — composing server-side avoids a client fanning
+	// out one request per visible session. Concurrent FILE I/O is bounded by
+	// the semaphore below (goroutine creation itself is cheap; a large
+	// session history all reading/parsing local transcripts at once is not).
+	results := make([]sessionRowWithEnrichment, len(sessions))
+	for i, sess := range sessions {
+		results[i] = sessionRowWithEnrichment{SessionRow: sess}
+	}
+	if s.enricher != nil {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxConcurrentSessionEnrichment)
+		wg.Add(len(sessions))
+		for i, sess := range sessions {
+			go func(i int, sessionID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				results[i].Enrichment = s.enrichSession(sessionID)
+			}(i, sess.SessionID)
+		}
+		wg.Wait()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": results})
+}
+
+// sessionRowWithEnrichment pairs a store.SessionRow with its optional
+// display-only, unverified local session enrichment. It exists so the
+// Sessions tab can render a per-session cost figure without internal/store
+// taking a dependency on internal/enrich.
+type sessionRowWithEnrichment struct {
+	store.SessionRow
+	Enrichment *enrich.Enrichment `json:"enrichment,omitempty"`
 }
 
 func (s *Server) handleSessionAttribution(w http.ResponseWriter, r *http.Request) {
