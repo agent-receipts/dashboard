@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-17
+
 ### Added
 
 - **Session-level local enrichment in the Session Graph modal and Fleet view** — the display-only, UNVERIFIED local session enrichment introduced in 0.12.0 (token usage, estimated cost) is no longer confined to the single-receipt detail modal. A new `GET /api/sessions/{sessionID}/enrichment` endpoint exposes the same `enrich.Enrichment` payload (or `null`) for a session id on its own; the Session Graph modal header now fetches it alongside the existing attribution call and renders a condensed total-tokens/est.-cost line under the resource-linked coverage stat, with the same "local, unverified" badge and tooltip convention. `GET /api/fleet/signatures` (experimental) now composes each session's enrichment inline via a response-level `fleetSignatureWithEnrichment` wrapper — `internal/store` still has no dependency on `internal/enrich`, only `internal/server` does the composing — and each Fleet universe card gains a compact 4th caption line (e.g. `$0.42 · 128.4k tokens`) when local session data is available; sessions with no local transcript file simply carry no `enrichment` field (omitted, not null) and render no 4th line. No changes to the daemon, emitter, receipt schema, or the read-only store contract.
