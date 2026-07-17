@@ -2020,6 +2020,7 @@
         return `
           <tr style="cursor:pointer;" data-session-id="${escapeAttr(s.session_id)}" onclick="applySessionFilter(this.dataset.sessionId)">
             <td style="padding:10px 12px;" class="font-mono text-sm" title="${escapeAttr(s.session_id)}">${escapeHtml(truncate(s.session_id, 36))}</td>
+            <td style="padding:10px 12px;" class="muted font-mono text-sm">${s.enrichment && s.enrichment.estimated_cost_usd != null ? escapeHtml(formatCostUSD(s.enrichment.estimated_cost_usd)) : '<span class="subtle">—</span>'}</td>
             <td style="padding:10px 12px;" class="muted text-sm">${s.receipt_count}</td>
             <td style="padding:10px 12px;" class="muted text-sm">
               <button type="button" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);text-align:left;"
@@ -2042,6 +2043,7 @@
               <thead>
                 <tr>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Session ID</th>
+                  <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;" title="Local, unverified — estimated total cost for this session, from this host's agent session files.">Cost</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Receipts</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">Agents</th>
                   <th style="position:sticky;top:0;z-index:2;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">First seen</th>
@@ -2723,6 +2725,11 @@
       }
       if (containerId === 'receipts-table') hideInlineSessionGraph();
 
+      // The overview mini-table is small (RECENT_LIMIT rows, almost always one
+      // session) so a per-session client fetch is cheap; the flat layout's
+      // other use — legacy receipts with no session_id at all — has nothing
+      // to look a cost up by, so it skips the column entirely.
+      const showCost = containerId === 'recent-receipts';
       container.innerHTML = `
         <div class="receipts-table-wrap">
           <div class="receipts-table-scroll">
@@ -2730,6 +2737,7 @@
               <thead>
                 <tr>
                   <th>Time</th>
+                  ${showCost ? `<th title="${escapeAttr("Local, unverified — running total spent as of this row's timestamp, from this host's agent session files.")}">Cost</th>` : ''}
                   <th>Server</th>
                   <th>Tool</th>
                   <th>Action</th>
@@ -2741,13 +2749,14 @@
                 </tr>
               </thead>
               <tbody id="${tbodyIdFor(containerId)}">
-                ${receipts.map(r => receiptRowHTML(r, { showSessionPill: containerId === 'recent-receipts' })).join('')}
+                ${receipts.map(r => receiptRowHTML(r, { showSessionPill: containerId === 'recent-receipts', showCost })).join('')}
               </tbody>
             </table>
           </div>
         </div>
       `;
       hydrateListDisclosurePreviews(receipts);
+      if (showCost) hydrateReceiptCosts(receipts, containerId);
     }
 
     // ---------- Layer 3 session grouping ----------

@@ -1315,6 +1315,108 @@ func TestSessionsEndpoint(t *testing.T) {
 	})
 }
 
+// TestSessionsEndpoint_Enrichment covers the composed per-session enrichment
+// on /api/sessions: each session gets its own distinct Enrichment (never a
+// shared or mixed-up one), and a session with no local transcript file (no
+// entry in the map) gets no "enrichment" key at all in the raw JSON, not an
+// explicit null — mirrors TestFleetSignaturesEndpoint_Enrichment.
+func TestSessionsEndpoint_Enrichment(t *testing.T) {
+	srv := seedSessionsDB(t)
+
+	costAlpha := 2.5
+	me := &mapEnricher{data: map[string]*enrich.Enrichment{
+		"session-alpha": {
+			Unverified:       true,
+			Source:           "claude-code",
+			TotalTokens:      64000,
+			EstimatedCostUSD: &costAlpha,
+		},
+		// session-beta intentionally has no entry, simulating no local
+		// transcript file.
+	}}
+	srv.enricher = me
+
+	req := httptest.NewRequest("GET", "/api/sessions", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Sessions []sessionRowWithEnrichment `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(body.Sessions))
+	}
+
+	// SessionStats orders by last_seen DESC: session-alpha before session-beta.
+	if body.Sessions[0].SessionID != "session-alpha" {
+		t.Fatalf("sessions[0].session_id = %q, want session-alpha", body.Sessions[0].SessionID)
+	}
+	if body.Sessions[0].Enrichment == nil {
+		t.Fatal("session-alpha enrichment = nil, want the mapped enrichment")
+	}
+	if body.Sessions[0].Enrichment.TotalTokens != 64000 {
+		t.Errorf("session-alpha total_tokens = %d, want 64000", body.Sessions[0].Enrichment.TotalTokens)
+	}
+
+	if body.Sessions[1].SessionID != "session-beta" {
+		t.Fatalf("sessions[1].session_id = %q, want session-beta", body.Sessions[1].SessionID)
+	}
+	if body.Sessions[1].Enrichment != nil {
+		t.Errorf("session-beta enrichment = %+v, want nil (no local transcript file)", body.Sessions[1].Enrichment)
+	}
+
+	var raw struct {
+		Sessions []map[string]json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if _, ok := raw.Sessions[0]["enrichment"]; !ok {
+		t.Error("session-alpha: expected an \"enrichment\" key in the raw JSON")
+	}
+	if _, ok := raw.Sessions[1]["enrichment"]; ok {
+		t.Error("session-beta: \"enrichment\" key present in raw JSON, want omitted (omitempty)")
+	}
+}
+
+// TestSessionsEndpoint_NilEnricher covers a server with no enricher
+// configured at all: every session must omit the "enrichment" key rather
+// than error or emit an explicit null.
+func TestSessionsEndpoint_NilEnricher(t *testing.T) {
+	srv := seedSessionsDB(t)
+	srv.enricher = nil
+
+	req := httptest.NewRequest("GET", "/api/sessions", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	var raw struct {
+		Sessions []map[string]json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if len(raw.Sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(raw.Sessions))
+	}
+	for i, sess := range raw.Sessions {
+		if _, ok := sess["enrichment"]; ok {
+			t.Errorf("sessions[%d]: \"enrichment\" key present with nil enricher, want omitted", i)
+		}
+	}
+}
+
 func TestStatsEndpoint_WithRange(t *testing.T) {
 	srv, _ := seedTimedDB(t)
 
