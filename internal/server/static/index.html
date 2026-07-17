@@ -3726,7 +3726,10 @@
       const sessionId = document.getElementById('filter-session').value.trim();
       if (!sessionId) { container.style.display = 'none'; return; }
 
-      const attribution = await fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null);
+      const [attribution, enrichment] = await Promise.all([
+        fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null),
+        fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/enrichment').catch(() => null),
+      ]);
       inlineGraphState.attribution = attribution;
 
       const { nodes, edges } = buildSessionGraph(receipts, attribution);
@@ -3740,10 +3743,12 @@
             <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
               onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
           </div>
+          <div id="inline-graph-enrichment" style="margin-bottom:4px;"></div>
           <div id="inline-graph-blast" style="display:none;padding:6px 4px 4px;border-bottom:1px solid var(--border);margin-bottom:6px;"></div>
           <div id="inline-graph-body"></div>
         </div>
       `;
+      renderSessionGraphEnrichment(enrichment, document.getElementById('inline-graph-enrichment'));
       renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
     }
 
