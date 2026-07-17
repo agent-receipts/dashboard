@@ -188,6 +188,93 @@ func TestEnrich_MixedKnownUnknownModelNilCost(t *testing.T) {
 	}
 }
 
+// CostPoints samples the running total after every priced turn, in transcript
+// order, so a receipt's timestamp can look up an approximate "spent so far"
+// figure — this test pins down the cumulative values turn by turn.
+func TestEnrich_CostPointsCumulative(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-costpoints",
+		`{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:05.000Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":50,"output_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:10.000Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-costpoints")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if len(got.CostPoints) != 3 {
+		t.Fatalf("len(CostPoints) = %d, want 3", len(got.CostPoints))
+	}
+
+	cost1 := 100*5e-6 + 10*25e-6
+	cost2 := 50*5e-6 + 5*25e-6 + 1000*5e-6*0.10
+	cost3 := 10*5e-6 + 1*25e-6
+	wantCumulative := []float64{cost1, cost1 + cost2, cost1 + cost2 + cost3}
+	wantTimestamps := []string{
+		"2026-01-01T00:00:00.000Z",
+		"2026-01-01T00:00:05.000Z",
+		"2026-01-01T00:00:10.000Z",
+	}
+	for i, pt := range got.CostPoints {
+		if pt.Timestamp != wantTimestamps[i] {
+			t.Errorf("CostPoints[%d].Timestamp = %q, want %q", i, pt.Timestamp, wantTimestamps[i])
+		}
+		if math.Abs(pt.CumulativeUSD-wantCumulative[i]) > 1e-12 {
+			t.Errorf("CostPoints[%d].CumulativeUSD = %v, want %v", i, pt.CumulativeUSD, wantCumulative[i])
+		}
+	}
+
+	// The curve's final point must agree with the session-wide total.
+	if got.EstimatedCostUSD == nil {
+		t.Fatal("EstimatedCostUSD = nil")
+	}
+	if math.Abs(got.CostPoints[2].CumulativeUSD-*got.EstimatedCostUSD) > 1e-12 {
+		t.Errorf("final CostPoints value = %v, want it to equal EstimatedCostUSD %v", got.CostPoints[2].CumulativeUSD, *got.EstimatedCostUSD)
+	}
+}
+
+// When any turn's model is unpriced, EstimatedCostUSD is nil rather than a
+// partial guess (see TestEnrich_MixedKnownUnknownModelNilCost) — CostPoints
+// must follow the same all-or-nothing rule, since a curve missing one turn's
+// contribution would silently understate every point after it.
+func TestEnrich_CostPointsNilWhenUnpriceable(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-mixed-costpoints",
+		`{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:05.000Z","message":{"model":"future-model-x","usage":{"input_tokens":20,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-mixed-costpoints")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if got.EstimatedCostUSD != nil {
+		t.Fatalf("EstimatedCostUSD = %v, want nil", *got.EstimatedCostUSD)
+	}
+	if got.CostPoints != nil {
+		t.Errorf("CostPoints = %v, want nil when the session isn't fully priceable", got.CostPoints)
+	}
+}
+
+// Real Claude Code transcripts always carry a timestamp, but the parser must
+// not panic or fabricate one when a line lacks it — it just can't contribute
+// a usable point to the curve.
+func TestEnrich_CostPointsSkipsLinesWithoutTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, "proj", "sess-no-timestamp",
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`)
+	got := claudeEnricher(dir).Enrich("sess-no-timestamp")
+	if got == nil {
+		t.Fatal("Enrich = nil")
+	}
+	if got.EstimatedCostUSD == nil {
+		t.Fatal("EstimatedCostUSD = nil, want a value — cost is still tracked even without a timestamp")
+	}
+	if len(got.CostPoints) != 0 {
+		t.Errorf("CostPoints = %v, want empty — no timestamp means no usable point", got.CostPoints)
+	}
+}
+
 func TestEnrich_NoSubagentOmitsBreakout(t *testing.T) {
 	dir := t.TempDir()
 	writeSession(t, dir, "proj", "sess-nosub",
