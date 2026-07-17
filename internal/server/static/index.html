@@ -2553,6 +2553,61 @@
       if (el) { el.value = sid; loadReceipts(); }
     }
 
+    // costCellHTML renders a placeholder Cost cell for a receipts-table row.
+    // The real value can't be known synchronously — it requires a per-session
+    // /enrichment fetch — so it starts as "…" and hydrateReceiptCosts patches
+    // it in afterward via its data-session-id/data-timestamp attributes.
+    function costCellHTML(sessionId, timestamp) {
+      if (!sessionId) return '<td class="muted font-mono text-xs cost-cell"><span class="subtle">—</span></td>';
+      return `<td class="muted font-mono text-xs cost-cell" data-session-id="${escapeAttr(sessionId)}" data-timestamp="${escapeAttr(timestamp || '')}"><span class="subtle">…</span></td>`;
+    }
+
+    // findCumulativeCostUSD returns the running total spent as of (at or
+    // before) receiptTimestamp, from a session's chronological CostPoints
+    // curve — an approximation, since a receipt has no exact join key to the
+    // LLM turn that produced it. Returns null when there's no local cost data,
+    // or the receipt predates the session's first priced turn.
+    function findCumulativeCostUSD(costPoints, receiptTimestamp) {
+      if (!costPoints || !costPoints.length) return null;
+      const t = Date.parse(receiptTimestamp);
+      if (Number.isNaN(t)) return null;
+      let lo = 0, hi = costPoints.length - 1, result = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (Date.parse(costPoints[mid].timestamp) <= t) {
+          result = costPoints[mid].cumulative_usd;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return result;
+    }
+
+    // hydrateReceiptCosts patches the Cost column in after the receipts table
+    // renders: it needs a per-session /enrichment fetch the synchronous render
+    // can't block on. Fetches once per distinct session in view (not per row),
+    // in parallel. Local, unverified, approximate — see findCumulativeCostUSD
+    // and docs/adr/0002-local-session-enrichment.md.
+    async function hydrateReceiptCosts(receipts, containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      const sessionIds = [...new Set((receipts || []).map(r => r.session_id).filter(Boolean))];
+      if (!sessionIds.length) return;
+
+      const pairs = await Promise.all(sessionIds.map(id =>
+        fetchJSON('/api/sessions/' + encodeURIComponent(id) + '/enrichment')
+          .then(e => [id, e]).catch(() => [id, null])
+      ));
+      const bySession = new Map(pairs);
+
+      container.querySelectorAll('.cost-cell[data-session-id]').forEach(cell => {
+        const e = bySession.get(cell.dataset.sessionId);
+        const cost = e ? findCumulativeCostUSD(e.cost_points, cell.dataset.timestamp) : null;
+        cell.innerHTML = cost != null ? escapeHtml(formatCostUSD(cost)) : '<span class="subtle">—</span>';
+      });
+    }
+
     function receiptRowHTML(r, opts) {
       const flash = opts && opts.flash ? ' row-new' : '';
       const tsAttr = r.timestamp ? ` title="${escapeAttr(r.timestamp)}"` : '';
@@ -2564,9 +2619,11 @@
       const sessionPill = (opts && opts.showSessionPill && r.session_id)
         ? `<button type="button" class="session-pill" style="margin-left:4px;" title="${escapeAttr(r.session_id)}" aria-label="Filter by session ${escapeAttr(r.session_id)}" data-session-id="${escapeAttr(r.session_id)}" onclick="event.stopPropagation(); applySessionFilter(this.dataset.sessionId)">session</button>`
         : '';
+      const costCell = (opts && opts.showCost) ? costCellHTML(r.session_id, r.timestamp) : '';
       return `
         <tr class="${flash}"${sessionAttr} data-receipt-id="${escapeAttr(r.id)}" data-agent-id="${escapeAttr(r.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsAttr}>${formatRelative(r.timestamp)}</td>
+          ${costCell}
           <td class="font-mono text-xs muted">${r.server ? escapeHtml(r.server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${r.tool_name ? escapeHtml(r.tool_name) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${actionTypeCell(r.action_type)}${disclosureIndicatorHTML(r)}</td>
@@ -2800,6 +2857,7 @@
 
     // Number of columns in the receipts table (Time, Server, Tool, Action,
     // Risk, Status, Chain, Seq, Session). Used as colspan for session/agent header rows.
+    // The grouped table (renderGroupedReceiptsTable) adds one more: Cost.
     const RECEIPT_COLS = 9;
 
     // renderGroupedReceiptsTable renders the receipts view with session headers,
@@ -2808,7 +2866,7 @@
     // a session_id; falls back to the flat table otherwise.
     function renderGroupedReceiptsTable(receipts, container, containerId) {
       const groups    = groupReceiptsBySession(receipts);
-      const COL_COUNT = RECEIPT_COLS;
+      const COL_COUNT = RECEIPT_COLS + 1;
 
       const bodyHTML = groups.map(session => {
         const sid      = session.sessionId;   // null for legacy receipts
@@ -2859,7 +2917,7 @@
           const receiptRowsHTML = agent.rows.map(item =>
             item.length === 2
               ? corrPairRowHTML(item[0], item[1], sid)
-              : receiptRowHTML(item[0], { sessionId: sid })
+              : receiptRowHTML(item[0], { sessionId: sid, showCost: true })
           ).join('');
 
           return agentHeaderRow + receiptRowsHTML;
@@ -2874,7 +2932,7 @@
             <table class="receipts">
               <thead>
                 <tr>
-                  <th>Time</th><th>Server</th><th>Tool</th><th>Action</th>
+                  <th>Time</th><th title="Local, unverified — running total spent as of this row's timestamp, from this host's agent session files. See the session's enrichment tooltip for details.">Cost</th><th>Server</th><th>Tool</th><th>Action</th>
                   <th>Risk</th><th>Status</th><th>Chain</th><th>Seq</th><th>Session</th>
                 </tr>
               </thead>
@@ -2885,6 +2943,7 @@
           </div>
         </div>
       `;
+      hydrateReceiptCosts(receipts, containerId);
     }
 
     // corrPairRowHTML renders a pre+post correlated pair as a single table row.
@@ -2902,6 +2961,7 @@
       return `
         <tr${sessionAttr} class="corr-pair-tr" data-receipt-id="${escapeAttr(post.id)}" data-agent-id="${escapeAttr(post.agent_id || '')}" onclick="showReceipt(this.dataset.receiptId)">
           <td class="muted whitespace-nowrap"${tsTitle}>${formatRelative(ts)}</td>
+          ${costCellHTML(sessionId, ts)}
           <td class="font-mono text-xs muted">${server ? escapeHtml(server) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${tool ? escapeHtml(tool) : '<span class="subtle">—</span>'}</td>
           <td class="font-mono text-xs">${escapeHtml(action)}<span class="corr-pair-badge">pre+post</span>${disclosureIndicatorHTML(post)}</td>
@@ -3726,25 +3786,36 @@
       const sessionId = document.getElementById('filter-session').value.trim();
       if (!sessionId) { container.style.display = 'none'; return; }
 
-      const attribution = await fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null);
+      const [attribution, enrichment] = await Promise.all([
+        fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/attribution').catch(() => null),
+        fetchJSON('/api/sessions/' + encodeURIComponent(sessionId) + '/enrichment').catch(() => null),
+      ]);
       inlineGraphState.attribution = attribution;
 
       const { nodes, edges } = buildSessionGraph(receipts, attribution);
-      if (nodes.length <= 1) { container.style.display = 'none'; return; }
+      // A single-agent session has no delegation graph worth drawing, but it
+      // may still have local enrichment worth showing — keep the panel (minus
+      // the graph body and its collapse toggle) rather than hiding it outright.
+      const showGraph = nodes.length > 1;
+      if (!showGraph && !enrichment) { container.style.display = 'none'; return; }
 
       container.style.display = '';
       container.innerHTML = `
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <span style="font-size:0.78rem;color:var(--muted);">Agent graph — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
-            <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
-              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
+            <span style="font-size:0.78rem;color:var(--muted);">${showGraph ? 'Agent graph' : 'Session'} — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
+            ${showGraph ? `<button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
+              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>` : ''}
           </div>
+          <div id="inline-graph-enrichment" style="margin-bottom:4px;"></div>
           <div id="inline-graph-blast" style="display:none;padding:6px 4px 4px;border-bottom:1px solid var(--border);margin-bottom:6px;"></div>
           <div id="inline-graph-body"></div>
         </div>
       `;
-      renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+      renderSessionGraphEnrichment(enrichment, document.getElementById('inline-graph-enrichment'));
+      if (showGraph) {
+        renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+      }
     }
 
     function toggleInlineGraph() {

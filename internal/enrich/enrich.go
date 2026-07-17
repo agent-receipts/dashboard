@@ -70,6 +70,24 @@ type Enrichment struct {
 	// name, summed per turn at each turn's own model. It is nil — never zero,
 	// never a guess — when any turn's model is absent from the table.
 	EstimatedCostUSD *float64 `json:"estimated_cost_usd"`
+
+	// CostPoints is the running total spent, sampled after every priced turn in
+	// transcript order. A receipt has no join key to a specific turn, so this
+	// lets a caller derive an approximate "spent so far" figure for a receipt
+	// from its own timestamp: the cumulative value of the last point at or
+	// before that timestamp. Omitted whenever EstimatedCostUSD is nil, for the
+	// same reason EstimatedCostUSD itself is nil rather than partial: a curve
+	// missing an unpriceable turn's contribution would silently understate
+	// every point after it.
+	CostPoints []CostPoint `json:"cost_points,omitempty"`
+}
+
+// CostPoint is one sample on a session's cumulative-cost-over-time curve: the
+// running total spent (across every priced turn so far, main thread and
+// subagent alike) as of Timestamp.
+type CostPoint struct {
+	Timestamp     string  `json:"timestamp"`
+	CumulativeUSD float64 `json:"cumulative_usd"`
 }
 
 // SessionEnricher resolves display-only enrichment for a receipt's session id.

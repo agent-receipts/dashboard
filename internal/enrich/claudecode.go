@@ -71,8 +71,12 @@ type ccRecord struct {
 	// turns into the same session file; the flag lets the parser fold their
 	// tokens into the total while keeping the context-window figure to the main
 	// thread.
-	IsSidechain bool       `json:"isSidechain"`
-	Message     *ccMessage `json:"message"`
+	IsSidechain bool `json:"isSidechain"`
+	// Timestamp is this turn's ISO 8601 wall-clock time, used only to build the
+	// cumulative cost curve (Enrichment.CostPoints) — nothing else in this
+	// parser is timestamp-ordered.
+	Timestamp string     `json:"timestamp"`
+	Message   *ccMessage `json:"message"`
 }
 
 type ccMessage struct {
@@ -131,6 +135,10 @@ func parseClaudeCodeSession(path string, info os.FileInfo) (*Enrichment, error) 
 	// turn makes the corresponding cost unknown (nil), never a partial guess.
 	var totalCost, subCost float64
 	totalPriceable, subPriceable := true, true
+	// costPoints samples the running total after every priced turn, in
+	// transcript order, so a receipt's own timestamp can look up an
+	// approximate "spent so far" figure. See Enrichment.CostPoints.
+	var costPoints []CostPoint
 
 	// LimitReader is the hard bound (the size check above is a fast path that a
 	// symlink to a 0-stat-size device file would slip past).
@@ -175,6 +183,9 @@ func parseClaudeCodeSession(path string, info os.FileInfo) (*Enrichment, error) 
 					c, ok := costUSD(msg.Model, tt)
 					if ok {
 						totalCost += c
+						if rec.Timestamp != "" {
+							costPoints = append(costPoints, CostPoint{Timestamp: rec.Timestamp, CumulativeUSD: totalCost})
+						}
 					} else {
 						totalPriceable = false
 					}
@@ -230,6 +241,7 @@ func parseClaudeCodeSession(path string, info os.FileInfo) (*Enrichment, error) 
 
 	if totalPriceable {
 		enr.EstimatedCostUSD = &totalCost
+		enr.CostPoints = costPoints
 	}
 
 	if subTurns > 0 {
