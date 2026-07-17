@@ -3733,15 +3733,19 @@
       inlineGraphState.attribution = attribution;
 
       const { nodes, edges } = buildSessionGraph(receipts, attribution);
-      if (nodes.length <= 1) { container.style.display = 'none'; return; }
+      // A single-agent session has no delegation graph worth drawing, but it
+      // may still have local enrichment worth showing — keep the panel (minus
+      // the graph body and its collapse toggle) rather than hiding it outright.
+      const showGraph = nodes.length > 1;
+      if (!showGraph && !enrichment) { container.style.display = 'none'; return; }
 
       container.style.display = '';
       container.innerHTML = `
         <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <span style="font-size:0.78rem;color:var(--muted);">Agent graph — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
-            <button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
-              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>
+            <span style="font-size:0.78rem;color:var(--muted);">${showGraph ? 'Agent graph' : 'Session'} — <span class="font-mono" style="color:var(--accent);">${escapeHtml(truncate(sessionId, 48))}</span></span>
+            ${showGraph ? `<button type="button" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:0.8rem;padding:1px 4px;"
+              onclick="toggleInlineGraph()" id="inline-graph-toggle" aria-label="Collapse agent graph" aria-expanded="true">▾</button>` : ''}
           </div>
           <div id="inline-graph-enrichment" style="margin-bottom:4px;"></div>
           <div id="inline-graph-blast" style="display:none;padding:6px 4px 4px;border-bottom:1px solid var(--border);margin-bottom:6px;"></div>
@@ -3749,7 +3753,9 @@
         </div>
       `;
       renderSessionGraphEnrichment(enrichment, document.getElementById('inline-graph-enrichment'));
-      renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+      if (showGraph) {
+        renderSessionGraphSVG(nodes, edges, document.getElementById('inline-graph-body'), 'selectInlineGraphNode');
+      }
     }
 
     function toggleInlineGraph() {
