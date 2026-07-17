@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1414,6 +1415,81 @@ func TestSessionsEndpoint_NilEnricher(t *testing.T) {
 		if _, ok := sess["enrichment"]; ok {
 			t.Errorf("sessions[%d]: \"enrichment\" key present with nil enricher, want omitted", i)
 		}
+	}
+}
+
+// concurrencyTrackingEnricher records the peak number of concurrent Enrich
+// calls in flight, to verify handleSessions bounds its fan-out rather than
+// launching one unthrottled goroutine per session.
+type concurrencyTrackingEnricher struct {
+	inFlight int64
+	peak     int64
+}
+
+func (e *concurrencyTrackingEnricher) Enrich(sessionID string) *enrich.Enrichment {
+	n := atomic.AddInt64(&e.inFlight, 1)
+	for {
+		p := atomic.LoadInt64(&e.peak)
+		if n <= p || atomic.CompareAndSwapInt64(&e.peak, p, n) {
+			break
+		}
+	}
+	time.Sleep(10 * time.Millisecond) // hold the slot long enough for contention to build
+	atomic.AddInt64(&e.inFlight, -1)
+	return nil
+}
+
+// TestSessionsEndpoint_EnrichmentConcurrencyBounded seeds more sessions than
+// maxConcurrentSessionEnrichment and verifies handleSessions never has more
+// than that many enrichment lookups in flight at once. /api/sessions has no
+// limit param (unlike /api/fleet/signatures), so an unbounded fan-out over a
+// large session history would spike file descriptor and memory usage
+// server-wide for one request.
+func TestSessionsEndpoint_EnrichmentConcurrencyBounded(t *testing.T) {
+	dbPath := t.TempDir() + "/sessions-concurrency.db"
+	s, err := sdkstore.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sdk store: %v", err)
+	}
+	const numSessions = maxConcurrentSessionEnrichment * 3
+	for i := 0; i < numSessions; i++ {
+		id := fmt.Sprintf("urn:receipt:conc-%d", i)
+		ar := makeReceipt(id, fmt.Sprintf("chain-conc-%d", i), 1, "claude-code.Bash", receipt.RiskLow, receipt.StatusSuccess, "2026-06-01T10:00:00Z", nil)
+		ar.Issuer.SessionID = fmt.Sprintf("sess-conc-%d", i)
+		h, err := receipt.HashReceipt(ar)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		if err := s.Insert(ar, h); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	s.Close()
+
+	reader, err := store.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	t.Cleanup(func() { reader.Close() })
+
+	srv := New(reader, Config{})
+	tracker := &concurrencyTrackingEnricher{}
+	srv.enricher = tracker
+
+	req := httptest.NewRequest("GET", "/api/sessions", nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	peak := atomic.LoadInt64(&tracker.peak)
+	if peak > maxConcurrentSessionEnrichment {
+		t.Errorf("peak concurrent Enrich calls = %d, want <= %d (semaphore not bounding fan-out)", peak, maxConcurrentSessionEnrichment)
+	}
+	if peak < maxConcurrentSessionEnrichment {
+		t.Errorf("peak concurrent Enrich calls = %d, want exactly %d given %d sessions (expected concurrency to saturate the bound)", peak, maxConcurrentSessionEnrichment, numSessions)
 	}
 }
 
