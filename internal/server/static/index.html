@@ -3734,10 +3734,31 @@
     // an increasing z-index; Esc closes the topmost first (see closeTopModal).
     const modalStack = [];
     const MODAL_Z_BASE = 50;
+    // modalClosers is the single registry of modal ids and how each one closes;
+    // isModalOpen, closeTopModal, and the backdrop-click wiring all derive from it
+    // (via MODAL_IDS), so a new modal is registered in exactly one place. The
+    // closers are hoisted function declarations, safe to reference before they
+    // appear textually below.
+    const modalClosers = {
+      'receipt-modal': closeModal,
+      'chain-modal': closeChainModal,
+      'shortcuts-modal': closeShortcuts,
+      'forensic-modal': closeForensic,
+      'session-graph-modal': closeSessionGraph,
+    };
+    const MODAL_IDS = Object.keys(modalClosers);
     function restackModals() {
       modalStack.forEach((mid, i) => {
         document.getElementById(mid).style.zIndex = String(MODAL_Z_BASE + i);
       });
+    }
+    // focusFirstIn moves focus to the first focusable element inside a modal, so
+    // keyboard / screen-reader users are never left focused behind the overlay.
+    function focusFirstIn(el) {
+      const focusable = el.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable) focusable.focus();
     }
     function openModal(id) {
       const el = document.getElementById(id);
@@ -3748,12 +3769,9 @@
       if (existing !== -1) modalStack.splice(existing, 1);
       modalStack.push(id);
       restackModals();
-      // Move focus inside the modal so keyboard / screen-reader users don't
-      // get stuck behind the overlay. Esc and backdrop-click still close.
-      const focusable = el.querySelector(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      if (focusable) focusable.focus();
+      // Esc and backdrop-click still close; move focus inside so keyboard /
+      // screen-reader users don't get stuck behind the overlay.
+      focusFirstIn(el);
     }
     function closeModalById(id) {
       const el = document.getElementById(id);
@@ -3761,7 +3779,12 @@
       el.style.zIndex = '';
       const i = modalStack.indexOf(id);
       if (i !== -1) { modalStack.splice(i, 1); restackModals(); }
-      if (lastFocusedBeforeModal && lastFocusedBeforeModal.focus) lastFocusedBeforeModal.focus();
+      // Hand focus to the modal now on top; only once the last modal closes does
+      // focus return to whatever held it before the first modal opened. This stops
+      // focus from landing on a background element behind a still-open overlay.
+      const top = modalStack[modalStack.length - 1];
+      if (top) focusFirstIn(document.getElementById(top));
+      else if (lastFocusedBeforeModal && lastFocusedBeforeModal.focus) lastFocusedBeforeModal.focus();
     }
     function closeModal()      { closeModalById('receipt-modal'); }
     function closeChainModal() { closeModalById('chain-modal'); }
@@ -3790,17 +3813,10 @@
     }
 
     function isModalOpen() {
-      return ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].some(id => !document.getElementById(id).hidden);
+      return MODAL_IDS.some(id => !document.getElementById(id).hidden);
     }
     // Esc closes the topmost modal only, so dismissing a receipt preview opened
     // from the Session Graph returns to the graph rather than closing both.
-    const modalClosers = {
-      'forensic-modal': closeForensic,
-      'shortcuts-modal': closeShortcuts,
-      'chain-modal': closeChainModal,
-      'receipt-modal': closeModal,
-      'session-graph-modal': closeSessionGraph,
-    };
     function closeTopModal() {
       const top = modalStack[modalStack.length - 1];
       if (top && modalClosers[top]) modalClosers[top]();
@@ -5272,7 +5288,7 @@
     document.getElementById('btn-shortcuts').addEventListener('click', showShortcuts);
 
     // Close modals on backdrop click.
-    ['receipt-modal','chain-modal','shortcuts-modal','forensic-modal','session-graph-modal'].forEach(id => {
+    MODAL_IDS.forEach(id => {
       document.getElementById(id).addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModalById(id);
       });
