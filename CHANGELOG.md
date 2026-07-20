@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-20
+
 ### Fixed
 
 - **Receipt preview opened from the Session Graph now paints in front of it** — selecting a row (or a chain cell) in the Session Graph modal's receipts table opened the receipt/chain detail modal *behind* the graph, because every modal shared one `z-index` and the graph modal sits later in the document. Modals now track open order and stack the most-recently-opened one on top, and Esc closes the topmost modal only — so dismissing a receipt preview returns to the Session Graph instead of closing both at once. Closing a stacked modal now moves keyboard focus into the modal still on top (rather than to a background element behind it), and focus only returns to the pre-modal element once the last modal closes.
