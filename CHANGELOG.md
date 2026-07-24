@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-25
+
 ### Changed
 
 - **Fleet is no longer experimental** ([#156](https://github.com/agent-receipts/dashboard/issues/156)) — the Fleet tab and `GET /api/fleet/signatures` are now always available; the `-experimental` CLI flag, the `Config.Experimental` field, and the `"experimental"` key in `GET /api/config` are removed, since Fleet was their only consumer. Per the issue's rollout plan, Fleet shipped behind the flag until proven on real parallel-refactor data; the activity-signature view, cross-session collision detection, and enrichment captions have since landed and been used without issue, so it graduates to a default, stable feature. No change to the Fleet data itself — only to how it's gated.
