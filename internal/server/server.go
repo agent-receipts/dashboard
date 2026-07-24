@@ -55,9 +55,6 @@ type Config struct {
 	// ForensicKeyDirs lists extra directories, in addition to the user's home
 	// directory, from which the forensic key path endpoint may load a key.
 	ForensicKeyDirs []string
-	// Experimental enables experimental features. When false, experimental
-	// API endpoints respond with 404.
-	Experimental bool
 }
 
 //go:embed static
@@ -159,13 +156,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{sessionID}/attribution", s.handleSessionAttribution)
 	mux.HandleFunc("GET /api/sessions/{sessionID}/enrichment", s.handleSessionEnrichment)
 	mux.HandleFunc("GET /api/fleet/attribution", s.handleFleetAttribution)
+	mux.HandleFunc("GET /api/fleet/signatures", s.handleFleetSignatures)
 	mux.HandleFunc("GET /api/receipts", s.handleReceipts)
 	mux.HandleFunc("GET /api/receipts/{id...}", s.handleReceiptDetail)
 	mux.HandleFunc("GET /api/chains", s.handleChains)
 	mux.HandleFunc("GET /api/chains/{chainID}/verify", s.handleChainVerify)
-
-	// Experimental endpoints — gated by cfg.Experimental; return 404 when disabled.
-	mux.HandleFunc("GET /api/fleet/signatures", s.handleFleetSignatures)
 
 	// Forensic disclosure: load/clear the operator's X25519 private key (held
 	// in memory only) and decrypt a receipt's parameters_disclosure envelope
@@ -204,7 +199,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"db_path":          s.cfg.DBPath,
 		"db_name":          dbName,
 		"version":          s.cfg.Version,
-		"experimental":     s.cfg.Experimental,
 	})
 }
 
@@ -727,11 +721,6 @@ func (s *Server) handleChainVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFleetSignatures(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.Experimental {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-
 	const defaultLimit = 12
 	const maxLimit = 24
 

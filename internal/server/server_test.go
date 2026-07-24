@@ -1866,45 +1866,6 @@ func TestTaxonomyEndpoint(t *testing.T) {
 	}
 }
 
-// ---------- /api/config experimental field ----------
-
-func TestConfigEndpoint_ExperimentalField(t *testing.T) {
-	dbPath := seedTestDB(t)
-	reader, err := store.OpenReadOnly(dbPath)
-	if err != nil {
-		t.Fatalf("open reader: %v", err)
-	}
-	t.Cleanup(func() { reader.Close() })
-
-	for _, tc := range []struct {
-		name         string
-		experimental bool
-	}{
-		{"experimental false (default)", false},
-		{"experimental true", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := New(reader, Config{Experimental: tc.experimental})
-			req := httptest.NewRequest("GET", "/api/config", nil)
-			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, req)
-
-			if w.Code != http.StatusOK {
-				t.Fatalf("got status %d, want 200", w.Code)
-			}
-			var got struct {
-				Experimental bool `json:"experimental"`
-			}
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if got.Experimental != tc.experimental {
-				t.Errorf("experimental = %v, want %v", got.Experimental, tc.experimental)
-			}
-		})
-	}
-}
-
 // ---------- /api/fleet/signatures endpoint ----------
 
 // seedFleetDB builds a DB with two sessions seeded with mixed action types and
@@ -1955,29 +1916,9 @@ func seedFleetDB(t *testing.T) *store.Reader {
 	return reader
 }
 
-func TestFleetSignaturesEndpoint_DisabledWithout_Experimental(t *testing.T) {
-	reader := seedFleetDB(t)
-	srv := New(reader, Config{Experimental: false})
-
-	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("got status %d, want 404 when experimental=false", w.Code)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode error body: %v", err)
-	}
-	if body["error"] == "" {
-		t.Error("expected error message in response body")
-	}
-}
-
 func TestFleetSignaturesEndpoint_OK(t *testing.T) {
 	reader := seedFleetDB(t)
-	srv := New(reader, Config{Experimental: true})
+	srv := New(reader, Config{})
 
 	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
 	w := httptest.NewRecorder()
@@ -2024,7 +1965,7 @@ func TestFleetSignaturesEndpoint_OK(t *testing.T) {
 
 func TestFleetSignaturesEndpoint_LimitParam(t *testing.T) {
 	reader := seedFleetDB(t)
-	srv := New(reader, Config{Experimental: true})
+	srv := New(reader, Config{})
 
 	// limit=1 should return only the most-recent session (alpha).
 	req := httptest.NewRequest("GET", "/api/fleet/signatures?limit=1", nil)
@@ -2073,7 +2014,7 @@ func TestFleetSignaturesEndpoint_LimitParam(t *testing.T) {
 // null — the omitempty tag keeps the common no-local-data case lean.
 func TestFleetSignaturesEndpoint_Enrichment(t *testing.T) {
 	reader := seedFleetDB(t)
-	srv := New(reader, Config{Experimental: true})
+	srv := New(reader, Config{})
 
 	costAlpha := 1.5
 	me := &mapEnricher{data: map[string]*enrich.Enrichment{
@@ -2142,7 +2083,7 @@ func TestFleetSignaturesEndpoint_Enrichment(t *testing.T) {
 // than error or emit an explicit null.
 func TestFleetSignaturesEndpoint_NilEnricher(t *testing.T) {
 	reader := seedFleetDB(t)
-	srv := New(reader, Config{Experimental: true})
+	srv := New(reader, Config{})
 	srv.enricher = nil
 
 	req := httptest.NewRequest("GET", "/api/fleet/signatures", nil)
