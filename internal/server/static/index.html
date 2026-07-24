@@ -750,7 +750,7 @@
       <button class="tab" onclick="showView('servers')" id="tab-servers">Servers</button>
       <button class="tab" onclick="showView('sessions')" id="tab-sessions">Sessions</button>
       <button class="tab" onclick="showView('chains')" id="tab-chains">Chains</button>
-      <button class="tab" onclick="showView('fleet')" id="tab-fleet" style="display:none;">Fleet</button>
+      <button class="tab" onclick="showView('fleet')" id="tab-fleet">Fleet</button>
     </nav>
   </header>
 
@@ -930,7 +930,7 @@
       <div id="chains-list"></div>
     </div>
 
-    <!-- Fleet view (experimental) -->
+    <!-- Fleet view -->
     <div id="view-fleet" class="hidden">
       <div id="fleet-container"></div>
     </div>
@@ -4780,7 +4780,7 @@
     });
 
 
-    // ---------- Fleet (experimental) ----------
+    // ---------- Fleet ----------
     // Category colors for the discretionary activity ring.
     const FLEET_CAT_COLORS = {
       mcp:    '#bc8cff',
@@ -5047,12 +5047,8 @@
       try {
         data = await fetchJSON('/api/fleet/signatures');
       } catch (err) {
-        if (err.status === 404) {
-          container.innerHTML = '<div class="empty-state"><div class="empty-title">Fleet view unavailable</div><div class="empty-hint">Start the dashboard with <code>-experimental</code> to enable this view.</div></div>';
-        } else {
-          showError('Failed to load fleet signatures: ' + err.message);
-          container.innerHTML = '<div class="empty-state"><div class="empty-title">Failed to load fleet signatures</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
-        }
+        showError('Failed to load fleet signatures: ' + err.message);
+        container.innerHTML = '<div class="empty-state"><div class="empty-title">Failed to load fleet signatures</div><div class="empty-hint">' + escapeHtml(err.message) + '</div></div>';
         return;
       }
       const sigs = (data && data.signatures) || [];
@@ -5074,9 +5070,6 @@
           poller.serverTime = cfg.server_time;
         }
         renderHeaderContext(cfg, null);
-        if (cfg.experimental) {
-          document.getElementById('tab-fleet').style.display = '';
-        }
       } catch (err) {
         console.warn('config:', err);
       }
