@@ -15,6 +15,7 @@ type modelInfo struct {
 // identifiers agents write into their session files.
 var models = map[string]modelInfo{
 	"claude-fable-5":    {inputPerMTok: 10, outputPerMTok: 50, contextWindow: 1_000_000},
+	"claude-opus-5":     {inputPerMTok: 5, outputPerMTok: 25, contextWindow: 1_000_000},
 	"claude-opus-4-8":   {inputPerMTok: 5, outputPerMTok: 25, contextWindow: 1_000_000},
 	"claude-opus-4-7":   {inputPerMTok: 5, outputPerMTok: 25, contextWindow: 1_000_000},
 	"claude-opus-4-6":   {inputPerMTok: 5, outputPerMTok: 25, contextWindow: 1_000_000},
