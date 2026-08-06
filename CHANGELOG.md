@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-07
+
 ### Added
 
 - **`claude-opus-5` pricing entry** — the local pricing/context table in `internal/enrich/pricing.go` was missing an entry for `claude-opus-5`, so any session that touched it anywhere (even a single subagent turn) had its estimated cost reported as "unavailable" for the whole session rather than just that turn — by design, an unmodelled turn poisons the session total rather than producing a partial guess. Priced at Opus 4.8's rate ($5/$25 per MTok input/output, 1M context), matching Claude Opus 5's launch pricing as a drop-in upgrade at that tier. Bare Claude Code model aliases (e.g. `"sonnet"`, with no version) remain intentionally unpriced, since they don't identify a specific model.
